@@ -1,0 +1,16 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(cargo search:*)",
+      "mcp__perplexity-server__search",
+      "mcp__context7__resolve-library-id",
+      "mcp__context7__get-library-docs",
+      "mcp__brave-search__brave_web_search",
+      "mcp__fetch__fetch",
+      "mcp__filesystem__read_file",
+      "mcp__filesystem__read_multiple_files",
+      "mcp__filesystem__list_directory"
+    ],
+    "deny": []
+  }
+}
