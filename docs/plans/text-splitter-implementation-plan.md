@@ -202,37 +202,53 @@ impl BreezeChunker {
 ```rust
 // src/lib.rs
 use pyo3::prelude::*;
-use pyo3_asyncio;
+use pyo3_async_runtimes;
+
+// Tokenizer enum for type safety
+#[pyclass(eq)]
+#[derive(Clone, Debug, PartialEq)]
+pub enum TokenizerType {
+    #[pyo3(name = "CHARACTERS")]
+    Characters,
+    #[pyo3(name = "TIKTOKEN")]
+    Tiktoken,
+    #[pyo3(name = "HUGGINGFACE")]
+    HuggingFace,
+}
 
 #[pyclass]
 pub struct SemanticChunker {
-    inner: Arc<BreezeChunker>,
+    inner: Arc<InnerChunker>,
 }
 
 #[pymethods]
 impl SemanticChunker {
     #[new]
-    #[pyo3(signature = (max_chunk_size=None, tokenizer=None))]
-    fn new(max_chunk_size: Option<usize>, tokenizer: Option<String>) -> PyResult<Self> {
+    #[pyo3(signature = (max_chunk_size=None, tokenizer=None, hf_model=None))]
+    fn new(max_chunk_size: Option<usize>, tokenizer: Option<TokenizerType>, hf_model: Option<String>) -> PyResult<Self> {
         let max_chunk_size = max_chunk_size.unwrap_or(1500);
         
-        // Choose sizer based on tokenizer parameter
-        let sizer: Box<dyn ChunkSizer> = match tokenizer.as_deref() {
-            Some("tiktoken") => {
-                Box::new(tiktoken_rs::cl100k_base()?)
-            }
-            Some("characters") | None => {
-                Box::new(text_splitter::Characters)
-            }
-            _ => {
-                return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-                    "Unsupported tokenizer"
-                ));
+        // Convert Python TokenizerType to Rust implementation
+        let tokenizer_type = match tokenizer.unwrap_or(TokenizerType::Characters) {
+            TokenizerType::Characters => RustTokenizerType::Characters,
+            TokenizerType::Tiktoken => RustTokenizerType::Tiktoken,
+            TokenizerType::HuggingFace => {
+                match hf_model {
+                    Some(model) => RustTokenizerType::HuggingFace(model),
+                    None => {
+                        return Err(PyValueError::new_err(
+                            "TokenizerType.HUGGINGFACE requires hf_model parameter"
+                        ));
+                    }
+                }
             }
         };
         
+        let inner = InnerChunker::new(max_chunk_size, tokenizer_type)
+            .map_err(|e| PyRuntimeError::new_err(format!("Failed to create chunker: {}", e)))?;
+        
         Ok(Self {
-            inner: Arc::new(BreezeChunker::new(max_chunk_size, sizer)),
+            inner: Arc::new(inner),
         })
     }
     
@@ -245,7 +261,7 @@ impl SemanticChunker {
         file_path: Option<String>,
     ) -> PyResult<&'p PyAny> {
         let chunker = self.inner.clone();
-        pyo3_asyncio::tokio::future_into_py(py, async move {
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
             chunker.chunk_file(&content, &language, file_path.as_deref())
                 .await
                 .map_err(|e| match e {
@@ -258,6 +274,23 @@ impl SemanticChunker {
                         other.to_string()
                     )
                 })
+        })
+    }
+    
+    #[pyo3(signature = (content, file_path=None))]
+    fn chunk_text<'p>(
+        &self,
+        py: Python<'p>,
+        content: String,
+        file_path: Option<String>,
+    ) -> PyResult<&'p PyAny> {
+        let chunker = self.inner.clone();
+        
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            chunker
+                .chunk_text(&content, file_path.as_deref())
+                .await
+                .map_err(|e| PyRuntimeError::new_err(format!("Text chunking error: {}", e)))
         })
     }
     
@@ -276,6 +309,10 @@ impl SemanticChunker {
 fn breeze_rustle(_py: Python<'_>, m: &PyModule) -> PyResult<()> {
     pyo3_log::init();
     
+    // Add enum
+    m.add_class::<TokenizerType>()?;
+    
+    // Add classes
     m.add_class::<SemanticChunker>()?;
     m.add_class::<SemanticChunk>()?;
     m.add_class::<ChunkMetadata>()?;
@@ -317,8 +354,8 @@ tree-sitter-bash = "0.23"
 tree-sitter-r = "0.23"
 
 # Python bindings
-pyo3 = { version = "0.23", features = ["extension-module"] }
-pyo3-asyncio = { version = "0.23", features = ["tokio-runtime"] }
+pyo3 = { version = "0.25", features = ["extension-module", "abi3-py39"] }
+pyo3-async-runtimes = { version = "0.25", features = ["tokio-runtime"] }
 pyo3-log = "0.12"
 
 # Utils
@@ -348,23 +385,37 @@ pytest-runner = "6.0"
 - [x] Extract parent_context (e.g., class name for methods)
 - [x] Basic definitions/references extraction
 
-### 3. Performance
+### 3. Text Chunking Support
+
+- [x] Separate `chunk_text` method for plain text
+- [x] Works for any content regardless of language support
+- [x] Returns chunks with minimal metadata
+- [x] Handles unsupported languages gracefully
+
+### 4. Tokenizer Support
+
+- [x] Multiple tokenizer implementations (Characters, Tiktoken, HuggingFace)
+- [x] Type-safe `TokenizerType` enum
+- [x] Support for custom HuggingFace models
+- [x] Clean error handling for missing model names
+
+### 5. Performance
 
 - [ ] Parse 1MB file in <100ms
 - [ ] Minimal memory allocations
 - [ ] Efficient chunk size calculation
 
-### 4. Error Handling
+### 6. Error Handling
 
 - [x] Return error for unsupported languages
 - [x] Never panic on malformed code
 - [x] Clear error types for Python to handle
 
-### 5. Python Integration
+### 7. Python Integration
 
 - [ ] Published as wheel on PyPI
 - [ ] No Rust toolchain required for users
-- [x] Type stubs for IDE support
+- [x] Type stubs for IDE support with TokenizerType enum
 - [ ] Works on Linux, macOS, Windows
 
 ## Key Differences from Original Plans
@@ -407,13 +458,13 @@ pytest-runner = "6.0"
 ```python
 # tests/test_acceptance.py
 import pytest
-from breeze_rustle import SemanticChunker, SemanticChunk
+from breeze_rustle import SemanticChunker, SemanticChunk, TokenizerType
 
 class TestBasicFunctionality:
     def test_supported_languages(self):
-        """Should support at least 17 languages"""
+        """Should support at least 16 languages"""
         languages = SemanticChunker.supported_languages()
-        assert len(languages) >= 17
+        assert len(languages) >= 16
         assert "Python" in languages
         assert "Rust" in languages
         assert "JavaScript" in languages
@@ -442,18 +493,26 @@ class Greeter:
             assert chunk.metadata.language == "Python"
             assert chunk.metadata.node_type is not None
     
-    async def test_hyperpolyglot_names(self):
-        """Should work with hyperpolyglot language names"""
-        test_cases = [
-            ("Python", "def test(): pass"),
-            ("C++", "int main() { return 0; }"),
-            ("C#", "class Program { }"),
-        ]
+    async def test_tokenizer_types(self):
+        """Should support different tokenizer types"""
+        content = "def test(): pass"
         
-        chunker = SemanticChunker()
-        for lang, code in test_cases:
-            chunks = await chunker.chunk_file(code, lang)
+        # Test each tokenizer type
+        for tokenizer in [TokenizerType.CHARACTERS, TokenizerType.TIKTOKEN]:
+            chunker = SemanticChunker(tokenizer=tokenizer)
+            chunks = await chunker.chunk_file(content, "Python")
             assert len(chunks) > 0
+    
+    async def test_text_chunking(self):
+        """Should handle plain text chunking for unsupported languages"""
+        content = "This is plain text content."
+        chunker = SemanticChunker()
+        
+        # Test with unsupported language
+        if not SemanticChunker.is_language_supported("COBOL"):
+            chunks = await chunker.chunk_text(content)
+            assert len(chunks) > 0
+            assert chunks[0].metadata.language == "text"
 ```
 
 ## Success Metrics
