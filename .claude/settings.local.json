@@ -9,7 +9,10 @@
       "mcp__fetch__fetch",
       "mcp__filesystem__read_file",
       "mcp__filesystem__read_multiple_files",
-      "mcp__filesystem__list_directory"
+      "mcp__filesystem__list_directory",
+      "Bash(cargo test)",
+      "Bash(cargo test:*)",
+      "Bash(python test:*)"
     ],
     "deny": []
   }

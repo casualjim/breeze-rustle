@@ -1,5 +1,7 @@
 # breeze-rustle Text-Splitter Implementation Plan
 
+**Note: This plan has been largely implemented. See context.md for current status.**
+
 ## Overview
 
 `breeze-rustle` is a Rust library that provides high-performance semantic code chunking by leveraging the `text-splitter` crate with tree-sitter parsers. It adds rich metadata extraction and Python bindings for use in RAG applications.
@@ -332,32 +334,37 @@ pytest-runner = "6.0"
 ## Acceptance Criteria
 
 ### 1. Core Functionality
+
 - [x] Uses text-splitter's CodeSplitter for chunking
 - [x] Supports 17+ languages via direct tree-sitter crates
 - [x] Maps hyperpolyglot language names correctly
 - [x] Extracts rich metadata from chunks
 
 ### 2. Metadata Extraction
-- [ ] Extract node_type from tree-sitter AST
-- [ ] Extract node_name from identifier nodes
-- [ ] Build scope_path by traversing parent nodes
-- [ ] Extract parent_context (e.g., class name for methods)
-- [ ] Basic definitions/references extraction
+
+- [x] Extract node_type from tree-sitter AST
+- [x] Extract node_name from identifier nodes
+- [x] Build scope_path by traversing parent nodes
+- [x] Extract parent_context (e.g., class name for methods)
+- [x] Basic definitions/references extraction
 
 ### 3. Performance
+
 - [ ] Parse 1MB file in <100ms
 - [ ] Minimal memory allocations
 - [ ] Efficient chunk size calculation
 
 ### 4. Error Handling
-- [ ] Return empty Vec for unsupported languages
-- [ ] Never panic on malformed code
-- [ ] Clear error types for Python to handle
+
+- [x] Return error for unsupported languages
+- [x] Never panic on malformed code
+- [x] Clear error types for Python to handle
 
 ### 5. Python Integration
+
 - [ ] Published as wheel on PyPI
 - [ ] No Rust toolchain required for users
-- [ ] Type stubs for IDE support
+- [x] Type stubs for IDE support
 - [ ] Works on Linux, macOS, Windows
 
 ## Key Differences from Original Plans
@@ -370,26 +377,30 @@ pytest-runner = "6.0"
 
 ## Implementation Phases
 
-### Phase 1: Core Implementation (MVP)
-- Set up text-splitter integration
-- Create language registry for top 10 languages
-- Basic metadata extraction (node type and name)
-- Python bindings with async support
+### Phase 1: Core Implementation (MVP) ✅
 
-### Phase 2: Enhanced Metadata
-- Scope path extraction
-- Parent context tracking
-- Basic definitions/references (if feasible without queries)
+- ✅ Set up text-splitter integration
+- ✅ Create language registry for top 10 languages
+- ✅ Basic metadata extraction (node type and name)
+- ✅ Python bindings with async support
 
-### Phase 3: Full Language Support
-- Add remaining tree-sitter language crates
-- Comprehensive testing across languages
-- Performance optimization
+### Phase 2: Enhanced Metadata ✅
+
+- ✅ Scope path extraction
+- ✅ Parent context tracking
+- ✅ Basic definitions/references (if feasible without queries)
+
+### Phase 3: Full Language Support ✅
+
+- ✅ Add remaining tree-sitter language crates (16 total)
+- ✅ Comprehensive testing across languages
+- ⏳ Performance optimization (partially done)
 
 ### Phase 4: Production Ready
-- Python packaging and distribution
-- Documentation and examples
-- Integration tests with hyperpolyglot
+
+- ⏳ Python packaging and distribution
+- ⏳ Documentation and examples
+- ⏳ Integration tests with hyperpolyglot
 
 ## Testing Strategy
 
@@ -456,6 +467,7 @@ class Greeter:
 ## Migration Notes
 
 This plan supersedes:
+
 - `docs/plans/breeze-rustle-implementation.md`
 - `docs/notes/syntastica-integration-plan.md`
 
