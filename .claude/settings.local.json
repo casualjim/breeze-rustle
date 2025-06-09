@@ -12,7 +12,8 @@
       "mcp__filesystem__list_directory",
       "Bash(cargo test)",
       "Bash(cargo test:*)",
-      "Bash(python test:*)"
+      "Bash(python test:*)",
+      "Bash(python -m pytest tests/test_acceptance.py::TestBasicFunctionality::test_simple_python_file -v)"
     ],
     "deny": []
   }
