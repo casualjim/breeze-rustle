@@ -37,7 +37,7 @@ class Calculator:
             
             # Use detected language for chunking
             chunker = SemanticChunker()
-            chunks = await chunker.chunk_file(content, detected_lang)
+            chunks = await chunker.chunk_code(content, detected_lang)
             
             assert len(chunks) > 0
             assert all(chunk.metadata.language == "Python" for chunk in chunks)
@@ -73,7 +73,7 @@ module.exports = { Person, greeting };
             assert detected_lang == "JavaScript"
             
             chunker = SemanticChunker()
-            chunks = await chunker.chunk_file(content, detected_lang)
+            chunks = await chunker.chunk_code(content, detected_lang)
             
             assert len(chunks) > 0
             assert all(chunk.metadata.language == "JavaScript" for chunk in chunks)
@@ -112,7 +112,7 @@ impl<T> Cache<T> {
             assert detected_lang == "Rust"
             
             chunker = SemanticChunker()
-            chunks = await chunker.chunk_file(content, detected_lang)
+            chunks = await chunker.chunk_code(content, detected_lang)
             
             assert len(chunks) > 0
             assert all(chunk.metadata.language == "Rust" for chunk in chunks)
@@ -149,7 +149,7 @@ export class UserService {
             assert detected_lang == "TypeScript"
             
             chunker = SemanticChunker()
-            chunks = await chunker.chunk_file(content, detected_lang)
+            chunks = await chunker.chunk_code(content, detected_lang)
             
             assert len(chunks) > 0
             assert all(chunk.metadata.language == "TypeScript" for chunk in chunks)
@@ -185,7 +185,7 @@ end
             assert detected_lang == "Ruby"
             
             chunker = SemanticChunker()
-            chunks = await chunker.chunk_file(content, detected_lang)
+            chunks = await chunker.chunk_code(content, detected_lang)
             
             assert len(chunks) > 0
             assert all(chunk.metadata.language == "Ruby" for chunk in chunks)
@@ -211,7 +211,7 @@ PROCEDURE DIVISION.
             
             if detected_lang and SemanticChunker.is_language_supported(detected_lang):
                 # If somehow supported, use regular chunking
-                chunks = await chunker.chunk_file(content, detected_lang)
+                chunks = await chunker.chunk_code(content, detected_lang)
             else:
                 # Fall back to text chunking
                 chunks = await chunker.chunk_text(content, "hello.cob")
@@ -248,7 +248,7 @@ PROCEDURE DIVISION.
             chunker = SemanticChunker()
             
             if detected_lang and SemanticChunker.is_language_supported(detected_lang):
-                chunks = await chunker.chunk_file(content, detected_lang)
+                chunks = await chunker.chunk_code(content, detected_lang)
             else:
                 chunks = await chunker.chunk_text(content, "index.html")
                 
@@ -275,7 +275,7 @@ host = "localhost"
             
             # If language detection confidence is low or unsupported, use text chunking
             if detected_lang and SemanticChunker.is_language_supported(detected_lang):
-                chunks = await chunker.chunk_file(content, detected_lang)
+                chunks = await chunker.chunk_code(content, detected_lang)
             else:
                 chunks = await chunker.chunk_text(content, "config")
                 
@@ -322,7 +322,7 @@ This is a test project.
                 detected_lang = detect_language(temp_path)
                 
                 if detected_lang and SemanticChunker.is_language_supported(detected_lang):
-                    chunks = await chunker.chunk_file(content, detected_lang)
+                    chunks = await chunker.chunk_code(content, detected_lang)
                     results.append((original_name, detected_lang, "code", len(chunks)))
                 else:
                     chunks = await chunker.chunk_text(content, original_name)

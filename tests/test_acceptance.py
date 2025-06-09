@@ -38,7 +38,7 @@ class Greeter:
         return hello(name)
 '''
         chunker = SemanticChunker()
-        chunks = await chunker.chunk_file(content, "Python")
+        chunks = await chunker.chunk_code(content, "Python")
         
         assert len(chunks) > 0
         
@@ -63,7 +63,7 @@ class Greeter:
         content = '\n'.join([f'def function_{i}():\n    """Docstring for function {i}"""\n    return {i}\n' for i in range(50)])
         
         chunker = SemanticChunker(max_chunk_size=500)
-        chunks = await chunker.chunk_file(content, "Python")
+        chunks = await chunker.chunk_code(content, "Python")
         
         # All chunks should be under the size limit (allowing some overage for semantic boundaries)
         for chunk in chunks:
@@ -76,7 +76,7 @@ class TestTokenizerTypes:
         """Should support character-based chunking"""
         content = "def test(): pass"
         chunker = SemanticChunker(max_chunk_size=100, tokenizer=TokenizerType.CHARACTERS)
-        chunks = await chunker.chunk_file(content, "Python")
+        chunks = await chunker.chunk_code(content, "Python")
         assert len(chunks) > 0
     
     @pytest.mark.asyncio
@@ -84,7 +84,7 @@ class TestTokenizerTypes:
         """Should support tiktoken tokenizer"""
         content = "def test(): pass"
         chunker = SemanticChunker(max_chunk_size=100, tokenizer=TokenizerType.TIKTOKEN)
-        chunks = await chunker.chunk_file(content, "Python")
+        chunks = await chunker.chunk_code(content, "Python")
         assert len(chunks) > 0
     
     @pytest.mark.asyncio
@@ -96,7 +96,7 @@ class TestTokenizerTypes:
             tokenizer=TokenizerType.HUGGINGFACE,
             hf_model="bert-base-uncased"
         )
-        chunks = await chunker.chunk_file(content, "Python")
+        chunks = await chunker.chunk_code(content, "Python")
         assert len(chunks) > 0
     
     def test_huggingface_without_model_fails(self):
@@ -115,7 +115,7 @@ class TestMetadataExtraction:
     return result
 '''
         chunker = SemanticChunker()
-        chunks = await chunker.chunk_file(content, "Python")
+        chunks = await chunker.chunk_code(content, "Python")
         
         # Should have at least one chunk
         assert len(chunks) > 0
@@ -137,7 +137,7 @@ class TestMetadataExtraction:
         return self.value
 '''
         chunker = SemanticChunker()
-        chunks = await chunker.chunk_file(content, "Python")
+        chunks = await chunker.chunk_code(content, "Python")
         
         # Find chunks with methods
         method_chunks = [c for c in chunks if "def " in c.text and "__init__" not in c.text]
@@ -156,7 +156,7 @@ class TestMetadataExtraction:
             pass
 '''
         chunker = SemanticChunker()
-        chunks = await chunker.chunk_file(content, "Python")
+        chunks = await chunker.chunk_code(content, "Python")
         
         # Look for the nested method chunk
         for chunk in chunks:
@@ -213,7 +213,7 @@ class Person {
 }
 '''
         chunker = SemanticChunker()
-        chunks = await chunker.chunk_file(content, "JavaScript")
+        chunks = await chunker.chunk_code(content, "JavaScript")
         
         assert len(chunks) > 0
         assert all(c.metadata.language == "JavaScript" for c in chunks)
@@ -237,7 +237,7 @@ impl Person {
 }
 '''
         chunker = SemanticChunker()
-        chunks = await chunker.chunk_file(content, "Rust")
+        chunks = await chunker.chunk_code(content, "Rust")
         
         assert len(chunks) > 0
         assert all(c.metadata.language == "Rust" for c in chunks)
@@ -268,7 +268,7 @@ class UserService {
 }
 '''
         chunker = SemanticChunker()
-        chunks = await chunker.chunk_file(content, "TypeScript")
+        chunks = await chunker.chunk_code(content, "TypeScript")
         
         assert len(chunks) > 0
         assert all(c.metadata.language == "TypeScript" for c in chunks)
@@ -282,13 +282,13 @@ class TestErrorHandling:
         chunker = SemanticChunker()
         
         with pytest.raises(ValueError, match="Unsupported language"):
-            await chunker.chunk_file(content, "COBOL")
+            await chunker.chunk_code(content, "COBOL")
     
     @pytest.mark.asyncio
     async def test_empty_content(self):
         """Should handle empty content gracefully"""
         chunker = SemanticChunker()
-        chunks = await chunker.chunk_file("", "Python")
+        chunks = await chunker.chunk_code("", "Python")
         
         # Should either return empty list or single empty chunk
         assert len(chunks) <= 1
@@ -304,7 +304,7 @@ class IncompleteClass:
         
         chunker = SemanticChunker()
         # Should not raise an exception
-        chunks = await chunker.chunk_file(content, "Python")
+        chunks = await chunker.chunk_code(content, "Python")
         assert isinstance(chunks, list)
 
 
@@ -324,7 +324,7 @@ class TestDefinitionsAndReferences:
     return result, total
 '''
         chunker = SemanticChunker()
-        chunks = await chunker.chunk_file(content, "Python")
+        chunks = await chunker.chunk_code(content, "Python")
         
         # Should extract some definitions
         if chunks:
@@ -341,7 +341,7 @@ def calculate_circle_area(radius):
     return math.pi * radius ** 2
 '''
         chunker = SemanticChunker()
-        chunks = await chunker.chunk_file(content, "Python")
+        chunks = await chunker.chunk_code(content, "Python")
         
         # Look for chunks containing the function
         func_chunks = [c for c in chunks if "calculate_circle_area" in c.text]

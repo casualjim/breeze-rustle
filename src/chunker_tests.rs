@@ -325,4 +325,27 @@ class Class_{i}:
         let has_definitions = chunks.iter().any(|c| !c.metadata.definitions.is_empty());
         assert!(has_definitions, "Should extract definitions even for large files");
     }
+    
+    #[tokio::test]
+    async fn test_line_numbers_are_1_based() {
+        use futures::StreamExt;
+        
+        let chunker = InnerChunker::new(1000, TokenizerType::Characters).unwrap();
+        
+        let code = "def hello():\n    print('Hello')\n\ndef world():\n    print('World')";
+        
+        let mut chunks = Vec::new();
+        let mut stream = Box::pin(chunker.chunk_code(code, "Python", None));
+        
+        while let Some(result) = stream.next().await {
+            chunks.push(result.expect("Should chunk Python code"));
+        }
+        
+        // All chunks should have 1-based line numbers
+        for chunk in chunks {
+            assert!(chunk.start_line >= 1, "Start line should be 1-based, got {}", chunk.start_line);
+            assert!(chunk.end_line >= 1, "End line should be 1-based, got {}", chunk.end_line);
+            assert!(chunk.end_line >= chunk.start_line, "End line should be >= start line");
+        }
+    }
 }

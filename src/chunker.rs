@@ -68,10 +68,10 @@ impl InnerChunker {
             
             // Only do the actual chunk yielding inside the stream
             for (idx, (offset, chunk_text)) in chunks.into_iter().enumerate() {
-                // Binary search for line numbers
-                let start_line = line_offsets.binary_search(&offset).unwrap_or_else(|i| i);
+                // Binary search for line numbers (convert to 1-based)
+                let start_line = line_offsets.binary_search(&offset).unwrap_or_else(|i| i) + 1;
                 let end_offset = offset + chunk_text.len();
-                let end_line = line_offsets.binary_search(&end_offset).unwrap_or_else(|i| i);
+                let end_line = line_offsets.binary_search(&end_offset).unwrap_or_else(|i| i) + 1;
                 
                 // Extract metadata from pre-parsed AST
                 let metadata = match extract_metadata_from_tree(
@@ -167,10 +167,10 @@ impl InnerChunker {
             
             // Only do the actual chunk yielding inside the stream
             for (idx, (offset, chunk_text)) in chunks.into_iter().enumerate() {
-                // Binary search for line numbers
-                let start_line = line_offsets.binary_search(&offset).unwrap_or_else(|i| i);
+                // Binary search for line numbers (convert to 1-based)
+                let start_line = line_offsets.binary_search(&offset).unwrap_or_else(|i| i) + 1;
                 let end_offset = offset + chunk_text.len();
-                let end_line = line_offsets.binary_search(&end_offset).unwrap_or_else(|i| i);
+                let end_line = line_offsets.binary_search(&end_offset).unwrap_or_else(|i| i) + 1;
                 
                 // Create minimal metadata for text chunks
                 let metadata = ChunkMetadata {

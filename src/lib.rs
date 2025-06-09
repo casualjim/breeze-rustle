@@ -12,8 +12,11 @@ use chunker::{InnerChunker, TokenizerType as RustTokenizerType};
 use languages::{supported_languages, is_language_supported};
 
 use pyo3::prelude::*;
-use pyo3::exceptions::{PyValueError, PyRuntimeError};
+use pyo3::exceptions::{PyValueError, PyRuntimeError, PyStopAsyncIteration};
 use std::sync::Arc;
+use std::pin::Pin;
+use futures::{Stream, StreamExt};
+use tokio::sync::Mutex;
 
 #[pyclass(eq)]
 #[derive(Clone, Debug, PartialEq)]
@@ -173,8 +176,6 @@ impl SemanticChunker {
         hf_model: Option<String>,
         max_parallel: Option<usize>,
     ) -> PyResult<Bound<'py, PyAny>> {
-        use futures::StreamExt;
-        
         let max_chunk_size = max_chunk_size.unwrap_or(1500);
         let max_parallel = max_parallel.unwrap_or(8);
         
@@ -194,12 +195,10 @@ impl SemanticChunker {
             }
         };
         
-        // For now, collect all chunks and return as a list
-        // TODO: Implement proper async iterator support
+        // Create the ProjectWalker in an async context where Tokio runtime is available
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            let mut chunks = Vec::new();
-            let mut stream = walker::walk_project(
-                path.as_str(),
+            let stream = walker::walk_project(
+                path,
                 walker::WalkOptions {
                     max_chunk_size,
                     tokenizer: tokenizer_type,
@@ -208,16 +207,9 @@ impl SemanticChunker {
                 },
             );
             
-            while let Some(result) = stream.next().await {
-                match result {
-                    Ok(chunk) => chunks.push(chunk),
-                    Err(e) => {
-                        return Err(PyRuntimeError::new_err(format!("Error processing file: {}", e)));
-                    }
-                }
-            }
-            
-            Ok(chunks)
+            Ok(ProjectWalker {
+                stream: Arc::new(Mutex::new(Box::pin(stream))),
+            })
         })
     }
 }
@@ -237,9 +229,35 @@ fn breeze_rustle(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<ChunkMetadata>()?;
     m.add_class::<SemanticChunk>()?;
     m.add_class::<ProjectChunk>()?;
+    m.add_class::<ProjectWalker>()?;
     
     // Add version info
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;
     
     Ok(())
+}
+
+#[pyclass]
+pub struct ProjectWalker {
+    stream: Arc<Mutex<Pin<Box<dyn Stream<Item = Result<ProjectChunk, ChunkError>> + Send>>>>,
+}
+
+#[pymethods]
+impl ProjectWalker {
+    fn __aiter__(slf: PyRef<'_, Self>) -> PyRef<'_, Self> {
+        slf
+    }
+    
+    fn __anext__<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let stream = self.stream.clone();
+        
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let mut stream_guard = stream.lock().await;
+            match stream_guard.next().await {
+                Some(Ok(chunk)) => Ok(chunk),
+                Some(Err(e)) => Err(PyRuntimeError::new_err(format!("Error processing file: {}", e))),
+                None => Err(PyStopAsyncIteration::new_err("")),
+            }
+        })
+    }
 }
