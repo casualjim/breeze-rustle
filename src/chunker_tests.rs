@@ -1,6 +1,7 @@
 #[cfg(test)]
 mod comprehensive_tests {
     use crate::chunker::{InnerChunker, TokenizerType};
+    use futures::StreamExt;
     
     #[tokio::test]
     async fn test_python_class_chunking() {
@@ -28,9 +29,12 @@ class Calculator:
         self.memory = 0
 "#;
         
-        let chunks = chunker.chunk_file(code, "Python", Some("calculator.py"))
-            .await
-            .expect("Should chunk Python code");
+        let mut chunks = Vec::new();
+        let mut stream = Box::pin(chunker.chunk_code(code, "Python", Some("calculator.py")));
+        
+        while let Some(result) = stream.next().await {
+            chunks.push(result.expect("Should chunk Python code"));
+        }
         
         // Should have multiple chunks due to size limit
         assert!(chunks.len() >= 2);
@@ -87,9 +91,12 @@ const manager = new UserManager(apiClient);
 const user = await manager.getUser(123);
 "#;
         
-        let chunks = chunker.chunk_file(code, "JavaScript", Some("user_manager.js"))
-            .await
-            .expect("Should chunk JavaScript code");
+        let mut chunks = Vec::new();
+        let mut stream = Box::pin(chunker.chunk_code(code, "JavaScript", Some("user_manager.js")));
+        
+        while let Some(result) = stream.next().await {
+            chunks.push(result.expect("Should chunk JavaScript code"));
+        }
         
         assert!(chunks.len() >= 3, "Should have multiple chunks");
         
@@ -148,9 +155,12 @@ where
 }
 "#;
         
-        let chunks = chunker.chunk_file(code, "Rust", Some("cache.rs"))
-            .await
-            .expect("Should chunk Rust code");
+        let mut chunks = Vec::new();
+        let mut stream = Box::pin(chunker.chunk_code(code, "Rust", Some("cache.rs")));
+        
+        while let Some(result) = stream.next().await {
+            chunks.push(result.expect("Should chunk Rust code"));
+        }
         
         // Verify struct and impl blocks are identified
         let node_types: Vec<_> = chunks.iter()
@@ -196,9 +206,12 @@ module OuterModule {
 }
 "#;
         
-        let chunks = chunker.chunk_file(code, "TypeScript", Some("nested.ts"))
-            .await
-            .expect("Should chunk TypeScript code");
+        let mut chunks = Vec::new();
+        let mut stream = Box::pin(chunker.chunk_code(code, "TypeScript", Some("nested.ts")));
+        
+        while let Some(result) = stream.next().await {
+            chunks.push(result.expect("Should chunk TypeScript code"));
+        }
         
         // Check for nested class definition
         let has_nested_class = chunks.iter().any(|c| {
@@ -240,9 +253,12 @@ def validate(item):
     return len(item) > 0
 "#;
         
-        let chunks = chunker.chunk_file(code, "Python", Some("processor.py"))
-            .await
-            .expect("Should chunk Python code");
+        let mut chunks = Vec::new();
+        let mut stream = Box::pin(chunker.chunk_code(code, "Python", Some("processor.py")));
+        
+        while let Some(result) = stream.next().await {
+            chunks.push(result.expect("Should chunk Python code"));
+        }
         
         // Verify we get multiple chunks
         assert!(chunks.len() >= 3, "Should split into multiple chunks");
@@ -289,9 +305,12 @@ class Class_{i}:
         }
         
         let start = Instant::now();
-        let chunks = chunker.chunk_file(&code, "Python", Some("large_file.py"))
-            .await
-            .expect("Should chunk large file");
+        let mut chunks = Vec::new();
+        let mut stream = Box::pin(chunker.chunk_code(&code, "Python", Some("large_file.py")));
+        
+        while let Some(result) = stream.next().await {
+            chunks.push(result.expect("Should chunk large file"));
+        }
         let duration = start.elapsed();
         
         // Should complete within 10 seconds for 1MB file (more realistic with full AST parsing)

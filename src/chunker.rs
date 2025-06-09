@@ -1,4 +1,4 @@
-use crate::{languages::*, types::*, metadata_extractor::extract_metadata};
+use crate::{languages::*, types::*, metadata_extractor::extract_metadata_from_tree};
 use text_splitter::{ChunkConfig, CodeSplitter, TextSplitter, ChunkSizer};
 
 pub enum TokenizerType {
@@ -52,16 +52,89 @@ impl InnerChunker {
         })
     }
 
-    pub async fn chunk_file(
-        &self, 
-        content: &str, 
-        language: &str, 
-        file_path: Option<&str>
-    ) -> Result<Vec<SemanticChunk>, ChunkError> {
+    pub fn chunk_code<'a>(
+        &'a self, 
+        content: &'a str, 
+        language: &'a str, 
+        file_path: Option<&'a str>
+    ) -> impl futures::Stream<Item = Result<SemanticChunk, ChunkError>> + 'a {
+        // Do all the expensive setup work outside the stream
+        let setup_result = self.setup_code_chunking(content, language);
+        let language_str = language.to_string();
+        let file_path_str = file_path.map(|s| s.to_string());
+        
+        async_stream::try_stream! {
+            let (tree, chunks, line_offsets) = setup_result?;
+            
+            // Only do the actual chunk yielding inside the stream
+            for (idx, (offset, chunk_text)) in chunks.into_iter().enumerate() {
+                // Binary search for line numbers
+                let start_line = line_offsets.binary_search(&offset).unwrap_or_else(|i| i);
+                let end_offset = offset + chunk_text.len();
+                let end_line = line_offsets.binary_search(&end_offset).unwrap_or_else(|i| i);
+                
+                // Extract metadata from pre-parsed AST
+                let metadata = match extract_metadata_from_tree(
+                    &tree,
+                    content,
+                    offset,
+                    end_offset,
+                    &language_str,
+                ) {
+                    Ok(mut meta) => {
+                        // If no node name was extracted, use a default
+                        if meta.node_name.is_none() {
+                            meta.node_name = file_path_str.as_ref().map(|_p| format!("chunk_{}", idx + 1));
+                        }
+                        // Add file path as parent context if not already set
+                        if meta.parent_context.is_none() && file_path_str.is_some() {
+                            meta.parent_context = file_path_str.clone();
+                        }
+                        meta
+                    }
+                    Err(_) => {
+                        // Fallback metadata if extraction fails
+                        ChunkMetadata {
+                            node_type: "code_chunk".to_string(),
+                            node_name: file_path_str.as_ref().map(|_p| format!("chunk_{}", idx + 1)),
+                            language: language_str.clone(),
+                            parent_context: file_path_str.clone(),
+                            scope_path: vec![],
+                            definitions: vec![],
+                            references: vec![],
+                        }
+                    }
+                };
+                
+                yield SemanticChunk {
+                    text: chunk_text.to_string(),
+                    start_byte: offset,
+                    end_byte: end_offset,
+                    start_line,
+                    end_line,
+                    metadata,
+                };
+            }
+        }
+    }
+    
+    fn setup_code_chunking<'a>(
+        &self,
+        content: &'a str,
+        language: &str,
+    ) -> Result<(tree_sitter::Tree, Vec<(usize, &'a str)>, Vec<usize>), ChunkError> {
         // Get tree-sitter language
         let language_fn = get_language(language)
             .ok_or_else(|| ChunkError::UnsupportedLanguage(language.to_string()))?;
         let ts_language: tree_sitter::Language = language_fn.into();
+        
+        // Parse the content once upfront
+        let mut parser = tree_sitter::Parser::new();
+        parser.set_language(&ts_language)
+            .map_err(|e| ChunkError::ParseError(format!("Failed to set language: {:?}", e)))?;
+        
+        let tree = parser.parse(content, None)
+            .ok_or_else(|| ChunkError::ParseError("Failed to parse content".to_string()))?;
         
         // Create config and splitter with our chunk sizer
         let config = ChunkConfig::new(self.max_chunk_size)
@@ -72,65 +145,60 @@ impl InnerChunker {
         // Get base chunks with indices
         let chunks: Vec<_> = splitter.chunk_indices(content).collect();
         
-        // Convert to our SemanticChunk format
-        let mut semantic_chunks = Vec::new();
+        // Pre-calculate line offsets for efficient line number computation
+        let line_offsets: Vec<usize> = std::iter::once(0)
+            .chain(content.match_indices('\n').map(|(i, _)| i + 1))
+            .collect();
         
-        for (idx, (offset, chunk_text)) in chunks.into_iter().enumerate() {
-            // Calculate line numbers
-            let start_line = content[..offset].matches('\n').count() + 1;
-            let end_line = content[..offset + chunk_text.len()].matches('\n').count() + 1;
-            
-            // Extract metadata from AST
-            let metadata = match extract_metadata(
-                content,
-                offset,
-                offset + chunk_text.len(),
-                ts_language.clone(),
-                language,
-            ) {
-                Ok(mut meta) => {
-                    // If no node name was extracted, use a default
-                    if meta.node_name.is_none() {
-                        meta.node_name = file_path.map(|_p| format!("chunk_{}", idx + 1));
-                    }
-                    // Add file path as parent context if not already set
-                    if meta.parent_context.is_none() && file_path.is_some() {
-                        meta.parent_context = file_path.map(|p| p.to_string());
-                    }
-                    meta
-                }
-                Err(_) => {
-                    // Fallback metadata if extraction fails
-                    ChunkMetadata {
-                        node_type: "code_chunk".to_string(),
-                        node_name: file_path.map(|_p| format!("chunk_{}", idx + 1)),
-                        language: language.to_string(),
-                        parent_context: file_path.map(|p| p.to_string()),
-                        scope_path: vec![],
-                        definitions: vec![],
-                        references: vec![],
-                    }
-                }
-            };
-            
-            semantic_chunks.push(SemanticChunk {
-                text: chunk_text.to_string(),
-                start_byte: offset,
-                end_byte: offset + chunk_text.len(),
-                start_line,
-                end_line,
-                metadata,
-            });
-        }
-        
-        Ok(semantic_chunks)
+        Ok((tree, chunks, line_offsets))
     }
     
-    pub async fn chunk_text(
+    pub fn chunk_text<'a>(
+        &'a self,
+        content: &'a str,
+        file_path: Option<&'a str>
+    ) -> impl futures::Stream<Item = Result<SemanticChunk, ChunkError>> + 'a {
+        // Do all the expensive setup work outside the stream
+        let setup_result = self.setup_text_chunking(content);
+        let file_path_str = file_path.map(|s| s.to_string());
+        
+        async_stream::try_stream! {
+            let (chunks, line_offsets) = setup_result?;
+            
+            // Only do the actual chunk yielding inside the stream
+            for (idx, (offset, chunk_text)) in chunks.into_iter().enumerate() {
+                // Binary search for line numbers
+                let start_line = line_offsets.binary_search(&offset).unwrap_or_else(|i| i);
+                let end_offset = offset + chunk_text.len();
+                let end_line = line_offsets.binary_search(&end_offset).unwrap_or_else(|i| i);
+                
+                // Create minimal metadata for text chunks
+                let metadata = ChunkMetadata {
+                    node_type: "text_chunk".to_string(),
+                    node_name: Some(format!("text_chunk_{}", idx + 1)),
+                    language: "text".to_string(),
+                    parent_context: file_path_str.clone(),
+                    scope_path: vec![],
+                    definitions: vec![],
+                    references: vec![],
+                };
+                
+                yield SemanticChunk {
+                    text: chunk_text.to_string(),
+                    start_byte: offset,
+                    end_byte: offset + chunk_text.len(),
+                    start_line,
+                    end_line,
+                    metadata,
+                };
+            }
+        }
+    }
+    
+    fn setup_text_chunking<'a>(
         &self,
-        content: &str,
-        file_path: Option<&str>
-    ) -> Result<Vec<SemanticChunk>, ChunkError> {
+        content: &'a str,
+    ) -> Result<(Vec<(usize, &'a str)>, Vec<usize>), ChunkError> {
         // Create config and text splitter with our chunk sizer
         let config = ChunkConfig::new(self.max_chunk_size)
             .with_sizer(&self.chunk_sizer)
@@ -140,36 +208,12 @@ impl InnerChunker {
         // Get base chunks with indices
         let chunks: Vec<_> = splitter.chunk_indices(content).collect();
         
-        // Convert to our SemanticChunk format with minimal metadata
-        let mut text_chunks = Vec::new();
+        // Pre-calculate line offsets for efficient line number computation
+        let line_offsets: Vec<usize> = std::iter::once(0)
+            .chain(content.match_indices('\n').map(|(i, _)| i + 1))
+            .collect();
         
-        for (idx, (offset, chunk_text)) in chunks.into_iter().enumerate() {
-            // Calculate line numbers
-            let start_line = content[..offset].matches('\n').count() + 1;
-            let end_line = content[..offset + chunk_text.len()].matches('\n').count() + 1;
-            
-            // Create minimal metadata for text chunks
-            let metadata = ChunkMetadata {
-                node_type: "text_chunk".to_string(),
-                node_name: Some(format!("text_chunk_{}", idx + 1)),
-                language: "text".to_string(),
-                parent_context: file_path.map(|p| p.to_string()),
-                scope_path: vec![],
-                definitions: vec![],
-                references: vec![],
-            };
-            
-            text_chunks.push(SemanticChunk {
-                text: chunk_text.to_string(),
-                start_byte: offset,
-                end_byte: offset + chunk_text.len(),
-                start_line,
-                end_line,
-                metadata,
-            });
-        }
-        
-        Ok(text_chunks)
+        Ok((chunks, line_offsets))
     }
 }
 
@@ -185,6 +229,8 @@ mod tests {
     
     #[tokio::test]
     async fn test_chunk_simple_rust_code() {
+        use futures::StreamExt;
+        
         let chunker = InnerChunker::new(100, TokenizerType::Characters).unwrap();
         
         let code = r#"
@@ -197,10 +243,14 @@ fn helper() {
 }
 "#;
         
-        let result = chunker.chunk_file(code, "Rust", None).await;
-        assert!(result.is_ok());
+        let mut chunks = Vec::new();
+        let mut stream = Box::pin(chunker.chunk_code(code, "Rust", None));
         
-        let chunks = result.unwrap();
+        while let Some(result) = stream.next().await {
+            assert!(result.is_ok());
+            chunks.push(result.unwrap());
+        }
+        
         assert!(!chunks.is_empty());
         
         // Check that chunks have proper metadata
@@ -213,9 +263,14 @@ fn helper() {
     
     #[tokio::test]
     async fn test_unsupported_language() {
+        use futures::StreamExt;
+        
         let chunker = InnerChunker::new(1000, TokenizerType::Characters).unwrap();
         
-        let result = chunker.chunk_file("code", "COBOL", None).await;
+        let mut stream = Box::pin(chunker.chunk_code("code", "COBOL", None));
+        
+        // The first item should be an error
+        let result = stream.next().await.unwrap();
         assert!(result.is_err());
         
         match result {
@@ -228,12 +283,17 @@ fn helper() {
     
     #[tokio::test] 
     async fn test_language_case_insensitive() {
+        use futures::StreamExt;
+        
         let chunker = InnerChunker::new(1000, TokenizerType::Characters).unwrap();
         
         let code = "def main(): pass";
         
         // These should all work
-        assert!(chunker.chunk_file(code, "python", None).await.is_ok());
-        assert!(chunker.chunk_file(code, "Python", None).await.is_ok());
+        let mut stream1 = Box::pin(chunker.chunk_code(code, "python", None));
+        assert!(stream1.next().await.unwrap().is_ok());
+        
+        let mut stream2 = Box::pin(chunker.chunk_code(code, "Python", None));
+        assert!(stream2.next().await.unwrap().is_ok());
     }
 }

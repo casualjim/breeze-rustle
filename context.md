@@ -72,9 +72,57 @@
     - Tokenizer enum tests
 
 ### 📋 Remaining Tasks
-- Write Python acceptance tests
 - Performance optimization (current: ~25s for 1MB file, target: <100ms)
-- Set up Python packaging with maturin for PyPI distribution
+- Investigate broken language crates (PHP, Kotlin, SQL)
+- Add more sophisticated definitions/references extraction
+
+## 🚧 New Feature: Project Directory Walker
+
+### Overview
+A new feature is being added to walk entire project directories and automatically process all files, yielding semantic chunks for supported languages and text chunks for other files.
+
+### Key Features
+- **Automatic file filtering**: Uses `hyperpolyglot` for language detection and `infer` for file type detection
+- **Smart chunking**: Automatically uses semantic chunking for supported languages, falls back to text chunking
+- **Respects .gitignore**: Uses the `ignore` crate for gitignore-aware traversal
+- **Parallel processing**: Configurable parallelism for performance
+- **Discriminated types**: Returns `ProjectChunk` that clearly indicates whether it's semantic or text
+
+### New Types
+```python
+class ChunkType(Enum):
+    SEMANTIC = "SEMANTIC"  # Properly parsed code
+    TEXT = "TEXT"          # Plain text chunking
+
+class ProjectChunk:
+    file_path: str         # Path to source file
+    chunk_type: ChunkType  # Type of chunk
+    chunk: SemanticChunk   # The actual chunk data
+    is_semantic: bool      # Helper property
+    is_text: bool          # Helper property
+```
+
+### Python API
+```python
+async def walk_project(
+    path: str,
+    max_chunk_size: int = 1500,
+    tokenizer: TokenizerType = TokenizerType.CHARACTERS,
+    hf_model: Optional[str] = None,
+    max_parallel: int = 8
+) -> AsyncIterator[ProjectChunk]:
+    """Walk a project directory and yield chunks for all processable files."""
+```
+
+### Usage Example
+```python
+# Process entire project
+async for chunk in walk_project("./my_project"):
+    if chunk.is_semantic:
+        print(f"Code: {chunk.file_path} - {chunk.chunk.metadata.node_type}")
+    else:
+        print(f"Text: {chunk.file_path}")
+```
 
 ## Key Technical Decisions
 

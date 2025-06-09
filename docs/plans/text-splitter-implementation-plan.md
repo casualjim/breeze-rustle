@@ -447,11 +447,18 @@ pytest-runner = "6.0"
 - ✅ Comprehensive testing across languages
 - ⏳ Performance optimization (partially done)
 
-### Phase 4: Production Ready
+### Phase 4: Production Ready ✅
 
-- ⏳ Python packaging and distribution
-- ⏳ Documentation and examples
-- ⏳ Integration tests with hyperpolyglot
+- ✅ Python packaging and distribution (CI/CD setup)
+- ✅ Documentation and examples (README & DOCUMENTATION.md)
+- ✅ Integration tests with hyperpolyglot
+
+### Phase 5: Project Directory Walker 🚧
+
+- 🚧 Add `walk_project` function for processing entire directories
+- 🚧 Integrate hyperpolyglot and infer for file filtering
+- 🚧 Implement discriminated union types (ProjectChunk)
+- 🚧 Support async iteration over chunks
 
 ## Testing Strategy
 
@@ -531,3 +538,79 @@ This plan supersedes:
 - `docs/notes/syntastica-integration-plan.md`
 
 The text-splitter approach provides a simpler, more maintainable solution while meeting all core requirements.
+
+## Project Directory Walker Feature
+
+### Overview
+A new feature to walk entire project directories and automatically chunk all processable files.
+
+### Design Goals
+1. **Zero configuration**: Just point at a directory and get chunks
+2. **Smart filtering**: Skip binary files, respect .gitignore
+3. **Automatic language detection**: Use hyperpolyglot for accurate detection
+4. **Graceful fallback**: Use text chunking for unsupported languages
+5. **Type safety**: Clear discrimination between semantic and text chunks
+
+### Dependencies to Add
+```toml
+ignore = "0.4"              # Gitignore-aware traversal
+futures = "0.3"             # Async streams
+hyperpolyglot = "0.1.7"     # Language detection
+infer = "0.19.0"            # File type detection
+tokio-stream = "0.1"        # Async streaming
+```
+
+### New Types
+```rust
+#[pyclass]
+pub enum ChunkType {
+    #[pyo3(name = "SEMANTIC")]
+    Semantic,
+    #[pyo3(name = "TEXT")]
+    Text,
+}
+
+#[pyclass]
+pub struct ProjectChunk {
+    #[pyo3(get)]
+    pub file_path: String,
+    #[pyo3(get)]
+    pub chunk_type: ChunkType,
+    #[pyo3(get)]
+    pub chunk: SemanticChunk,
+}
+```
+
+### File Processing Strategy
+1. Walk directory using `ignore` crate (respects .gitignore)
+2. Use `infer` to skip binary files (images, videos, etc.)
+3. Use `hyperpolyglot` to detect programming language
+4. If language is supported → semantic chunking
+5. If language is unsupported or unknown → text chunking
+6. Skip files that can't be processed
+
+### Supported Text Formats
+When language detection fails, these extensions trigger text chunking:
+- Documentation: .txt, .md, .rst
+- Config: .yaml, .yml, .toml, .json, .ini, .cfg, .conf
+- Web: .xml, .html, .htm
+- Scripts: .sh, .bat, .ps1
+- Data: .csv, .tsv
+- Other: Dockerfile, Makefile, README, .gitignore, .env
+
+### Expected Usage
+```python
+# Simple usage - process entire project
+async for chunk in walk_project("./my_project"):
+    if chunk.is_semantic:
+        # This is parsed code with full metadata
+        print(f"{chunk.chunk.metadata.node_type} in {chunk.file_path}")
+    else:
+        # This is text content
+        print(f"Text chunk from {chunk.file_path}")
+
+# For building search index
+async for chunk in walk_project("./src", tokenizer=TokenizerType.TIKTOKEN):
+    embedding = await generate_embedding(chunk.chunk.text)
+    await store_chunk(chunk, embedding)
+```

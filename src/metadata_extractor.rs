@@ -1,22 +1,14 @@
 use crate::types::ChunkMetadata;
-use tree_sitter::{Language, Node, Parser, TreeCursor};
+use tree_sitter::{Node, Tree, TreeCursor};
 
-/// Extracts metadata from a tree-sitter AST node for a code chunk
-pub fn extract_metadata(
+/// Extracts metadata from a pre-parsed tree-sitter Tree for a code chunk
+pub fn extract_metadata_from_tree(
+    tree: &Tree,
     content: &str,
     chunk_start: usize,
     chunk_end: usize,
-    language: Language,
     language_name: &str,
 ) -> Result<ChunkMetadata, String> {
-    // Parse the full content to get the AST
-    let mut parser = Parser::new();
-    parser.set_language(&language)
-        .map_err(|e| format!("Failed to set language: {:?}", e))?;
-    
-    let tree = parser.parse(content, None)
-        .ok_or_else(|| "Failed to parse content".to_string())?;
-    
     let root_node = tree.root_node();
     
     // Find the primary node that contains the chunk
@@ -52,6 +44,7 @@ pub fn extract_metadata(
         references,
     })
 }
+
 
 /// Find the most specific node that fully contains the given byte range
 fn find_primary_node_for_range(node: Node, start_byte: usize, end_byte: usize) -> Node {
@@ -272,28 +265,3 @@ fn is_definition_context(node: &Node) -> bool {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::languages::get_language;
-    
-    #[test]
-    fn test_extract_function_metadata() {
-        let code = r#"
-def hello(name):
-    """Say hello"""
-    return f"Hello {name}!"
-"#;
-        
-        let lang_fn = get_language("Python").unwrap();
-        let lang: Language = lang_fn.into();
-        
-        let metadata = extract_metadata(code, 0, code.len(), lang, "Python").unwrap();
-        
-        assert!(metadata.node_type.contains("module") || metadata.node_type.contains("program"));
-        // The whole module contains just the function definition
-        assert!(metadata.definitions.contains(&"hello".to_string()));
-        // Parameters are only extracted when we're inside the function scope
-        assert!(metadata.definitions.len() >= 1);
-    }
-}

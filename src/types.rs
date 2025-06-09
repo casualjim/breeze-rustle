@@ -99,6 +99,60 @@ impl SemanticChunk {
     }
 }
 
+/// Type of chunk - either semantic (parsed code) or text (plain text)
+#[pyclass(eq, eq_int)]
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum ChunkType {
+    #[pyo3(name = "SEMANTIC")]
+    Semantic,
+    #[pyo3(name = "TEXT")]
+    Text,
+}
+
+#[pymethods]
+impl ChunkType {
+    fn __repr__(&self) -> String {
+        match self {
+            ChunkType::Semantic => "ChunkType.SEMANTIC".to_string(),
+            ChunkType::Text => "ChunkType.TEXT".to_string(),
+        }
+    }
+}
+
+/// A chunk from a project file with type information
+#[pyclass]
+#[derive(Debug, Clone)]
+pub struct ProjectChunk {
+    #[pyo3(get)]
+    pub file_path: String,
+    #[pyo3(get)]
+    pub chunk_type: ChunkType,
+    #[pyo3(get)]
+    pub chunk: SemanticChunk,
+}
+
+#[pymethods]
+impl ProjectChunk {
+    /// Check if this is a semantic (parsed code) chunk
+    #[getter]
+    fn is_semantic(&self) -> bool {
+        matches!(self.chunk_type, ChunkType::Semantic)
+    }
+    
+    /// Check if this is a text (plain text) chunk
+    #[getter]
+    fn is_text(&self) -> bool {
+        matches!(self.chunk_type, ChunkType::Text)
+    }
+    
+    fn __repr__(&self) -> String {
+        format!(
+            "ProjectChunk(file='{}', type={:?}, chunk={})",
+            self.file_path, self.chunk_type, self.chunk.__repr__()
+        )
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
