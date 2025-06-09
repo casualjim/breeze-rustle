@@ -97,34 +97,11 @@ impl SemanticChunker {
         let chunker = self.inner.clone();
         
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            use futures::StreamExt;
+            let stream = chunker.chunk_code(content, language, file_path);
             
-            let mut chunks = Vec::new();
-            let mut stream = Box::pin(chunker.chunk_code(&content, &language, file_path.as_deref()));
-            
-            while let Some(result) = stream.next().await {
-                match result {
-                    Ok(chunk) => chunks.push(chunk),
-                    Err(e) => {
-                        return Err(match e {
-                            ChunkError::UnsupportedLanguage(lang) => {
-                                PyValueError::new_err(format!("Unsupported language: {}", lang))
-                            }
-                            ChunkError::ParseError(msg) => {
-                                PyRuntimeError::new_err(format!("Parse error: {}", msg))
-                            }
-                            ChunkError::IoError(msg) => {
-                                PyRuntimeError::new_err(format!("IO error: {}", msg))
-                            }
-                            ChunkError::QueryError(msg) => {
-                                PyRuntimeError::new_err(format!("Query error: {}", msg))
-                            }
-                        });
-                    }
-                }
-            }
-            
-            Ok(chunks)
+            Ok(ChunkStream {
+                stream: Arc::new(Mutex::new(Box::pin(stream))),
+            })
         })
     }
     
@@ -138,21 +115,11 @@ impl SemanticChunker {
         let chunker = self.inner.clone();
         
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            use futures::StreamExt;
+            let stream = chunker.chunk_text(content, file_path);
             
-            let mut chunks = Vec::new();
-            let mut stream = Box::pin(chunker.chunk_text(&content, file_path.as_deref()));
-            
-            while let Some(result) = stream.next().await {
-                match result {
-                    Ok(chunk) => chunks.push(chunk),
-                    Err(e) => {
-                        return Err(PyRuntimeError::new_err(format!("Text chunking error: {}", e)));
-                    }
-                }
-            }
-            
-            Ok(chunks)
+            Ok(ChunkStream {
+                stream: Arc::new(Mutex::new(Box::pin(stream))),
+            })
         })
     }
     
@@ -230,6 +197,7 @@ fn breeze_rustle(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<SemanticChunk>()?;
     m.add_class::<ProjectChunk>()?;
     m.add_class::<ProjectWalker>()?;
+    m.add_class::<ChunkStream>()?;
     
     // Add version info
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;
@@ -256,6 +224,44 @@ impl ProjectWalker {
             match stream_guard.next().await {
                 Some(Ok(chunk)) => Ok(chunk),
                 Some(Err(e)) => Err(PyRuntimeError::new_err(format!("Error processing file: {}", e))),
+                None => Err(PyStopAsyncIteration::new_err("")),
+            }
+        })
+    }
+}
+
+#[pyclass]
+pub struct ChunkStream {
+    stream: Arc<Mutex<Pin<Box<dyn Stream<Item = Result<SemanticChunk, ChunkError>> + Send>>>>,
+}
+
+#[pymethods]
+impl ChunkStream {
+    fn __aiter__(slf: PyRef<'_, Self>) -> PyRef<'_, Self> {
+        slf
+    }
+    
+    fn __anext__<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let stream = self.stream.clone();
+        
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let mut stream_guard = stream.lock().await;
+            match stream_guard.next().await {
+                Some(Ok(chunk)) => Ok(chunk),
+                Some(Err(e)) => Err(match e {
+                    ChunkError::UnsupportedLanguage(lang) => {
+                        PyValueError::new_err(format!("Unsupported language: {}", lang))
+                    }
+                    ChunkError::ParseError(msg) => {
+                        PyRuntimeError::new_err(format!("Parse error: {}", msg))
+                    }
+                    ChunkError::IoError(msg) => {
+                        PyRuntimeError::new_err(format!("IO error: {}", msg))
+                    }
+                    ChunkError::QueryError(msg) => {
+                        PyRuntimeError::new_err(format!("Query error: {}", msg))
+                    }
+                }),
                 None => Err(PyStopAsyncIteration::new_err("")),
             }
         })

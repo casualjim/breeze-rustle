@@ -8,6 +8,7 @@ pub enum TokenizerType {
 }
 
 // Concrete chunk sizer enum to avoid trait object issues
+#[derive(Clone)]
 pub enum ConcreteSizer {
     Characters(text_splitter::Characters),
     Tiktoken(tiktoken_rs::CoreBPE),
@@ -25,6 +26,7 @@ impl ChunkSizer for ConcreteSizer {
 }
 
 // Simple chunker that creates a new splitter for each request
+#[derive(Clone)]
 pub struct InnerChunker {
     max_chunk_size: usize,
     chunk_sizer: ConcreteSizer,
@@ -52,19 +54,16 @@ impl InnerChunker {
         })
     }
 
-    pub fn chunk_code<'a>(
-        &'a self, 
-        content: &'a str, 
-        language: &'a str, 
-        file_path: Option<&'a str>
-    ) -> impl futures::Stream<Item = Result<SemanticChunk, ChunkError>> + 'a {
-        // Do all the expensive setup work outside the stream
-        let setup_result = self.setup_code_chunking(content, language);
-        let language_str = language.to_string();
-        let file_path_str = file_path.map(|s| s.to_string());
+    pub fn chunk_code(
+        &self, 
+        content: String, 
+        language: String, 
+        file_path: Option<String>
+    ) -> impl futures::Stream<Item = Result<SemanticChunk, ChunkError>> {
+        let chunker = self.clone();
         
         async_stream::try_stream! {
-            let (tree, chunks, line_offsets) = setup_result?;
+            let (tree, chunks, line_offsets) = chunker.setup_code_chunking(&content, &language)?;
             
             // Only do the actual chunk yielding inside the stream
             for (idx, (offset, chunk_text)) in chunks.into_iter().enumerate() {
@@ -76,19 +75,19 @@ impl InnerChunker {
                 // Extract metadata from pre-parsed AST
                 let metadata = match extract_metadata_from_tree(
                     &tree,
-                    content,
+                    &content,
                     offset,
                     end_offset,
-                    &language_str,
+                    &language,
                 ) {
                     Ok(mut meta) => {
                         // If no node name was extracted, use a default
                         if meta.node_name.is_none() {
-                            meta.node_name = file_path_str.as_ref().map(|_p| format!("chunk_{}", idx + 1));
+                            meta.node_name = file_path.as_ref().map(|_p| format!("chunk_{}", idx + 1));
                         }
                         // Add file path as parent context if not already set
-                        if meta.parent_context.is_none() && file_path_str.is_some() {
-                            meta.parent_context = file_path_str.clone();
+                        if meta.parent_context.is_none() && file_path.is_some() {
+                            meta.parent_context = file_path.clone();
                         }
                         meta
                     }
@@ -96,9 +95,9 @@ impl InnerChunker {
                         // Fallback metadata if extraction fails
                         ChunkMetadata {
                             node_type: "code_chunk".to_string(),
-                            node_name: file_path_str.as_ref().map(|_p| format!("chunk_{}", idx + 1)),
-                            language: language_str.clone(),
-                            parent_context: file_path_str.clone(),
+                            node_name: file_path.as_ref().map(|_p| format!("chunk_{}", idx + 1)),
+                            language: language.clone(),
+                            parent_context: file_path.clone(),
                             scope_path: vec![],
                             definitions: vec![],
                             references: vec![],
@@ -153,17 +152,15 @@ impl InnerChunker {
         Ok((tree, chunks, line_offsets))
     }
     
-    pub fn chunk_text<'a>(
-        &'a self,
-        content: &'a str,
-        file_path: Option<&'a str>
-    ) -> impl futures::Stream<Item = Result<SemanticChunk, ChunkError>> + 'a {
-        // Do all the expensive setup work outside the stream
-        let setup_result = self.setup_text_chunking(content);
-        let file_path_str = file_path.map(|s| s.to_string());
+    pub fn chunk_text(
+        &self,
+        content: String,
+        file_path: Option<String>
+    ) -> impl futures::Stream<Item = Result<SemanticChunk, ChunkError>> {
+        let chunker = self.clone();
         
         async_stream::try_stream! {
-            let (chunks, line_offsets) = setup_result?;
+            let (chunks, line_offsets) = chunker.setup_text_chunking(&content)?;
             
             // Only do the actual chunk yielding inside the stream
             for (idx, (offset, chunk_text)) in chunks.into_iter().enumerate() {
@@ -177,7 +174,7 @@ impl InnerChunker {
                     node_type: "text_chunk".to_string(),
                     node_name: Some(format!("text_chunk_{}", idx + 1)),
                     language: "text".to_string(),
-                    parent_context: file_path_str.clone(),
+                    parent_context: file_path.clone(),
                     scope_path: vec![],
                     definitions: vec![],
                     references: vec![],
@@ -244,7 +241,7 @@ fn helper() {
 "#;
         
         let mut chunks = Vec::new();
-        let mut stream = Box::pin(chunker.chunk_code(code, "Rust", None));
+        let mut stream = Box::pin(chunker.chunk_code(code.to_string(), "Rust".to_string(), None));
         
         while let Some(result) = stream.next().await {
             assert!(result.is_ok());
@@ -267,7 +264,7 @@ fn helper() {
         
         let chunker = InnerChunker::new(1000, TokenizerType::Characters).unwrap();
         
-        let mut stream = Box::pin(chunker.chunk_code("code", "COBOL", None));
+        let mut stream = Box::pin(chunker.chunk_code("code".to_string(), "COBOL".to_string(), None));
         
         // The first item should be an error
         let result = stream.next().await.unwrap();
@@ -290,10 +287,10 @@ fn helper() {
         let code = "def main(): pass";
         
         // These should all work
-        let mut stream1 = Box::pin(chunker.chunk_code(code, "python", None));
+        let mut stream1 = Box::pin(chunker.chunk_code(code.to_string(), "python".to_string(), None));
         assert!(stream1.next().await.unwrap().is_ok());
         
-        let mut stream2 = Box::pin(chunker.chunk_code(code, "Python", None));
+        let mut stream2 = Box::pin(chunker.chunk_code(code.to_string(), "Python".to_string(), None));
         assert!(stream2.next().await.unwrap().is_ok());
     }
 }

@@ -1,6 +1,6 @@
 """Type stubs for breeze-rustle"""
 
-from typing import List, Optional, Coroutine, Any
+from typing import List, Optional, Coroutine, Any, AsyncIterator
 from enum import Enum
 
 __version__: str
@@ -15,6 +15,11 @@ class TokenizerType(Enum):
     def value(self) -> str:
         """Get the string value of the tokenizer type."""
         ...
+
+class ChunkType(Enum):
+    """Type of chunk - semantic (code) or text."""
+    SEMANTIC = "semantic"
+    TEXT = "text"
 
 class ChunkMetadata:
     """Metadata about a semantic code chunk."""
@@ -34,6 +39,22 @@ class SemanticChunk:
     start_line: int
     end_line: int
     metadata: ChunkMetadata
+
+class ProjectChunk:
+    """A chunk from a project file walk."""
+    file_path: str
+    chunk_type: ChunkType
+    chunk: SemanticChunk
+
+class ChunkStream:
+    """Async iterator for semantic chunks."""
+    def __aiter__(self) -> ChunkStream: ...
+    def __anext__(self) -> Coroutine[Any, Any, SemanticChunk]: ...
+
+class ProjectWalker:
+    """Async iterator for walking project files and chunking them."""
+    def __aiter__(self) -> ProjectWalker: ...
+    def __anext__(self) -> Coroutine[Any, Any, ProjectChunk]: ...
 
 class SemanticChunker:
     """High-performance semantic code chunker."""
@@ -61,14 +82,14 @@ class SemanticChunker:
         """
         ...
     
-    def chunk_file(
+    def chunk_code(
         self,
         content: str,
         language: str,
         file_path: Optional[str] = None
-    ) -> Coroutine[Any, Any, List[SemanticChunk]]:
+    ) -> Coroutine[Any, Any, ChunkStream]:
         """
-        Asynchronously chunk a file into semantic units.
+        Asynchronously chunk code into semantic units.
         
         Args:
             content: The source code content to chunk
@@ -76,7 +97,7 @@ class SemanticChunker:
             file_path: Optional path to the source file
         
         Returns:
-            A coroutine that resolves to a list of semantic chunks
+            A coroutine that resolves to a ChunkStream async iterator
         
         Raises:
             ValueError: If the language is not supported
@@ -88,7 +109,7 @@ class SemanticChunker:
         self,
         content: str,
         file_path: Optional[str] = None
-    ) -> Coroutine[Any, Any, List[SemanticChunk]]:
+    ) -> Coroutine[Any, Any, ChunkStream]:
         """
         Asynchronously chunk plain text into semantic units.
         
@@ -101,7 +122,7 @@ class SemanticChunker:
             file_path: Optional path to the source file
         
         Returns:
-            A coroutine that resolves to a list of text chunks with minimal metadata
+            A coroutine that resolves to a ChunkStream async iterator
         
         Raises:
             RuntimeError: If chunking fails
@@ -128,5 +149,31 @@ class SemanticChunker:
         
         Returns:
             True if the language is supported, False otherwise
+        """
+        ...
+    
+    def walk_project(
+        self,
+        path: str,
+        max_chunk_size: Optional[int] = None,
+        tokenizer: Optional[TokenizerType] = None,
+        hf_model: Optional[str] = None,
+        max_parallel: Optional[int] = None
+    ) -> Coroutine[Any, Any, ProjectWalker]:
+        """
+        Asynchronously walk a project directory and chunk all supported files.
+        
+        Args:
+            path: Path to the project directory
+            max_chunk_size: Maximum chunk size (defaults to instance setting)
+            tokenizer: Tokenizer type (defaults to instance setting)
+            hf_model: HuggingFace model name (required if tokenizer is HUGGINGFACE)
+            max_parallel: Maximum number of files to process in parallel (default: 8)
+        
+        Returns:
+            A coroutine that resolves to a ProjectWalker async iterator
+        
+        Raises:
+            RuntimeError: If the path is invalid or walking fails
         """
         ...

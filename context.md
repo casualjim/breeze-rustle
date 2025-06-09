@@ -1,12 +1,14 @@
 # breeze-rustle Context & Current State
 
 ## Overview
+
 `breeze-rustle` is a Rust library with Python bindings that provides semantic code chunking using text-splitter's CodeSplitter with tree-sitter parsers.
 
 ## Current Implementation Status
 
 ### ✅ Completed Tasks
-1. **Removed syntastica dependencies** 
+
+1. **Removed syntastica dependencies**
    - Removed syntastica-parsers-git, syntastica-queries, syntastica-core from Cargo.toml
    - Replaced with direct tree-sitter-* crates for each language
 
@@ -20,15 +22,20 @@
    - `ChunkMetadata`: PyO3 class with node_type, node_name, language, parent_context, scope_path, definitions, references
    - `SemanticChunk`: PyO3 class with text, byte/line offsets, and metadata
    - `ChunkError`: Error enum for unsupported languages, parse errors, IO errors, query errors
+   - `ChunkType`: Enum for discriminating between semantic and text chunks
+   - `ProjectChunk`: Class containing file path, chunk type, and chunk data
 
 4. **Enhanced chunker implementation** (`src/chunker.rs`)
    - `InnerChunker` wraps text-splitter's CodeSplitter
-   - `chunk_file()` method creates chunks with rich metadata
+   - `chunk_code()` method creates chunks with rich metadata
+   - `chunk_text()` method for plain text chunking
+   - Both methods now accept owned strings and return streams
    - Integrates with metadata extractor for AST analysis
 
 5. **Implemented Python bindings** (`src/lib.rs`)
    - `SemanticChunker` PyO3 class with async support
-   - `chunk_file` method using pyo3-async-runtimes with tokio
+   - `chunk_code` and `chunk_text` methods return async iterators (`ChunkStream`)
+   - `walk_project` method returns async iterator (`ProjectWalker`)
    - Static methods for language support checking
    - Proper error mapping from Rust to Python exceptions
 
@@ -56,11 +63,12 @@
 
 9. **Created Python type stubs** (`python/breeze_rustle/__init__.pyi`)
    - Complete type annotations for all classes and methods
-   - Includes `TokenizerType` enum definition
+   - Includes all enums (`TokenizerType`, `ChunkType`)
+   - Includes all async iterator classes (`ChunkStream`, `ProjectWalker`)
    - Comprehensive docstrings for IDE support
 
 10. **Comprehensive test suite**
-    - 17 passing tests including:
+    - Tests updated for async iterator API
     - Language registry tests
     - Type system tests
     - Basic chunking tests
@@ -70,18 +78,30 @@
     - Scope and definition extraction tests
     - Text chunking tests
     - Tokenizer enum tests
+    - Async walker tests
+
+11. **Async generators throughout**
+    - All methods now return async iterators instead of collecting into lists
+    - True streaming architecture for memory efficiency
+    - `chunk_code` returns `ChunkStream`
+    - `chunk_text` returns `ChunkStream`
+    - `walk_project` returns `ProjectWalker`
 
 ### 📋 Remaining Tasks
+
 - Performance optimization (current: ~25s for 1MB file, target: <100ms)
 - Investigate broken language crates (PHP, Kotlin, SQL)
 - Add more sophisticated definitions/references extraction
+- Create benchmark test to index entire kuzu project
 
-## 🚧 New Feature: Project Directory Walker
+## ✅ Project Directory Walker
 
 ### Overview
-A new feature is being added to walk entire project directories and automatically process all files, yielding semantic chunks for supported languages and text chunks for other files.
+
+A feature to walk entire project directories and automatically process all files, yielding semantic chunks for supported languages and text chunks for other files. This feature is fully implemented with async iteration support.
 
 ### Key Features
+
 - **Automatic file filtering**: Uses `hyperpolyglot` for language detection and `infer` for file type detection
 - **Smart chunking**: Automatically uses semantic chunking for supported languages, falls back to text chunking
 - **Respects .gitignore**: Uses the `ignore` crate for gitignore-aware traversal
@@ -89,6 +109,7 @@ A new feature is being added to walk entire project directories and automaticall
 - **Discriminated types**: Returns `ProjectChunk` that clearly indicates whether it's semantic or text
 
 ### New Types
+
 ```python
 class ChunkType(Enum):
     SEMANTIC = "SEMANTIC"  # Properly parsed code
@@ -103,22 +124,38 @@ class ProjectChunk:
 ```
 
 ### Python API
+
 ```python
-async def walk_project(
-    path: str,
-    max_chunk_size: int = 1500,
-    tokenizer: TokenizerType = TokenizerType.CHARACTERS,
-    hf_model: Optional[str] = None,
-    max_parallel: int = 8
-) -> AsyncIterator[ProjectChunk]:
-    """Walk a project directory and yield chunks for all processable files."""
+# Create a chunker
+chunker = SemanticChunker(
+    max_chunk_size=1500,
+    tokenizer=TokenizerType.CHARACTERS
+)
+
+# Walk a project - returns an async iterator
+walker = await chunker.walk_project(
+    path="./my_project",
+    max_chunk_size=1500,  # Optional, defaults to chunker setting
+    tokenizer=TokenizerType.CHARACTERS,  # Optional
+    hf_model=None,  # Required if tokenizer is HUGGINGFACE
+    max_parallel=8  # Number of files to process in parallel
+)
+
+# Iterate over chunks
+async for chunk in walker:
+    # chunk is a ProjectChunk with file_path, chunk_type, and chunk
+    pass
 ```
 
 ### Usage Example
+
 ```python
 # Process entire project
-async for chunk in walk_project("./my_project"):
-    if chunk.is_semantic:
+chunker = SemanticChunker()
+walker = await chunker.walk_project("./my_project")
+
+async for chunk in walker:
+    if chunk.chunk_type == ChunkType.SEMANTIC:
         print(f"Code: {chunk.file_path} - {chunk.chunk.metadata.node_type}")
     else:
         print(f"Text: {chunk.file_path}")
@@ -127,19 +164,23 @@ async for chunk in walk_project("./my_project"):
 ## Key Technical Decisions
 
 ### Language Support
+
 - Using LanguageFn type from tree-sitter-language crate
 - Direct tree-sitter-* crate dependencies instead of syntastica
 - Currently supporting: Python, JavaScript, TypeScript, TSX, Java, C++, C, C#, Go, Rust, Ruby, Swift, Scala, Shell/Bash, R
 - Removed: PHP (unclear API), Kotlin (compilation issues), SQL (compilation issues)
 
 ### Architecture
+
 - text-splitter handles the core chunking logic
 - We add metadata extraction on top
 - Using pyo3-async-runtimes (not pyo3-asyncio which is unmaintained)
 - Async Python API for better performance
 
 ### Dependencies
+
 Key dependencies in Cargo.toml:
+
 - text-splitter 0.27 with code, tiktoken-rs, tokenizers features
 - tree-sitter 0.25 and individual language crates
 - pyo3 0.25.0 with extension-module, abi3-py39
@@ -153,6 +194,7 @@ Key dependencies in Cargo.toml:
 3. **Language API differences**: Some use LANGUAGE constants, others use language() functions
 
 ## Build & Test Commands
+
 ```bash
 # Build Python package
 maturin develop --release
@@ -170,26 +212,55 @@ cargo clippy
 ### Basic Usage
 
 ```python
-from breeze_rustle import SemanticChunker, TokenizerType
+from breeze_rustle import SemanticChunker, TokenizerType, ChunkType
+import asyncio
 
-# Default character-based chunking
-chunker = SemanticChunker(max_chunk_size=1500)
+async def main():
+    # Default character-based chunking
+    chunker = SemanticChunker(max_chunk_size=1500)
+    
+    # With tiktoken tokenizer
+    chunker = SemanticChunker(tokenizer=TokenizerType.TIKTOKEN)
+    
+    # With HuggingFace tokenizer
+    chunker = SemanticChunker(
+        tokenizer=TokenizerType.HUGGINGFACE,
+        hf_model="bert-base-uncased"
+    )
+    
+    # Check language support
+    if SemanticChunker.is_language_supported("Python"):
+        # Get an async iterator for code chunks
+        chunk_stream = await chunker.chunk_code(content, "Python", "example.py")
+        
+        # Iterate over chunks
+        async for chunk in chunk_stream:
+            print(f"Lines {chunk.start_line}-{chunk.end_line}: {chunk.metadata.node_type}")
+    else:
+        # Use text chunking for unsupported languages
+        text_stream = await chunker.chunk_text(content, "example.txt")
+        
+        async for chunk in text_stream:
+            print(f"Text chunk: {len(chunk.text)} chars")
 
-# With tiktoken tokenizer
-chunker = SemanticChunker(tokenizer=TokenizerType.TIKTOKEN)
+asyncio.run(main())
+```
 
-# With HuggingFace tokenizer
-chunker = SemanticChunker(
-    tokenizer=TokenizerType.HUGGINGFACE,
-    hf_model="bert-base-uncased"
-)
+### Project Walking Example
 
-# Check language support
-if SemanticChunker.is_language_supported("Python"):
-    chunks = await chunker.chunk_file(content, "Python", "example.py")
-else:
-    # Use text chunking for unsupported languages
-    chunks = await chunker.chunk_text(content, "example.txt")
+```python
+async def index_project(project_path: str):
+    chunker = SemanticChunker(tokenizer=TokenizerType.TIKTOKEN)
+    walker = await chunker.walk_project(project_path, max_parallel=16)
+    
+    async for project_chunk in walker:
+        if project_chunk.chunk_type == ChunkType.SEMANTIC:
+            # This is parsed code with full metadata
+            print(f"Code: {project_chunk.chunk.metadata.node_type} in {project_chunk.file_path}")
+            # Generate embeddings, store in vector DB, etc.
+        else:
+            # This is text content
+            print(f"Text: {project_chunk.file_path}")
 ```
 
 ## Next Steps

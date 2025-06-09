@@ -30,7 +30,7 @@ class Calculator:
 "#;
         
         let mut chunks = Vec::new();
-        let mut stream = Box::pin(chunker.chunk_code(code, "Python", Some("calculator.py")));
+        let mut stream = Box::pin(chunker.chunk_code(code.to_string(), "Python".to_string(), Some("calculator.py".to_string())));
         
         while let Some(result) = stream.next().await {
             chunks.push(result.expect("Should chunk Python code"));
@@ -92,7 +92,7 @@ const user = await manager.getUser(123);
 "#;
         
         let mut chunks = Vec::new();
-        let mut stream = Box::pin(chunker.chunk_code(code, "JavaScript", Some("user_manager.js")));
+        let mut stream = Box::pin(chunker.chunk_code(code.to_string(), "JavaScript".to_string(), Some("user_manager.js".to_string())));
         
         while let Some(result) = stream.next().await {
             chunks.push(result.expect("Should chunk JavaScript code"));
@@ -156,7 +156,7 @@ where
 "#;
         
         let mut chunks = Vec::new();
-        let mut stream = Box::pin(chunker.chunk_code(code, "Rust", Some("cache.rs")));
+        let mut stream = Box::pin(chunker.chunk_code(code.to_string(), "Rust".to_string(), Some("cache.rs".to_string())));
         
         while let Some(result) = stream.next().await {
             chunks.push(result.expect("Should chunk Rust code"));
@@ -207,7 +207,7 @@ module OuterModule {
 "#;
         
         let mut chunks = Vec::new();
-        let mut stream = Box::pin(chunker.chunk_code(code, "TypeScript", Some("nested.ts")));
+        let mut stream = Box::pin(chunker.chunk_code(code.to_string(), "TypeScript".to_string(), Some("nested.ts".to_string())));
         
         while let Some(result) = stream.next().await {
             chunks.push(result.expect("Should chunk TypeScript code"));
@@ -254,7 +254,7 @@ def validate(item):
 "#;
         
         let mut chunks = Vec::new();
-        let mut stream = Box::pin(chunker.chunk_code(code, "Python", Some("processor.py")));
+        let mut stream = Box::pin(chunker.chunk_code(code.to_string(), "Python".to_string(), Some("processor.py".to_string())));
         
         while let Some(result) = stream.next().await {
             chunks.push(result.expect("Should chunk Python code"));
@@ -306,7 +306,7 @@ class Class_{i}:
         
         let start = Instant::now();
         let mut chunks = Vec::new();
-        let mut stream = Box::pin(chunker.chunk_code(&code, "Python", Some("large_file.py")));
+        let mut stream = Box::pin(chunker.chunk_code(code, "Python".to_string(), Some("large_file.py".to_string())));
         
         while let Some(result) = stream.next().await {
             chunks.push(result.expect("Should chunk large file"));
@@ -335,7 +335,7 @@ class Class_{i}:
         let code = "def hello():\n    print('Hello')\n\ndef world():\n    print('World')";
         
         let mut chunks = Vec::new();
-        let mut stream = Box::pin(chunker.chunk_code(code, "Python", None));
+        let mut stream = Box::pin(chunker.chunk_code(code.to_string(), "Python".to_string(), None));
         
         while let Some(result) = stream.next().await {
             chunks.push(result.expect("Should chunk Python code"));

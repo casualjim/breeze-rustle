@@ -21,7 +21,8 @@
       "mcp__perplexity-server__get_documentation",
       "Bash(cargo check:*)",
       "Bash(maturin develop:*)",
-      "Bash(pytest:*)"
+      "Bash(pytest:*)",
+      "Bash(grep:*)"
     ],
     "deny": []
   }

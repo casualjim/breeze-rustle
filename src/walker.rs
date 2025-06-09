@@ -177,7 +177,7 @@ fn process_file<P: AsRef<Path>>(
         
         // Try semantic chunking first if we have a supported language
         if let Some(language) = detected_language {
-            let mut chunk_stream = Box::pin(chunker.chunk_code(&content, &language, Some(&path_str)));
+            let mut chunk_stream = Box::pin(chunker.chunk_code(content.clone(), language.clone(), Some(path_str.clone())));
             let mut had_success = false;
             
             while let Some(chunk_result) = chunk_stream.next().await {
@@ -206,7 +206,7 @@ fn process_file<P: AsRef<Path>>(
         }
         
         // Fall back to text chunking
-        let mut chunk_stream = Box::pin(chunker.chunk_text(&content, Some(&path_str)));
+        let mut chunk_stream = Box::pin(chunker.chunk_text(content, Some(path_str.clone())));
         while let Some(chunk_result) = chunk_stream.next().await {
             let chunk = chunk_result?;
             yield ProjectChunk {

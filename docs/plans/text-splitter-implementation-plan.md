@@ -253,7 +253,7 @@ impl SemanticChunker {
     }
     
     #[pyo3(signature = (content, language, file_path=None))]
-    fn chunk_file<'p>(
+    fn chunk_code<'p>(
         &self,
         py: Python<'p>,
         content: String,
@@ -262,18 +262,11 @@ impl SemanticChunker {
     ) -> PyResult<&'p PyAny> {
         let chunker = self.inner.clone();
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            chunker.chunk_file(&content, &language, file_path.as_deref())
-                .await
-                .map_err(|e| match e {
-                    ChunkError::UnsupportedLanguage(lang) => {
-                        PyErr::new::<pyo3::exceptions::PyValueError, _>(
-                            format!("Unsupported language: {}", lang)
-                        )
-                    }
-                    other => PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
-                        other.to_string()
-                    )
-                })
+            let stream = chunker.chunk_code(content, language, file_path);
+            
+            Ok(ChunkStream {
+                stream: Arc::new(Mutex::new(Box::pin(stream))),
+            })
         })
     }
     
@@ -453,19 +446,26 @@ pytest-runner = "6.0"
 - ✅ Documentation and examples (README & DOCUMENTATION.md)
 - ✅ Integration tests with hyperpolyglot
 
-### Phase 5: Project Directory Walker 🚧
+### Phase 5: Project Directory Walker ✅
 
-- 🚧 Add `walk_project` function for processing entire directories
-- 🚧 Integrate hyperpolyglot and infer for file filtering
-- 🚧 Implement discriminated union types (ProjectChunk)
-- 🚧 Support async iteration over chunks
+- ✅ Add `walk_project` function for processing entire directories
+- ✅ Integrate hyperpolyglot and infer for file filtering
+- ✅ Implement discriminated union types (ProjectChunk)
+- ✅ Support async iteration over chunks
+
+### Phase 6: Async Generators ✅
+
+- ✅ Convert all methods to return async iterators
+- ✅ Implement `ChunkStream` for code and text chunking
+- ✅ Implement `ProjectWalker` for directory walking
+- ✅ True streaming architecture without collecting to vectors
 
 ## Testing Strategy
 
 ```python
 # tests/test_acceptance.py
 import pytest
-from breeze_rustle import SemanticChunker, SemanticChunk, TokenizerType
+from breeze_rustle import SemanticChunker, SemanticChunk, TokenizerType, ChunkType
 
 class TestBasicFunctionality:
     def test_supported_languages(self):
@@ -476,6 +476,7 @@ class TestBasicFunctionality:
         assert "Rust" in languages
         assert "JavaScript" in languages
     
+    @pytest.mark.asyncio
     async def test_simple_python_file(self):
         """Should chunk a simple Python file correctly"""
         content = '''
@@ -491,7 +492,11 @@ class Greeter:
         return hello(name)
 '''
         chunker = SemanticChunker()
-        chunks = await chunker.chunk_file(content, "Python")
+        chunk_stream = await chunker.chunk_code(content, "Python")
+        
+        chunks = []
+        async for chunk in chunk_stream:
+            chunks.append(chunk)
         
         assert len(chunks) > 0
         
@@ -500,6 +505,7 @@ class Greeter:
             assert chunk.metadata.language == "Python"
             assert chunk.metadata.node_type is not None
     
+    @pytest.mark.asyncio
     async def test_tokenizer_types(self):
         """Should support different tokenizer types"""
         content = "def test(): pass"
@@ -507,9 +513,15 @@ class Greeter:
         # Test each tokenizer type
         for tokenizer in [TokenizerType.CHARACTERS, TokenizerType.TIKTOKEN]:
             chunker = SemanticChunker(tokenizer=tokenizer)
-            chunks = await chunker.chunk_file(content, "Python")
+            chunk_stream = await chunker.chunk_code(content, "Python")
+            
+            chunks = []
+            async for chunk in chunk_stream:
+                chunks.append(chunk)
+            
             assert len(chunks) > 0
     
+    @pytest.mark.asyncio
     async def test_text_chunking(self):
         """Should handle plain text chunking for unsupported languages"""
         content = "This is plain text content."
@@ -517,9 +529,31 @@ class Greeter:
         
         # Test with unsupported language
         if not SemanticChunker.is_language_supported("COBOL"):
-            chunks = await chunker.chunk_text(content)
+            text_stream = await chunker.chunk_text(content)
+            
+            chunks = []
+            async for chunk in text_stream:
+                chunks.append(chunk)
+                
             assert len(chunks) > 0
             assert chunks[0].metadata.language == "text"
+    
+    @pytest.mark.asyncio
+    async def test_project_walker(self):
+        """Should walk project directories and chunk files"""
+        chunker = SemanticChunker()
+        walker = await chunker.walk_project("./test_project")
+        
+        semantic_count = 0
+        text_count = 0
+        
+        async for project_chunk in walker:
+            if project_chunk.chunk_type == ChunkType.SEMANTIC:
+                semantic_count += 1
+            else:
+                text_count += 1
+        
+        assert semantic_count > 0 or text_count > 0  # Should find some files
 ```
 
 ## Success Metrics
@@ -542,9 +576,11 @@ The text-splitter approach provides a simpler, more maintainable solution while 
 ## Project Directory Walker Feature
 
 ### Overview
+
 A new feature to walk entire project directories and automatically chunk all processable files.
 
 ### Design Goals
+
 1. **Zero configuration**: Just point at a directory and get chunks
 2. **Smart filtering**: Skip binary files, respect .gitignore
 3. **Automatic language detection**: Use hyperpolyglot for accurate detection
@@ -552,6 +588,7 @@ A new feature to walk entire project directories and automatically chunk all pro
 5. **Type safety**: Clear discrimination between semantic and text chunks
 
 ### Dependencies to Add
+
 ```toml
 ignore = "0.4"              # Gitignore-aware traversal
 futures = "0.3"             # Async streams
@@ -561,6 +598,7 @@ tokio-stream = "0.1"        # Async streaming
 ```
 
 ### New Types
+
 ```rust
 #[pyclass]
 pub enum ChunkType {
@@ -582,6 +620,7 @@ pub struct ProjectChunk {
 ```
 
 ### File Processing Strategy
+
 1. Walk directory using `ignore` crate (respects .gitignore)
 2. Use `infer` to skip binary files (images, videos, etc.)
 3. Use `hyperpolyglot` to detect programming language
@@ -590,7 +629,9 @@ pub struct ProjectChunk {
 6. Skip files that can't be processed
 
 ### Supported Text Formats
+
 When language detection fails, these extensions trigger text chunking:
+
 - Documentation: .txt, .md, .rst
 - Config: .yaml, .yml, .toml, .json, .ini, .cfg, .conf
 - Web: .xml, .html, .htm
@@ -599,10 +640,14 @@ When language detection fails, these extensions trigger text chunking:
 - Other: Dockerfile, Makefile, README, .gitignore, .env
 
 ### Expected Usage
+
 ```python
 # Simple usage - process entire project
-async for chunk in walk_project("./my_project"):
-    if chunk.is_semantic:
+chunker = SemanticChunker()
+walker = await chunker.walk_project("./my_project")
+
+async for chunk in walker:
+    if chunk.chunk_type == ChunkType.SEMANTIC:
         # This is parsed code with full metadata
         print(f"{chunk.chunk.metadata.node_type} in {chunk.file_path}")
     else:
@@ -610,7 +655,10 @@ async for chunk in walk_project("./my_project"):
         print(f"Text chunk from {chunk.file_path}")
 
 # For building search index
-async for chunk in walk_project("./src", tokenizer=TokenizerType.TIKTOKEN):
+chunker = SemanticChunker(tokenizer=TokenizerType.TIKTOKEN)
+walker = await chunker.walk_project("./src", max_parallel=16)
+
+async for chunk in walker:
     embedding = await generate_embedding(chunk.chunk.text)
     await store_chunk(chunk, embedding)
 ```
