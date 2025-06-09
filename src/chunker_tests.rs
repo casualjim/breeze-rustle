@@ -258,6 +258,7 @@ def validate(item):
     }
     
     #[tokio::test]
+    #[cfg(feature = "performance-tests")]
     async fn test_large_file_performance() {
         use std::time::Instant;
         

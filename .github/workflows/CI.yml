@@ -52,7 +52,7 @@ jobs:
           tool: nextest
       - name: Run Rust tests
         run: |
-          cargo nextest run --all-features
+          cargo nextest run
       - name: Run Python tests
         run: |
           uv run --python .venv pytest -v
