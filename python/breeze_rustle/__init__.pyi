@@ -1,8 +1,20 @@
 """Type stubs for breeze-rustle"""
 
 from typing import List, Optional, Coroutine, Any
+from enum import Enum
 
 __version__: str
+
+class TokenizerType(Enum):
+    """Tokenizer types for chunking."""
+    CHARACTERS = "characters"
+    TIKTOKEN = "tiktoken"
+    HUGGINGFACE = "huggingface"
+    
+    @property
+    def value(self) -> str:
+        """Get the string value of the tokenizer type."""
+        ...
 
 class ChunkMetadata:
     """Metadata about a semantic code chunk."""
@@ -29,7 +41,8 @@ class SemanticChunker:
     def __init__(
         self,
         max_chunk_size: Optional[int] = None,
-        tokenizer: Optional[str] = None
+        tokenizer: Optional[TokenizerType] = None,
+        hf_model: Optional[str] = None
     ) -> None:
         """
         Initialize a new SemanticChunker.
@@ -37,12 +50,13 @@ class SemanticChunker:
         Args:
             max_chunk_size: Maximum chunk size in tokens/characters (default: 1500)
             tokenizer: Tokenization method to use:
-                - "characters" (default): Character-based chunking
-                - "tiktoken": OpenAI's tiktoken (cl100k_base) tokenizer
-                - "hf:model_name": HuggingFace tokenizer for specified model
+                - TokenizerType.CHARACTERS (default): Character-based chunking
+                - TokenizerType.TIKTOKEN: OpenAI's tiktoken (cl100k_base) tokenizer
+                - TokenizerType.HUGGINGFACE: HuggingFace tokenizer (requires hf_model)
+            hf_model: HuggingFace model name (required when tokenizer is TokenizerType.HUGGINGFACE)
         
         Raises:
-            ValueError: If an unsupported tokenizer is specified
+            ValueError: If TokenizerType.HUGGINGFACE is used without hf_model
             RuntimeError: If tokenizer initialization fails
         """
         ...

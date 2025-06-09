@@ -7,12 +7,44 @@ mod metadata_extractor;
 mod chunker_tests;
 
 pub use types::{ChunkError, ChunkMetadata, SemanticChunk};
-use chunker::{InnerChunker, TokenizerType};
+use chunker::{InnerChunker, TokenizerType as RustTokenizerType};
 use languages::{supported_languages, is_language_supported};
 
 use pyo3::prelude::*;
 use pyo3::exceptions::{PyValueError, PyRuntimeError};
 use std::sync::Arc;
+
+#[pyclass(eq)]
+#[derive(Clone, Debug, PartialEq)]
+pub enum TokenizerType {
+    #[pyo3(name = "CHARACTERS")]
+    Characters,
+    #[pyo3(name = "TIKTOKEN")]
+    Tiktoken,
+    #[pyo3(name = "HUGGINGFACE")]
+    HuggingFace,
+}
+
+#[pymethods]
+impl TokenizerType {
+    fn __repr__(&self) -> String {
+        match self {
+            TokenizerType::Characters => "TokenizerType.CHARACTERS",
+            TokenizerType::Tiktoken => "TokenizerType.TIKTOKEN",
+            TokenizerType::HuggingFace => "TokenizerType.HUGGINGFACE",
+        }
+        .to_string()
+    }
+    
+    /// Get the string representation for use in SemanticChunker constructor
+    fn value(&self) -> &'static str {
+        match self {
+            TokenizerType::Characters => "characters",
+            TokenizerType::Tiktoken => "tiktoken", 
+            TokenizerType::HuggingFace => "huggingface",
+        }
+    }
+}
 
 #[pyclass]
 pub struct SemanticChunker {
@@ -22,22 +54,23 @@ pub struct SemanticChunker {
 #[pymethods]
 impl SemanticChunker {
     #[new]
-    #[pyo3(signature = (max_chunk_size=None, tokenizer=None))]
-    fn new(max_chunk_size: Option<usize>, tokenizer: Option<String>) -> PyResult<Self> {
+    #[pyo3(signature = (max_chunk_size=None, tokenizer=None, hf_model=None))]
+    fn new(max_chunk_size: Option<usize>, tokenizer: Option<TokenizerType>, hf_model: Option<String>) -> PyResult<Self> {
         let max_chunk_size = max_chunk_size.unwrap_or(1500);
         
-        // Choose tokenizer type based on parameter
-        let tokenizer_type = match tokenizer.as_deref() {
-            None | Some("characters") => TokenizerType::Characters,
-            Some("tiktoken") => TokenizerType::Tiktoken,
-            Some(model) if model.starts_with("hf:") => {
-                // HuggingFace tokenizer with "hf:model_name" format
-                TokenizerType::HuggingFace(model[3..].to_string())
-            }
-            Some(tok) => {
-                return Err(PyValueError::new_err(
-                    format!("Unsupported tokenizer '{}'. Supported options: 'characters', 'tiktoken', 'hf:model_name'", tok)
-                ));
+        // Convert Python TokenizerType to Rust TokenizerType
+        let tokenizer_type = match tokenizer.unwrap_or(TokenizerType::Characters) {
+            TokenizerType::Characters => RustTokenizerType::Characters,
+            TokenizerType::Tiktoken => RustTokenizerType::Tiktoken,
+            TokenizerType::HuggingFace => {
+                match hf_model {
+                    Some(model) => RustTokenizerType::HuggingFace(model),
+                    None => {
+                        return Err(PyValueError::new_err(
+                            "TokenizerType.HUGGINGFACE requires hf_model parameter"
+                        ));
+                    }
+                }
             }
         };
         
@@ -113,6 +146,9 @@ impl SemanticChunker {
 fn breeze_rustle(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // Initialize Python logging
     pyo3_log::init();
+    
+    // Add enums
+    m.add_class::<TokenizerType>()?;
     
     // Add classes
     m.add_class::<SemanticChunker>()?;
