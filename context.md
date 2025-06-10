@@ -215,15 +215,17 @@ We've successfully implemented a build-time grammar compilation system in the `b
    - Simple lowercase normalization (no complex aliasing)
 
 3. **Current Status**:
-   - ✅ Python grammar working and all tests passing
+   - ✅ Python, Rust, JavaScript, TypeScript, and Go grammars working
    - ✅ Proper ABI compatibility (version 14 works with tree-sitter 0.25)
    - ✅ Clean integration with text-splitter via LanguageFn
+   - ✅ Fixed TypeScript grammar path handling (uses typescript/src subdirectory)
+   - ✅ All tests passing for new languages (both Rust and Python tests)
 
 4. **Next Steps**:
-   - Add Rust, JavaScript, TypeScript to test scalability
    - Create curated list of 30-50 priority languages
    - Add error handling for failed grammar compilations
    - Remove old tree-sitter-* dependencies after full migration
+   - Add more languages as needed
 
 ### Important Notes
 

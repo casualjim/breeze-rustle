@@ -41,11 +41,11 @@ jobs:
           else
             uv pip install --python .venv maturin[patchelf]
           fi
-          uv run --python .venv maturin develop
+          cd crates/breeze-py && uv run --python ../../.venv maturin develop
         shell: bash
       - name: Install test dependencies
         run: |
-          uv pip install --python .venv pytest
+          uv pip install --python .venv pytest pytest-asyncio breeze-langdetect
       - name: Install cargo-nextest
         uses: taiki-e/install-action@v2
         with:
@@ -55,7 +55,7 @@ jobs:
           cargo nextest run
       - name: Run Python tests
         run: |
-          uv run --python .venv pytest -v
+          cd crates/breeze-py && uv run --python ../../.venv pytest -v
 
   linux:
     runs-on: ${{ matrix.platform.runner }}
@@ -79,11 +79,12 @@ jobs:
           args: --release --out dist --zig
           sccache: ${{ !startsWith(github.ref, 'refs/tags/') }}
           manylinux: auto
+          working-directory: crates/breeze-py
       - name: Upload wheels
         uses: actions/upload-artifact@v4
         with:
           name: wheels-linux-${{ matrix.platform.target }}
-          path: dist
+          path: crates/breeze-py/dist
 
   musllinux:
     runs-on: ${{ matrix.platform.runner }}
@@ -107,11 +108,12 @@ jobs:
           args: --release --out dist --zig
           sccache: ${{ !startsWith(github.ref, 'refs/tags/') }}
           manylinux: musllinux_1_2
+          working-directory: crates/breeze-py
       - name: Upload wheels
         uses: actions/upload-artifact@v4
         with:
           name: wheels-musllinux-${{ matrix.platform.target }}
-          path: dist
+          path: crates/breeze-py/dist
 
   windows:
     runs-on: ${{ matrix.platform.runner }}
@@ -135,11 +137,12 @@ jobs:
           target: ${{ matrix.platform.target }}
           args: --release --out dist
           sccache: ${{ !startsWith(github.ref, 'refs/tags/') }}
+          working-directory: crates/breeze-py
       - name: Upload wheels
         uses: actions/upload-artifact@v4
         with:
           name: wheels-windows-${{ matrix.platform.target }}
-          path: dist
+          path: crates/breeze-py/dist
 
   macos:
     runs-on: ${{ matrix.platform.runner }}
@@ -162,11 +165,12 @@ jobs:
           target: ${{ matrix.platform.target }}
           args: --release --out dist
           sccache: ${{ !startsWith(github.ref, 'refs/tags/') }}
+          working-directory: crates/breeze-py
       - name: Upload wheels
         uses: actions/upload-artifact@v4
         with:
           name: wheels-macos-${{ matrix.platform.target }}
-          path: dist
+          path: crates/breeze-py/dist
 
   sdist:
     runs-on: ubuntu-latest
@@ -178,11 +182,12 @@ jobs:
         with:
           command: sdist
           args: --out dist
+          working-directory: crates/breeze-py
       - name: Upload sdist
         uses: actions/upload-artifact@v4
         with:
           name: wheels-sdist
-          path: dist
+          path: crates/breeze-py/dist
 
   release:
     name: Release

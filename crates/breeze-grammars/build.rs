@@ -36,7 +36,8 @@ fn main() {
     let mut compiled_grammars = Vec::new();
     
     for grammar in &config.grammars {
-        println!("cargo:warning=Building grammar: {}", grammar.name);
+        // Use regular println for build-time info, not warning level
+        println!("Building grammar: {}", grammar.name);
         
         let grammar_dir = cache_dir.join(&grammar.name);
         
@@ -60,13 +61,13 @@ fn main() {
         
         // Determine source directory
         let src_dir = if let Some(path) = &grammar.path {
-            grammar_dir.join(path)
+            grammar_dir.join(path).join("src")
         } else {
             grammar_dir.join("src")
         };
         
         if !src_dir.exists() {
-            eprintln!("Warning: No source directory found for {}", grammar.name);
+            eprintln!("Warning: No source directory found for {} at {:?}", grammar.name, src_dir);
             continue;
         }
         

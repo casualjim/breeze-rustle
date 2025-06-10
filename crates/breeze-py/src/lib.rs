@@ -294,7 +294,7 @@ impl SemanticChunker {
 
 /// A Python module implemented in Rust.
 #[pymodule]
-fn breeze_python(m: &Bound<'_, PyModule>) -> PyResult<()> {
+fn breeze(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // Initialize Python logging
     pyo3_log::init();
     
