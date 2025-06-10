@@ -32,7 +32,7 @@ tree-sitter-c-sharp = "0.23"
 tree-sitter-go = "0.23"
 tree-sitter-rust = "0.24"
 tree-sitter-ruby = "0.23"
-tree-sitter-php = "0.23"
+# tree-sitter-php = "0.23"  # PHP breaks everything
 tree-sitter-swift = "0.7"
 tree-sitter-kotlin = "0.3"
 tree-sitter-scala = "0.24"
@@ -66,6 +66,9 @@ async-stream = "0.3"        # Async stream macros
 [dev-dependencies]
 tree-sitter-rust = "0.24.0"
 tempfile = "3.14"
+
+[build-dependencies]
+cc = "1.0"
 
 [features]
 performance-tests = []

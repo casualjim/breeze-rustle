@@ -1,0 +1,264 @@
+{
+  "grammars": [
+    {
+      "name": "python",
+      "repo": "tree-sitter/tree-sitter-python",
+      "branch": "master"
+    },
+    {
+      "name": "javascript", 
+      "repo": "tree-sitter/tree-sitter-javascript",
+      "branch": "master"
+    },
+    {
+      "name": "typescript",
+      "repo": "tree-sitter/tree-sitter-typescript", 
+      "branch": "master",
+      "path": "typescript/src"
+    },
+    {
+      "name": "tsx",
+      "repo": "tree-sitter/tree-sitter-typescript",
+      "branch": "master", 
+      "path": "tsx/src"
+    },
+    {
+      "name": "rust",
+      "repo": "tree-sitter/tree-sitter-rust",
+      "branch": "master"
+    },
+    {
+      "name": "go",
+      "repo": "tree-sitter/tree-sitter-go",
+      "branch": "master"
+    },
+    {
+      "name": "java",
+      "repo": "tree-sitter/tree-sitter-java",
+      "branch": "master"
+    },
+    {
+      "name": "c",
+      "repo": "tree-sitter/tree-sitter-c",
+      "branch": "master"
+    },
+    {
+      "name": "cpp",
+      "repo": "tree-sitter/tree-sitter-cpp",
+      "branch": "master"
+    },
+    {
+      "name": "c_sharp",
+      "repo": "tree-sitter/tree-sitter-c-sharp",
+      "branch": "master"
+    },
+    {
+      "name": "ruby",
+      "repo": "tree-sitter/tree-sitter-ruby",
+      "branch": "master"
+    },
+    {
+      "name": "bash",
+      "repo": "tree-sitter/tree-sitter-bash",
+      "branch": "master"
+    },
+    {
+      "name": "php",
+      "repo": "tree-sitter/tree-sitter-php",
+      "branch": "master",
+      "path": "php/src"
+    },
+    {
+      "name": "scala",
+      "repo": "tree-sitter/tree-sitter-scala",
+      "branch": "master"
+    },
+    {
+      "name": "swift",
+      "repo": "tree-sitter/tree-sitter-swift",
+      "branch": "main"
+    },
+    {
+      "name": "kotlin",
+      "repo": "fwcd/tree-sitter-kotlin",
+      "branch": "main"
+    },
+    {
+      "name": "r",
+      "repo": "r-lib/tree-sitter-r", 
+      "branch": "main"
+    },
+    {
+      "name": "sql",
+      "repo": "DerekStride/tree-sitter-sql",
+      "branch": "main"
+    },
+    {
+      "name": "html",
+      "repo": "tree-sitter/tree-sitter-html",
+      "branch": "master"
+    },
+    {
+      "name": "css",
+      "repo": "tree-sitter/tree-sitter-css",
+      "branch": "master"
+    },
+    {
+      "name": "json",
+      "repo": "tree-sitter/tree-sitter-json",
+      "branch": "master"
+    },
+    {
+      "name": "yaml",
+      "repo": "ikatyang/tree-sitter-yaml",
+      "branch": "master"
+    },
+    {
+      "name": "toml",
+      "repo": "tree-sitter/tree-sitter-toml",
+      "branch": "master"
+    },
+    {
+      "name": "markdown",
+      "repo": "tree-sitter-grammars/tree-sitter-markdown",
+      "branch": "main",
+      "path": "tree-sitter-markdown/src"
+    },
+    {
+      "name": "elixir",
+      "repo": "elixir-lang/tree-sitter-elixir",
+      "branch": "main"
+    },
+    {
+      "name": "erlang",
+      "repo": "WhatsApp/tree-sitter-erlang",
+      "branch": "main"
+    },
+    {
+      "name": "haskell",
+      "repo": "tree-sitter/tree-sitter-haskell",
+      "branch": "master"
+    },
+    {
+      "name": "ocaml",
+      "repo": "tree-sitter/tree-sitter-ocaml",
+      "branch": "master",
+      "path": "grammars/ocaml/src"
+    },
+    {
+      "name": "lua",
+      "repo": "tree-sitter-grammars/tree-sitter-lua",
+      "branch": "main"
+    },
+    {
+      "name": "perl",
+      "repo": "tree-sitter-perl/tree-sitter-perl",
+      "branch": "master"
+    },
+    {
+      "name": "dart",
+      "repo": "UserNobody14/tree-sitter-dart", 
+      "branch": "master"
+    },
+    {
+      "name": "vue",
+      "repo": "tree-sitter-grammars/tree-sitter-vue",
+      "branch": "main"
+    },
+    {
+      "name": "svelte",
+      "repo": "tree-sitter-grammars/tree-sitter-svelte",
+      "branch": "main"
+    },
+    {
+      "name": "zig",
+      "repo": "tree-sitter-grammars/tree-sitter-zig",
+      "branch": "main"
+    },
+    {
+      "name": "nim",
+      "repo": "alaviss/tree-sitter-nim",
+      "branch": "main"
+    },
+    {
+      "name": "clojure",
+      "repo": "sogaiu/tree-sitter-clojure",
+      "branch": "master"
+    },
+    {
+      "name": "julia",
+      "repo": "tree-sitter/tree-sitter-julia",
+      "branch": "master"
+    },
+    {
+      "name": "fortran",
+      "repo": "stadelmanma/tree-sitter-fortran",
+      "branch": "master"
+    },
+    {
+      "name": "objc",
+      "repo": "tree-sitter-grammars/tree-sitter-objc",
+      "branch": "main"
+    },
+    {
+      "name": "make",
+      "repo": "alemuller/tree-sitter-make",
+      "branch": "main"
+    },
+    {
+      "name": "cmake",
+      "repo": "uyha/tree-sitter-cmake",
+      "branch": "master"
+    },
+    {
+      "name": "dockerfile",
+      "repo": "camdencheek/tree-sitter-dockerfile",
+      "branch": "main"
+    },
+    {
+      "name": "nix",
+      "repo": "nix-community/tree-sitter-nix",
+      "branch": "master"
+    },
+    {
+      "name": "graphql",
+      "repo": "bkegley/tree-sitter-graphql",
+      "branch": "master"
+    },
+    {
+      "name": "proto",
+      "repo": "tree-sitter-grammars/tree-sitter-proto",
+      "branch": "main"
+    },
+    {
+      "name": "scheme",
+      "repo": "6cdh/tree-sitter-scheme",
+      "branch": "master"
+    },
+    {
+      "name": "racket",
+      "repo": "6cdh/tree-sitter-racket",
+      "branch": "master"
+    },
+    {
+      "name": "elm",
+      "repo": "elm-tooling/tree-sitter-elm",
+      "branch": "main"
+    },
+    {
+      "name": "purescript",
+      "repo": "postsolar/tree-sitter-purescript",
+      "branch": "main"
+    },
+    {
+      "name": "solidity",
+      "repo": "JoranHonig/tree-sitter-solidity",
+      "branch": "master"
+    },
+    {
+      "name": "v",
+      "repo": "vlang/tree-sitter-v",
+      "branch": "main"
+    }
+  ]
+}
