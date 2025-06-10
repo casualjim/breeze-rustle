@@ -13,8 +13,7 @@
       "Bash(cargo test)",
       "Bash(cargo test:*)",
       "Bash(python test:*)",
-      "Bash(python -m pytest tests/test_acceptance.py::TestBasicFunctionality::test_simple_python_file -v)",
-      "Bash(python -m pytest tests/test_hyperpolyglot_integration.py -v)",
+      "Bash(python -m pytest:*)",
       "Bash(ls:*)",
       "mcp__github__get_file_contents",
       "mcp__github__search_code",
@@ -23,7 +22,9 @@
       "Bash(maturin develop:*)",
       "Bash(pytest:*)",
       "Bash(grep:*)",
-      "Bash(cargo nextest:*)"
+      "Bash(cargo nextest:*)",
+      "Bash(gh run list:*)",
+      "Bash(gh run view:*)"
     ],
     "deny": []
   }

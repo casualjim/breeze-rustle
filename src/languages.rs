@@ -18,7 +18,7 @@ pub static LANGUAGE_REGISTRY: LazyLock<HashMap<&'static str, LanguageFn>> = Lazy
     registry.insert("Go", tree_sitter_go::LANGUAGE);
     registry.insert("Rust", tree_sitter_rust::LANGUAGE);
     registry.insert("Ruby", tree_sitter_ruby::LANGUAGE);
-    // Skip PHP for now - API unclear
+    registry.insert("PHP", tree_sitter_php::LANGUAGE_PHP);
     registry.insert("Swift", tree_sitter_swift::LANGUAGE);
     registry.insert("Scala", tree_sitter_scala::LANGUAGE);
     registry.insert("Shell", tree_sitter_bash::LANGUAGE);
@@ -39,7 +39,7 @@ pub static LANGUAGE_REGISTRY: LazyLock<HashMap<&'static str, LanguageFn>> = Lazy
     registry.insert("go", tree_sitter_go::LANGUAGE);
     registry.insert("rust", tree_sitter_rust::LANGUAGE);
     registry.insert("ruby", tree_sitter_ruby::LANGUAGE);
-    // Skip php for now
+    registry.insert("php", tree_sitter_php::LANGUAGE_PHP);
     registry.insert("swift", tree_sitter_swift::LANGUAGE);
     registry.insert("scala", tree_sitter_scala::LANGUAGE);
     registry.insert("shell", tree_sitter_bash::LANGUAGE);
@@ -124,5 +124,26 @@ mod tests {
         assert!(is_language_supported("C++"));
         assert!(is_language_supported("cpp"));
         assert!(!is_language_supported("COBOL"));
+    }
+    
+    #[test]
+    fn test_missing_language_apis() {
+        // Test if we can access the PHP API
+        let php_lang: LanguageFn = tree_sitter_php::LANGUAGE_PHP;
+        println!("PHP LANGUAGE_PHP constant exists and is LanguageFn");
+        
+        // Test if we can access the Kotlin API
+        // Kotlin returns Language, not LanguageFn
+        let kotlin_lang = tree_sitter_kotlin::language();
+        println!("Kotlin language() function returns: {:?}", kotlin_lang);
+        
+        // Test if we can access the SQL API  
+        // SQL also returns Language, not LanguageFn
+        let sql_lang = tree_sitter_sql::language();
+        println!("SQL language() function returns: {:?}", sql_lang);
+        
+        // Test converting to tree_sitter::Language using into()
+        let php_as_lang: tree_sitter::Language = php_lang.into();
+        println!("PHP can convert to Language: {:?}", php_as_lang);
     }
 }
