@@ -24,7 +24,7 @@ impl Default for WalkOptions {
         Self {
             max_chunk_size: 1000,
             tokenizer: TokenizerType::Characters,
-            max_parallel: 4,
+            max_parallel: 16,
             max_file_size: Some(5 * 1024 * 1024), // 5MB default
         }
     }
@@ -40,7 +40,7 @@ pub fn walk_project(
     let max_file_size = options.max_file_size;
     
     // Create a channel for streaming results
-    let (tx, rx) = mpsc::channel::<Result<ProjectChunk, ChunkError>>(100);
+    let (tx, rx) = mpsc::channel::<Result<ProjectChunk, ChunkError>>(400_000);
     
     // Create the chunker upfront
     let chunker = match InnerChunker::new(options.max_chunk_size, options.tokenizer) {
@@ -59,13 +59,11 @@ pub fn walk_project(
     tokio::task::spawn_blocking(move || {
         // Use tokio runtime handle to spawn async tasks from blocking context
         let handle = tokio::runtime::Handle::current();
-        
-        // Create semaphore for additional async concurrency control
-        let semaphore = Arc::new(tokio::sync::Semaphore::new(options.max_parallel));
-        
+           
         // Build the walker with parallelism
         let walker = WalkBuilder::new(&path)
             .threads(options.max_parallel)
+            .max_filesize(max_file_size)
             .build_parallel();
         
         let tx = Arc::new(tx);
@@ -73,7 +71,6 @@ pub fn walk_project(
         walker.run(|| {
             let tx = tx.clone();
             let chunker = chunker.clone();
-            let semaphore = semaphore.clone();
             let handle = handle.clone();
             
             Box::new(move |result| {
@@ -82,17 +79,10 @@ pub fn walk_project(
                         let path = entry.path().to_owned();
                         let tx = tx.clone();
                         let chunker = chunker.clone();
-                        let semaphore = semaphore.clone();
                         
                         // Spawn async task on the runtime
                         handle.spawn(async move {
-                            // Acquire semaphore permit
-                            let _permit = match semaphore.acquire().await {
-                                Ok(permit) => permit,
-                                Err(_) => return, // Semaphore closed
-                            };
-                            
-                            let mut stream = Box::pin(process_file(&path, chunker, max_file_size));
+                            let mut stream = Box::pin(process_file(&path, chunker));
                             while let Some(result) = stream.next().await {
                                 match result {
                                     Ok(chunk) => {
@@ -121,26 +111,11 @@ pub fn walk_project(
 fn process_file<P: AsRef<Path>>(
     path: P,
     chunker: Arc<InnerChunker>,
-    max_file_size: Option<u64>,
 ) -> impl Stream<Item = Result<ProjectChunk, ChunkError>> + Send {
     let path = path.as_ref().to_owned();
     
     async_stream::try_stream! {
         let path_str = path.to_string_lossy().to_string();
-        
-        // Check file size if limit is configured
-        if let Some(max_size) = max_file_size {
-            match tokio::fs::metadata(&path).await {
-                Ok(metadata) => {
-                    if metadata.len() > max_size {
-                        return; // Skip files over the size limit
-                    }
-                }
-                Err(_) => {
-                    return; // Skip if we can't read metadata
-                }
-            }
-        }
         
         // First check if it's a text file using infer (this only reads a few bytes)
         let is_text_file = if let Ok(Some(file_type)) = infer::get_from_path(&path) {
@@ -532,7 +507,7 @@ fn helper() {
 "#).unwrap();
         
         let chunker = Arc::new(InnerChunker::new(100, TokenizerType::Characters).unwrap());
-        let mut stream = Box::pin(process_file(&rust_file, chunker, None));
+        let mut stream = Box::pin(process_file(&rust_file, chunker));
         
         let mut chunks = Vec::new();
         while let Some(result) = stream.next().await {

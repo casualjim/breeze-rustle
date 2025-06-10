@@ -22,7 +22,8 @@
       "Bash(cargo check:*)",
       "Bash(maturin develop:*)",
       "Bash(pytest:*)",
-      "Bash(grep:*)"
+      "Bash(grep:*)",
+      "Bash(cargo nextest:*)"
     ],
     "deny": []
   }

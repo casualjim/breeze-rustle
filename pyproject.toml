@@ -22,3 +22,9 @@ dev = [
     "pytest-asyncio>=1.0.0",
     "breeze-langdetect>=0.1.0"
 ]
+
+[tool.pytest.ini_options]
+minversion = "6.0"
+testpaths = ["tests"]
+pythonpath = ["."]
+asyncio_mode = "auto"
