@@ -1,0 +1,9 @@
+{
+  "grammars": [
+    {
+      "name": "python",
+      "repo": "tree-sitter/tree-sitter-python",
+      "branch": "master"
+    }
+  ]
+}

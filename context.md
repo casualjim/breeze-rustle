@@ -169,6 +169,7 @@ async for chunk in walker:
 - Direct tree-sitter-* crate dependencies instead of syntastica
 - Currently supporting: Python, JavaScript, TypeScript, TSX, Java, C++, C, C#, Go, Rust, Ruby, Swift, Scala, Shell/Bash, R
 - Removed: PHP (unclear API), Kotlin (compilation issues), SQL (compilation issues)
+- **Migration planned**: Moving from individual crates to compiled grammars (165+ languages)
 
 ### Architecture
 
@@ -192,6 +193,46 @@ Key dependencies in Cargo.toml:
 1. **Tree-sitter version conflicts**: Use specific versions in Cargo.toml
 2. **LanguageFn vs Language**: Use tree-sitter-language crate and convert with `.into()`
 3. **Language API differences**: Some use LANGUAGE constants, others use language() functions
+
+## ✅ Grammar Integration - Phase 1 Complete
+
+### Overview
+
+We've successfully implemented a build-time grammar compilation system in the `breeze-grammars` crate located at `crates/breeze-grammars/`. This replaces individual tree-sitter-* dependencies with a unified approach.
+
+### Implementation Details
+
+1. **Architecture**:
+   - `grammars.json`: Configuration file listing grammar repositories
+   - `build.rs`: Downloads and compiles grammars using cc crate
+   - Generated bindings follow official tree-sitter patterns using `LanguageFn::from_raw()`
+   - Case-insensitive API with lowercase normalization
+
+2. **Key Design Decisions**:
+   - Use `LanguageFn::from_raw()` instead of unsafe transmutes
+   - Generate both `Language` and `LanguageFn` accessors
+   - Pre-compile at build time, no runtime downloads
+   - Simple lowercase normalization (no complex aliasing)
+
+3. **Current Status**:
+   - ✅ Python grammar working and all tests passing
+   - ✅ Proper ABI compatibility (version 14 works with tree-sitter 0.25)
+   - ✅ Clean integration with text-splitter via LanguageFn
+
+4. **Next Steps**:
+   - Add Rust, JavaScript, TypeScript to test scalability
+   - Create curated list of 30-50 priority languages
+   - Add error handling for failed grammar compilations
+   - Remove old tree-sitter-* dependencies after full migration
+
+### Important Notes
+
+- Grammar repositories must use format `owner/repo` (GitHub URLs are auto-constructed)
+- Some grammars have source in subdirectories (use `path` field in JSON)
+- Always use maturin for building Python bindings: `maturin develop`
+- Bus errors were caused by improper Language/LanguageFn conversion, now fixed
+
+See `docs/plans/tree-sitter-grammar-integration.md` for original plan.
 
 ## Build & Test Commands
 
@@ -277,6 +318,10 @@ With 512-character chunks on the kuzu project:
 
 1. ~~Write comprehensive Python acceptance tests~~ ✅ Done
 2. ~~Optimize performance~~ ✅ Achieved 12,883 chunks/s
-3. Set up CI/CD with GitHub Actions
-4. Package and publish to PyPI using maturin
-5. Add streaming file reader for files >5MB (currently skipped)
+3. **Implement tree-sitter grammar integration** 🚧 In Progress
+   - Port tree-sitter-language-pack approach to Rust
+   - Support 165+ languages instead of current 16
+   - Compile grammars directly without tree-sitter CLI
+4. Set up CI/CD with GitHub Actions
+5. Package and publish to PyPI using maturin
+6. Add streaming file reader for files >5MB (currently skipped)

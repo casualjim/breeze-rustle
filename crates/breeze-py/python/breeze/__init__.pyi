@@ -1,6 +1,6 @@
-"""Type stubs for breeze-rustle"""
+"""Type stubs for breeze"""
 
-from typing import List, Optional, Coroutine, Any, AsyncIterator
+from typing import List, Optional, Coroutine, Any
 from enum import Enum
 
 __version__: str
@@ -33,6 +33,7 @@ class ChunkMetadata:
 
 class SemanticChunk:
     """A semantic chunk of code with metadata."""
+    chunk_type: ChunkType
     text: str
     start_byte: int
     end_byte: int
@@ -43,7 +44,6 @@ class SemanticChunk:
 class ProjectChunk:
     """A chunk from a project file walk."""
     file_path: str
-    chunk_type: ChunkType
     chunk: SemanticChunk
 
 class ChunkStream:
