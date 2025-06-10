@@ -24,7 +24,10 @@
       "Bash(grep:*)",
       "Bash(cargo nextest:*)",
       "Bash(gh run list:*)",
-      "Bash(gh run view:*)"
+      "Bash(gh run view:*)",
+      "mcp__zep__search_memory_nodes",
+      "mcp__zep__add_memory",
+      "Bash(cargo:*)"
     ],
     "deny": []
   }

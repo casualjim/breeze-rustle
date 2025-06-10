@@ -1,0 +1,32 @@
+[build-system]
+requires = ["maturin>=1.8,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "breeze"
+requires-python = ">=3.9"
+classifiers = [
+    "Programming Language :: Rust",
+    "Programming Language :: Python :: Implementation :: CPython",
+    "Programming Language :: Python :: Implementation :: PyPy",
+]
+dynamic = ["version"]
+
+[tool.maturin]
+features = ["pyo3/extension-module"]
+module-name = "breeze"
+
+[dependency-groups]
+dev = [
+    "httpx>=0.28.1",
+    "maturin>=1.8.6",
+    "pytest>=8.3.5",
+    "pytest-asyncio>=1.0.0",
+    "breeze-langdetect>=0.1.0"
+]
+
+[tool.pytest.ini_options]
+minversion = "6.0"
+testpaths = ["tests"]
+pythonpath = ["."]
+asyncio_mode = "auto"

@@ -1,6 +1,6 @@
 use std::env;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::Command;
 use serde::{Deserialize, Serialize};
 
@@ -42,8 +42,14 @@ fn main() {
         
         // Clone or update the repository
         if !grammar_dir.exists() {
+            let repo_url = if grammar.repo.starts_with("http") {
+                grammar.repo.clone()
+            } else {
+                format!("https://github.com/{}", grammar.repo)
+            };
+            
             let output = Command::new("git")
-                .args(&["clone", "--depth", "1", "-b", &grammar.branch, &grammar.repo, grammar_dir.to_str().unwrap()])
+                .args(&["clone", "--depth", "1", "-b", &grammar.branch, &repo_url, grammar_dir.to_str().unwrap()])
                 .output()
                 .expect("Failed to clone grammar repository");
                 
@@ -103,15 +109,27 @@ fn main() {
     let mut bindings = String::new();
     
     bindings.push_str("// Auto-generated grammar bindings\n\n");
-    bindings.push_str("use std::collections::HashMap;\n");
-    bindings.push_str("use tree_sitter::Language;\n\n");
+    bindings.push_str("use tree_sitter::Language;\n");
+    bindings.push_str("use tree_sitter_language::LanguageFn;\n\n");
     
     // Generate extern declarations
     for name in &compiled_grammars {
         let fn_name = name.replace("-", "_");
         bindings.push_str(&format!(
-            "extern \"C\" {{ fn tree_sitter_{}() -> Language; }}\n",
+            "extern \"C\" {{ fn tree_sitter_{}() -> *const (); }}\n",
             fn_name
+        ));
+    }
+    
+    bindings.push_str("\n");
+    
+    // Generate LanguageFn constants
+    for name in &compiled_grammars {
+        let fn_name = name.replace("-", "_");
+        let const_name = name.to_uppercase();
+        bindings.push_str(&format!(
+            "pub const {}_LANGUAGE: LanguageFn = unsafe {{ LanguageFn::from_raw(tree_sitter_{}) }};\n",
+            const_name, fn_name
         ));
     }
     
@@ -121,10 +139,10 @@ fn main() {
     
     // Generate match arms
     for name in &compiled_grammars {
-        let fn_name = name.replace("-", "_");
+        let const_name = name.to_uppercase();
         bindings.push_str(&format!(
-            "        \"{}\" => Some(unsafe {{ tree_sitter_{}() }}),\n",
-            name, fn_name
+            "        \"{}\" => Some({}_LANGUAGE.into()),\n",
+            name, const_name
         ));
     }
     
@@ -132,8 +150,24 @@ fn main() {
     bindings.push_str("    }\n");
     bindings.push_str("}\n\n");
     
-    bindings.push_str("pub fn available_grammars() -> Vec<&'static str> {\n");
-    bindings.push_str("    vec![\n");
+    bindings.push_str("pub fn load_grammar_fn(name: &str) -> Option<LanguageFn> {\n");
+    bindings.push_str("    match name {\n");
+    
+    // Generate match arms for LanguageFn
+    for name in &compiled_grammars {
+        let const_name = name.to_uppercase();
+        bindings.push_str(&format!(
+            "        \"{}\" => Some({}_LANGUAGE),\n",
+            name, const_name
+        ));
+    }
+    
+    bindings.push_str("        _ => None,\n");
+    bindings.push_str("    }\n");
+    bindings.push_str("}\n\n");
+    
+    bindings.push_str("pub fn available_grammars() -> &'static [&'static str] {\n");
+    bindings.push_str("    &[\n");
     for name in &compiled_grammars {
         bindings.push_str(&format!("        \"{}\",\n", name));
     }

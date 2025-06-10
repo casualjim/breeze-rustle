@@ -27,6 +27,9 @@ maturin develop --release
 
 # Build Python wheel for distribution
 maturin build --release
+
+# Build breeze-grammars crate separately (for testing)
+cd crates/breeze-grammars && cargo build
 ```
 
 ### Testing
@@ -61,14 +64,20 @@ The project follows a Python → PyO3 → Rust architecture:
    * `SemanticChunker` class with async methods
    * `SemanticChunk` and `ChunkMetadata` data classes
 
-2. **Rust Core** (in `src/`):
-   * Tree-sitter parsing with embedded nvim-treesitter queries
-   * Async/concurrent processing using smol runtime
-   * Zero-copy operations where possible
+2. **Rust Core**:
+   * `src/`: Main library with PyO3 bindings
+   * `crates/breeze-grammars/`: Grammar compilation system
+   * `crates/breeze-chunkers/`: (Future) Pure Rust core without Python deps
 
-3. **Build System**:
+3. **Grammar System** (`crates/breeze-grammars/`):
+   * Downloads and compiles tree-sitter grammars at build time
+   * Uses official `LanguageFn::from_raw()` pattern
+   * Case-insensitive API with lowercase normalization
+
+4. **Build System**:
    * `maturin` handles Rust → Python packaging
-   * Queries embedded at compile time via build.rs
+   * Grammars compiled via cc crate in build.rs
+   * nvim-treesitter queries embedded at compile time
 
 ## Implementation Status
 

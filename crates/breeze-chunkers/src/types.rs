@@ -1,4 +1,3 @@
-use pyo3::prelude::*;
 use thiserror::Error;
 use tree_sitter::Node;
 
@@ -17,65 +16,34 @@ pub enum ChunkError {
     QueryError(String),
 }
 
-#[pyclass]
+#[derive(Debug, Clone)]
+/// Represents a chunk of code or text with semantic information
+pub enum Chunk {
+    Semantic(SemanticChunk),
+    Text(SemanticChunk), 
+}
+
 #[derive(Debug, Clone)]
 pub struct ChunkMetadata {
-    #[pyo3(get)]
     pub node_type: String,        // "function", "class", "method"
-    #[pyo3(get)]
     pub node_name: Option<String>, // "parse_document", "MyClass"
-    #[pyo3(get)]
     pub language: String,
-    #[pyo3(get)]
     pub parent_context: Option<String>, // "class MyClass" for methods
-    #[pyo3(get)]
     pub scope_path: Vec<String>,   // ["module", "MyClass", "parse_document"]
-    #[pyo3(get)]
     pub definitions: Vec<String>,  // Variable/function names defined
-    #[pyo3(get)]
     pub references: Vec<String>,   // Variable/function names referenced
 }
 
-#[pymethods]
-impl ChunkMetadata {
-    fn __repr__(&self) -> String {
-        format!(
-            "ChunkMetadata(node_type='{}', node_name={:?}, language='{}', parent_context={:?})",
-            self.node_type, self.node_name, self.language, self.parent_context
-        )
-    }
-}
-
-#[pyclass]
 #[derive(Debug, Clone)]
 pub struct SemanticChunk {
-    #[pyo3(get)]
     pub text: String,
-    #[pyo3(get)]
     pub start_byte: usize,
-    #[pyo3(get)]
     pub end_byte: usize,
-    #[pyo3(get)]
     pub start_line: usize,
-    #[pyo3(get)]
     pub end_line: usize,
-    #[pyo3(get)]
     pub metadata: ChunkMetadata,
 }
 
-#[pymethods]
-impl SemanticChunk {
-    fn __repr__(&self) -> String {
-        format!(
-            "SemanticChunk(lines={}-{}, type='{}', name={:?})",
-            self.start_line, self.end_line, self.metadata.node_type, self.metadata.node_name
-        )
-    }
-    
-    fn __len__(&self) -> usize {
-        self.text.len()
-    }
-}
 
 impl SemanticChunk {
     /// Calculate line numbers from byte offsets
@@ -99,57 +67,23 @@ impl SemanticChunk {
     }
 }
 
-/// Type of chunk - either semantic (parsed code) or text (plain text)
-#[pyclass(eq, eq_int)]
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum ChunkType {
-    #[pyo3(name = "SEMANTIC")]
-    Semantic,
-    #[pyo3(name = "TEXT")]
-    Text,
-}
-
-#[pymethods]
-impl ChunkType {
-    fn __repr__(&self) -> String {
-        match self {
-            ChunkType::Semantic => "ChunkType.SEMANTIC".to_string(),
-            ChunkType::Text => "ChunkType.TEXT".to_string(),
-        }
-    }
-}
 
 /// A chunk from a project file with type information
-#[pyclass]
 #[derive(Debug, Clone)]
 pub struct ProjectChunk {
-    #[pyo3(get)]
     pub file_path: String,
-    #[pyo3(get)]
-    pub chunk_type: ChunkType,
-    #[pyo3(get)]
-    pub chunk: SemanticChunk,
+    pub chunk: Chunk,
 }
 
-#[pymethods]
 impl ProjectChunk {
     /// Check if this is a semantic (parsed code) chunk
-    #[getter]
-    fn is_semantic(&self) -> bool {
-        matches!(self.chunk_type, ChunkType::Semantic)
+    pub fn is_semantic(&self) -> bool {
+        matches!(self.chunk, Chunk::Semantic(_))
     }
     
     /// Check if this is a text (plain text) chunk
-    #[getter]
-    fn is_text(&self) -> bool {
-        matches!(self.chunk_type, ChunkType::Text)
-    }
-    
-    fn __repr__(&self) -> String {
-        format!(
-            "ProjectChunk(file='{}', type={:?}, chunk={})",
-            self.file_path, self.chunk_type, self.chunk.__repr__()
-        )
+    pub fn is_text(&self) -> bool {
+        matches!(self.chunk, Chunk::Text(_))
     }
 }
 
