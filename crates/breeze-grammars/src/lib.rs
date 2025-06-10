@@ -48,4 +48,73 @@ mod tests {
             assert!(is_language_supported("PYTHON"));
         }
     }
+    
+    #[test]
+    fn test_new_languages() {
+        // Test that all our new languages are available
+        let languages = ["python", "rust", "javascript", "typescript", "go"];
+        
+        for lang in &languages {
+            assert!(
+                is_language_supported(lang),
+                "{} should be supported",
+                lang
+            );
+            
+            let language = get_language(lang);
+            assert!(
+                language.is_some(),
+                "{} language should be loaded",
+                lang
+            );
+            
+            let language_fn = get_language_fn(lang);
+            assert!(
+                language_fn.is_some(),
+                "{} LanguageFn should be loaded",
+                lang
+            );
+        }
+        
+        // Verify we have at least these 5 languages
+        let all_languages = supported_languages();
+        assert!(
+            all_languages.len() >= 5,
+            "Should have at least 5 languages, got {}",
+            all_languages.len()
+        );
+    }
+    
+    #[test]
+    fn test_parse_simple_code() {
+        // Test parsing simple code with each grammar
+        let test_cases = vec![
+            ("python", "def hello():\n    pass"),
+            ("rust", "fn main() {}"),
+            ("javascript", "function hello() {}"),
+            ("typescript", "function hello(): void {}"),
+            ("go", "func main() {}"),
+        ];
+        
+        for (lang_name, code) in test_cases {
+            if let Some(language) = get_language(lang_name) {
+                let mut parser = tree_sitter::Parser::new();
+                parser.set_language(&language).unwrap();
+                
+                let tree = parser.parse(code, None);
+                assert!(
+                    tree.is_some(),
+                    "{} should parse simple code",
+                    lang_name
+                );
+                
+                let tree = tree.unwrap();
+                assert!(
+                    !tree.root_node().has_error(),
+                    "{} parse tree should not have errors",
+                    lang_name
+                );
+            }
+        }
+    }
 }

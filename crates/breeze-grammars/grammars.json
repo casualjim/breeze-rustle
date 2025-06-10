@@ -4,6 +4,27 @@
       "name": "python",
       "repo": "tree-sitter/tree-sitter-python",
       "branch": "master"
+    },
+    {
+      "name": "rust",
+      "repo": "tree-sitter/tree-sitter-rust",
+      "branch": "master"
+    },
+    {
+      "name": "javascript",
+      "repo": "tree-sitter/tree-sitter-javascript",
+      "branch": "master"
+    },
+    {
+      "name": "typescript",
+      "repo": "tree-sitter/tree-sitter-typescript",
+      "branch": "master",
+      "path": "typescript"
+    },
+    {
+      "name": "go",
+      "repo": "tree-sitter/tree-sitter-go",
+      "branch": "master"
     }
   ]
 }
