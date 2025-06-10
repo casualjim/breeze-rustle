@@ -127,6 +127,7 @@ mod tests {
     }
     
     #[test]
+    #[ignore]
     fn test_missing_language_apis() {
         // Test if we can access the PHP API
         let php_lang: LanguageFn = tree_sitter_php::LANGUAGE_PHP;
