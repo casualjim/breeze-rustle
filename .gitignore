@@ -75,3 +75,4 @@ docs/_build/
 benchmarks/
 /test_*.py
 /notused
+node_modules/
