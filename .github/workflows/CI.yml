@@ -18,14 +18,52 @@ permissions:
   contents: read
 
 jobs:
+  build-grammars:
+    name: Build Grammars
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Cache precompiled grammars
+        id: cache-grammars
+        uses: actions/cache@v4
+        with:
+          path: crates/breeze-grammars/precompiled
+          key: grammars-${{ hashFiles('crates/breeze-grammars/grammars.json') }}-v1
+      
+      - name: Install Zig
+        if: steps.cache-grammars.outputs.cache-hit != 'true'
+        uses: goto-bus-stop/setup-zig@v2
+        with:
+          version: 0.14.1
+      
+      - name: Build grammars for all platforms
+        if: steps.cache-grammars.outputs.cache-hit != 'true'
+        run: |
+          ./tools/build-grammars --all-platforms
+      
+      - name: Upload grammars artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: precompiled-grammars
+          path: crates/breeze-grammars/precompiled
+          retention-days: 7
+
   test:
     runs-on: ${{ matrix.os }}
+    needs: build-grammars
     strategy:
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
         python-version: ["3.9", "3.10", "3.11", "3.12"]
     steps:
       - uses: actions/checkout@v4
+      
+      - name: Download precompiled grammars
+        uses: actions/download-artifact@v4
+        with:
+          name: precompiled-grammars
+          path: crates/breeze-grammars/precompiled
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
@@ -69,6 +107,11 @@ jobs:
             target: aarch64
     steps:
       - uses: actions/checkout@v4
+      - name: Download precompiled grammars
+        uses: actions/download-artifact@v4
+        with:
+          name: precompiled-grammars
+          path: crates/breeze-grammars/precompiled
       - uses: actions/setup-python@v5
         with:
           python-version: 3.x
@@ -98,6 +141,11 @@ jobs:
             target: aarch64
     steps:
       - uses: actions/checkout@v4
+      - name: Download precompiled grammars
+        uses: actions/download-artifact@v4
+        with:
+          name: precompiled-grammars
+          path: crates/breeze-grammars/precompiled
       - uses: actions/setup-python@v5
         with:
           python-version: 3.x
@@ -127,6 +175,11 @@ jobs:
             target: x86
     steps:
       - uses: actions/checkout@v4
+      - name: Download precompiled grammars
+        uses: actions/download-artifact@v4
+        with:
+          name: precompiled-grammars
+          path: crates/breeze-grammars/precompiled
       - uses: actions/setup-python@v5
         with:
           python-version: 3.x
@@ -156,6 +209,11 @@ jobs:
             target: aarch64
     steps:
       - uses: actions/checkout@v4
+      - name: Download precompiled grammars
+        uses: actions/download-artifact@v4
+        with:
+          name: precompiled-grammars
+          path: crates/breeze-grammars/precompiled
       - uses: actions/setup-python@v5
         with:
           python-version: 3.x
@@ -177,6 +235,11 @@ jobs:
     needs: test
     steps:
       - uses: actions/checkout@v4
+      - name: Download precompiled grammars
+        uses: actions/download-artifact@v4
+        with:
+          name: precompiled-grammars
+          path: crates/breeze-grammars/precompiled
       - name: Build sdist
         uses: PyO3/maturin-action@v1
         with:

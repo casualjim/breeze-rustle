@@ -1,0 +1,137 @@
+name: CI with Grammar Cache
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - "*"
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        python-version: ["3.9", "3.10", "3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      
+      # Cache grammar repositories
+      - name: Cache grammar repositories
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/grammar-cache
+            target/*/build/breeze-grammars-*/out/grammar_cache
+          key: ${{ runner.os }}-grammars-${{ hashFiles('crates/breeze-grammars/grammars.json') }}
+          restore-keys: |
+            ${{ runner.os }}-grammars-
+      
+      # Pre-populate grammar cache if needed
+      - name: Setup grammar cache
+        run: |
+          mkdir -p ~/grammar-cache
+          if [ -d "target" ]; then
+            find target -name "grammar_cache" -type d | while read cache_dir; do
+              cp -r "$cache_dir"/* ~/grammar-cache/ 2>/dev/null || true
+            done
+          fi
+        shell: bash
+      
+      # Set environment variable for build script
+      - name: Set grammar cache location
+        run: echo "BREEZE_GRAMMAR_CACHE=$HOME/grammar-cache" >> $GITHUB_ENV
+        shell: bash
+      
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+      - name: Create virtual environment with specific Python version
+        run: uv venv --python python${{ matrix.python-version }}
+      - name: Build and install package
+        run: |
+          if [ "${{ matrix.os }}" = "windows-latest" ]; then
+            uv pip install --python .venv maturin
+          else
+            uv pip install --python .venv maturin[patchelf]
+          fi
+          cd crates/breeze-py && uv run --python ../../.venv maturin develop
+        shell: bash
+      - name: Install test dependencies
+        run: |
+          uv pip install --python .venv pytest pytest-asyncio breeze-langdetect
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@v2
+        with:
+          tool: nextest
+      - name: Run Rust tests
+        run: |
+          cargo nextest run
+      - name: Run Python tests
+        run: |
+          cd crates/breeze-py && uv run --python ../../.venv pytest -v
+      
+      # Save grammar cache after build
+      - name: Preserve grammar cache
+        if: always()
+        run: |
+          if [ -d "target" ]; then
+            find target -name "grammar_cache" -type d | while read cache_dir; do
+              cp -r "$cache_dir"/* ~/grammar-cache/ 2>/dev/null || true
+            done
+          fi
+        shell: bash
+
+  # Rest of the jobs remain the same but with grammar cache added
+  linux:
+    runs-on: ${{ matrix.platform.runner }}
+    needs: test
+    strategy:
+      matrix:
+        platform:
+          - runner: ubuntu-22.04
+            target: x86_64
+          - runner: ubuntu-22.04
+            target: aarch64
+    steps:
+      - uses: actions/checkout@v4
+      
+      # Cache grammar repositories
+      - name: Cache grammar repositories
+        uses: actions/cache@v4
+        with:
+          path: ~/grammar-cache
+          key: ${{ runner.os }}-grammars-${{ hashFiles('crates/breeze-grammars/grammars.json') }}
+          restore-keys: |
+            ${{ runner.os }}-grammars-
+      
+      - name: Set grammar cache location
+        run: echo "BREEZE_GRAMMAR_CACHE=$HOME/grammar-cache" >> $GITHUB_ENV
+      
+      - uses: actions/setup-python@v5
+        with:
+          python-version: 3.x
+      - name: Build wheels
+        uses: PyO3/maturin-action@v1
+        with:
+          target: ${{ matrix.platform.target }}
+          args: --release --out dist --zig
+          sccache: ${{ !startsWith(github.ref, 'refs/tags/') }}
+          manylinux: auto
+          working-directory: crates/breeze-py
+      - name: Upload wheels
+        uses: actions/upload-artifact@v4
+        with:
+          name: wheels-linux-${{ matrix.platform.target }}
+          path: crates/breeze-py/dist
+
+  # Similar updates for other platform jobs...

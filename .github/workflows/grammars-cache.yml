@@ -1,0 +1,65 @@
+name: Update Grammar Cache
+
+on:
+  # Run weekly to keep cache fresh
+  schedule:
+    - cron: '0 0 * * 0'
+  # Allow manual trigger
+  workflow_dispatch:
+  # Run when grammars.json changes
+  push:
+    paths:
+      - 'crates/breeze-grammars/grammars.json'
+
+jobs:
+  update-cache:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Set up cache directory
+        run: mkdir -p grammar-cache
+      
+      - name: Clone all grammars
+        run: |
+          cd crates/breeze-grammars
+          python3 - <<'EOF'
+          import json
+          import subprocess
+          import os
+          
+          with open('grammars.json', 'r') as f:
+              config = json.load(f)
+          
+          cache_dir = '../../grammar-cache'
+          os.makedirs(cache_dir, exist_ok=True)
+          
+          for grammar in config['grammars']:
+              name = grammar['name']
+              repo = grammar['repo']
+              if not repo.startswith('http'):
+                  repo = f'https://github.com/{repo}'
+              
+              grammar_dir = os.path.join(cache_dir, name)
+              if not os.path.exists(grammar_dir):
+                  print(f'Cloning {name}...')
+                  cmd = ['git', 'clone', '--depth', '1']
+                  
+                  if 'branch' in grammar:
+                      cmd.extend(['-b', grammar['branch']])
+                  
+                  cmd.extend([repo, grammar_dir])
+                  subprocess.run(cmd, check=True)
+              else:
+                  print(f'{name} already cached')
+          EOF
+      
+      - name: Create cache archive
+        run: tar -czf grammar-cache.tar.gz grammar-cache/
+      
+      - name: Upload grammar cache
+        uses: actions/upload-artifact@v4
+        with:
+          name: grammar-cache
+          path: grammar-cache.tar.gz
+          retention-days: 30

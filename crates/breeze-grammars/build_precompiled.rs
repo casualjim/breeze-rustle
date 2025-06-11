@@ -16,14 +16,65 @@ struct Grammar {
     rev: Option<String>,
     #[serde(default)]
     path: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    symbol_name: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
 struct GrammarsConfig {
     grammars: Vec<Grammar>,
 }
+
+#[derive(Clone)]
+struct BuildTarget {
+    rust_target: &'static str,
+    zig_target: &'static str,
+    platform_dir: &'static str,
+}
+
+const BUILD_TARGETS: &[BuildTarget] = &[
+    // Linux targets
+    BuildTarget {
+        rust_target: "x86_64-unknown-linux-gnu",
+        zig_target: "x86_64-linux-gnu",
+        platform_dir: "linux-x86_64-glibc",
+    },
+    BuildTarget {
+        rust_target: "x86_64-unknown-linux-musl",
+        zig_target: "x86_64-linux-musl",
+        platform_dir: "linux-x86_64-musl",
+    },
+    BuildTarget {
+        rust_target: "aarch64-unknown-linux-gnu",
+        zig_target: "aarch64-linux-gnu",
+        platform_dir: "linux-aarch64-glibc",
+    },
+    BuildTarget {
+        rust_target: "aarch64-unknown-linux-musl",
+        zig_target: "aarch64-linux-musl",
+        platform_dir: "linux-aarch64-musl",
+    },
+    // Windows targets
+    BuildTarget {
+        rust_target: "x86_64-pc-windows-gnu",
+        zig_target: "x86_64-windows-gnu",
+        platform_dir: "windows-x86_64",
+    },
+    BuildTarget {
+        rust_target: "aarch64-pc-windows-gnu",
+        zig_target: "aarch64-windows-gnu",
+        platform_dir: "windows-aarch64",
+    },
+    // macOS targets (can't cross-compile to macOS with zig, but include for native builds)
+    BuildTarget {
+        rust_target: "x86_64-apple-darwin",
+        zig_target: "x86_64-macos-none",
+        platform_dir: "macos-x86_64",
+    },
+    BuildTarget {
+        rust_target: "aarch64-apple-darwin",
+        zig_target: "aarch64-macos-none",
+        platform_dir: "macos-aarch64",
+    },
+];
 
 fn clone_repo(grammar: &Grammar, cache_dir: &Path) -> Result<(), String> {
     let grammar_dir = cache_dir.join(&grammar.name);
@@ -79,121 +130,61 @@ fn clone_repo(grammar: &Grammar, cache_dir: &Path) -> Result<(), String> {
 
 fn main() {
     println!("cargo:rerun-if-changed=grammars.json");
-    println!("cargo:rerun-if-changed=build.rs");
+    println!("cargo:rerun-if-changed=build_precompiled.rs");
     
-    let out_dir = env::var("OUT_DIR").unwrap();
-    let out_path = Path::new(&out_dir);
-    
-    // Check for precompiled binaries first
-    let target = env::var("TARGET").unwrap();
-    let arch = if target.contains("x86_64") {
-        "x86_64"
-    } else if target.contains("aarch64") {
-        "aarch64"
-    } else {
-        // Fall back to building from source for unsupported architectures
-        compile_from_source(out_path);
-        return;
-    };
-    
-    let os = if target.contains("windows") {
-        "windows"
-    } else if target.contains("darwin") {
-        "macos"
-    } else if target.contains("linux") {
-        "linux"
-    } else {
-        // Fall back to building from source for unsupported OS
-        compile_from_source(out_path);
-        return;
-    };
-    
-    // Map to the new platform directory structure
-    let platform_suffix = if target.contains("musl") {
-        "musl"
-    } else if target.contains("linux") {
-        "glibc" 
-    } else {
-        ""
-    };
-    
-    let platform_dir = if platform_suffix.is_empty() {
-        format!("{}-{}", os, arch)
-    } else {
-        format!("{}-{}-{}", os, arch, platform_suffix)
-    };
-    
-    let precompiled_dir = Path::new("precompiled").join(&platform_dir);
-    
-    // If precompiled binaries exist, use them
-    if precompiled_dir.exists() && precompiled_dir.join("grammars.json").exists() {
-        println!("cargo:warning=Using precompiled grammars from {}", precompiled_dir.display());
-        use_precompiled_binaries(&precompiled_dir, out_path);
-        return;
+    // Check if zig is available
+    let use_zig = which::which("zig").is_ok();
+    if !use_zig {
+        println!("cargo:warning=Zig not found, building only for current platform");
+        println!("cargo:warning=Install Zig to enable cross-compilation: https://ziglang.org/download/");
     }
     
-    // Otherwise, compile from source
-    println!("cargo:warning=No precompiled grammars found, building from source");
-    compile_from_source(out_path);
-}
-
-fn use_precompiled_binaries(precompiled_dir: &Path, out_path: &Path) {
-    // Copy all library files
-    let lib_pattern = if cfg!(windows) { "lib" } else { "a" };
-    
-    for entry in fs::read_dir(precompiled_dir).unwrap() {
-        let entry = entry.unwrap();
-        let path = entry.path();
-        
-        // Copy library files
-        if path.extension().map_or(false, |ext| ext == lib_pattern) {
-            let filename = path.file_name().unwrap();
-            let dest = out_path.join(filename);
-            fs::copy(&path, &dest).unwrap();
-            
-            // Tell Cargo where to find the library
-            let lib_name = path.file_stem().unwrap().to_str().unwrap();
-            if lib_name.starts_with("lib") {
-                // Unix-style library
-                println!("cargo:rustc-link-lib=static={}", &lib_name[3..]);
-            } else {
-                // Windows-style library
-                println!("cargo:rustc-link-lib=static={}", lib_name);
-            }
+    // Determine which targets to build
+    let targets_to_build: Vec<BuildTarget> = if use_zig {
+        // Cross-compile to all targets if --all-targets is set
+        if env::var("BREEZE_BUILD_ALL_TARGETS").is_ok() {
+            println!("cargo:warning=Building for all targets with Zig cross-compilation");
+            BUILD_TARGETS.to_vec()
+        } else {
+            // Otherwise just build for current target
+            let target = env::var("TARGET").unwrap();
+            BUILD_TARGETS.iter()
+                .find(|t| t.rust_target == target)
+                .cloned()
+                .map(|t| vec![t])
+                .unwrap_or_else(|| {
+                    println!("cargo:warning=Unknown target {}, building for host only", target);
+                    vec![]
+                })
         }
-    }
-    
-    println!("cargo:rustc-link-search=native={}", out_path.display());
-    
-    // Copy the grammars.rs bindings file
-    if let Ok(bindings) = fs::read_to_string(precompiled_dir.join("grammars.rs")) {
-        fs::write(out_path.join("grammars.rs"), bindings).unwrap();
     } else {
-        // Generate bindings from the grammars.json metadata
-        let grammars: Vec<Grammar> = serde_json::from_str(
-            &fs::read_to_string(precompiled_dir.join("grammars.json"))
-                .expect("Missing grammars.json in precompiled directory")
-        ).expect("Invalid grammars.json");
-        
-        generate_bindings(out_path, &grammars);
-    }
-}
-
-fn compile_from_source(out_path: &Path) {
-    // Set up sccache if available
-    if which::which("sccache").is_ok() {
-        println!("cargo:warning=sccache detected, enabling compilation caching");
-        env::set_var("CC", "sccache cc");
-        env::set_var("CXX", "sccache c++");
-        env::set_var("RUSTC_WRAPPER", "sccache");
-    }
+        // Without zig, only build for current platform
+        vec![]
+    };
+    
+    // If no specific targets, build for host
+    let targets_to_build = if targets_to_build.is_empty() {
+        let target = env::var("TARGET").unwrap();
+        let platform_dir = determine_platform_dir(&target);
+        vec![BuildTarget {
+            rust_target: Box::leak(target.into_boxed_str()),
+            zig_target: "",
+            platform_dir: Box::leak(platform_dir.into_boxed_str()),
+        }]
+    } else {
+        targets_to_build
+    };
+    
+    // Use a temporary directory for building
+    let temp_dir = env::temp_dir().join("breeze-grammars-build");
+    fs::create_dir_all(&temp_dir).expect("Failed to create temp directory");
     
     // Check for external cache directory (for CI)
     let cache_dir = if let Ok(external_cache) = env::var("BREEZE_GRAMMAR_CACHE") {
         println!("cargo:warning=Using external grammar cache: {}", external_cache);
         Path::new(&external_cache).to_path_buf()
     } else {
-        out_path.join("grammar_cache")
+        temp_dir.join("grammar_cache")
     };
     
     fs::create_dir_all(&cache_dir).unwrap();
@@ -204,13 +195,7 @@ fn compile_from_source(out_path: &Path) {
     let config: GrammarsConfig = serde_json::from_str(&config_str)
         .expect("Failed to parse grammars.json");
     
-    println!("cargo:warning=Processing {} grammars", config.grammars.len());
-    
-    // Set parallelism for cc crate
-    let num_cpus = std::thread::available_parallelism()
-        .map(|n| n.get())
-        .unwrap_or(num_cpus::get());
-    env::set_var("CARGO_BUILD_JOBS", num_cpus.to_string());
+    println!("cargo:warning=Processing {} grammars for precompilation", config.grammars.len());
     
     // Phase 1: Clone all repositories in parallel
     println!("cargo:warning=Phase 1: Cloning repositories in parallel");
@@ -256,10 +241,19 @@ fn compile_from_source(out_path: &Path) {
         }
     }
     
-    // Phase 2: Compile all grammars in a single cc::Build invocation
-    println!("cargo:warning=Phase 2: Compiling all grammars with parallel cc");
+    // Phase 2: Build for each target
+    for target in targets_to_build {
+        println!("cargo:warning=Building for target: {}", target.platform_dir);
+        build_for_target(&config, &cache_dir, &target, use_zig);
+    }
+}
+
+fn build_for_target(config: &GrammarsConfig, cache_dir: &Path, target: &BuildTarget, use_zig: bool) {
+    let precompiled_base = Path::new("precompiled");
+    let platform_dir = precompiled_base.join(target.platform_dir);
+    fs::create_dir_all(&platform_dir).expect("Failed to create precompiled directory");
     
-    let mut compiled_grammars: Vec<Grammar> = Vec::new();
+    let mut compiled_grammars = Vec::new();
     let mut failed_grammars = Vec::new();
     
     // Process each grammar and collect all source files
@@ -296,7 +290,7 @@ fn compile_from_source(out_path: &Path) {
         
         // Store build info for this grammar
         all_builds.push((
-            grammar.clone(),
+            grammar.name.clone(),
             parser_c,
             scanner_c,
             scanner_cc,
@@ -307,11 +301,31 @@ fn compile_from_source(out_path: &Path) {
         ));
     }
     
-    // Compile each grammar individually but let cc use parallelism internally
-    for (grammar, parser_c, scanner_c, scanner_cc, has_scanner, _is_cpp, src_dir, grammar_dir) in all_builds {
-        println!("cargo:warning=Compiling grammar: {}", grammar.name);
+    // Set parallelism for cc crate
+    let num_cpus = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(num_cpus::get());
+    env::set_var("CARGO_BUILD_JOBS", num_cpus.to_string());
+    
+    // Compile each grammar to the precompiled directory
+    for (name, parser_c, scanner_c, scanner_cc, has_scanner, _is_cpp, src_dir, grammar_dir) in all_builds {
+        println!("cargo:warning=Compiling grammar: {} for {}", name, target.platform_dir);
         
         let mut build = cc::Build::new();
+        
+        // Configure for cross-compilation with zig
+        if use_zig && !target.zig_target.is_empty() {
+            build.compiler("zig");
+            build.target(target.rust_target);
+            // Add zig-specific flags
+            build.flag("-target");
+            build.flag(target.zig_target);
+            // Use zig's cross-compilation capabilities
+            env::set_var("CC", "zig cc");
+            env::set_var("CXX", "zig c++");
+            env::set_var("AR", "zig ar");
+        }
+        
         build.include(&src_dir);
         build.include(&grammar_dir);
         
@@ -336,7 +350,15 @@ fn compile_from_source(out_path: &Path) {
         build.opt_level(3);
         build.flag_if_supported("-fno-exceptions");
         
-        // Additional optimization flags for maximum performance
+        // Additional optimization flags
+        if use_zig && !target.zig_target.is_empty() {
+            // Zig-specific optimizations
+            build.flag_if_supported("-O3");  // Redundant with opt_level but ensures it's passed
+            build.flag_if_supported("-flto");  // Link-time optimization
+            build.flag_if_supported("-march=native");  // Won't work for cross-compile, but zig ignores it properly
+        }
+        
+        // General optimization flags that work with both zig and native compilers
         build.flag_if_supported("-funroll-loops");
         build.flag_if_supported("-fomit-frame-pointer");
         build.flag_if_supported("-ffast-math");  // Safe for parser code
@@ -350,21 +372,19 @@ fn compile_from_source(out_path: &Path) {
         build.flag_if_supported("-fipa-pta");
         build.flag_if_supported("-fdevirtualize-at-ltrans");
         
-        // If using sccache, it handles LTO caching well
-        if which::which("sccache").is_ok() {
-            build.flag_if_supported("-flto");
-        }
+        // Set output directory to precompiled platform directory
+        build.out_dir(&platform_dir);
         
         // Compile the grammar
         match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            build.compile(&format!("tree-sitter-{}", grammar.name));
+            build.compile(&format!("tree-sitter-{}", name));
         })) {
             Ok(_) => {
-                compiled_grammars.push(grammar.clone());
+                compiled_grammars.push(name);
             }
             Err(_) => {
-                eprintln!("Failed to compile {}", grammar.name);
-                failed_grammars.push(grammar.name.clone());
+                eprintln!("Failed to compile {}", name);
+                failed_grammars.push(name);
             }
         }
     }
@@ -374,16 +394,48 @@ fn compile_from_source(out_path: &Path) {
     }
     
     // Sort for consistent output
-    compiled_grammars.sort_by(|a, b| a.name.cmp(&b.name));
+    compiled_grammars.sort();
     
-    println!("cargo:warning=Successfully compiled {} grammars", compiled_grammars.len());
+    println!("cargo:warning=Successfully compiled {} grammars to {}", compiled_grammars.len(), platform_dir.display());
     
-    // Generate bindings
-    generate_bindings(out_path, &compiled_grammars);
+    // Save metadata about compiled grammars
+    let metadata = serde_json::to_string_pretty(&compiled_grammars)
+        .expect("Failed to serialize grammar list");
+    fs::write(platform_dir.join("grammars.json"), metadata)
+        .expect("Failed to write grammars.json");
+    
+    // Generate bindings file
+    generate_bindings(&platform_dir, &compiled_grammars);
 }
 
-fn generate_bindings(out_path: &Path, compiled_grammars: &[Grammar]) {
-    let bindings_path = out_path.join("grammars.rs");
+fn determine_platform_dir(target: &str) -> String {
+    let arch = if target.contains("x86_64") {
+        "x86_64"
+    } else if target.contains("aarch64") {
+        "aarch64"
+    } else {
+        "unknown"
+    };
+    
+    let os = if target.contains("windows") {
+        "windows"
+    } else if target.contains("darwin") {
+        "macos"
+    } else if target.contains("linux") {
+        if target.contains("musl") {
+            "linux-musl"
+        } else {
+            "linux-glibc"
+        }
+    } else {
+        "unknown"
+    };
+    
+    format!("{}-{}", os, arch)
+}
+
+fn generate_bindings(platform_dir: &Path, compiled_grammars: &[String]) {
+    let bindings_path = platform_dir.join("grammars.rs");
     let mut bindings = String::new();
     
     bindings.push_str("// Auto-generated grammar bindings\n\n");
@@ -391,13 +443,11 @@ fn generate_bindings(out_path: &Path, compiled_grammars: &[Grammar]) {
     bindings.push_str("use tree_sitter_language::LanguageFn;\n\n");
     
     // Generate extern declarations
-    for grammar in compiled_grammars {
-        let fn_name = if let Some(symbol) = &grammar.symbol_name {
-            symbol.clone()
-        } else if grammar.name == "csharp" {
+    for name in compiled_grammars {
+        let fn_name = if name == "csharp" {
             "c_sharp".to_string()
         } else {
-            grammar.name.replace("-", "_")
+            name.replace("-", "_")
         };
         bindings.push_str(&format!(
             "extern \"C\" {{ fn tree_sitter_{}() -> *const (); }}\n",
@@ -408,15 +458,13 @@ fn generate_bindings(out_path: &Path, compiled_grammars: &[Grammar]) {
     bindings.push_str("\n");
     
     // Generate LanguageFn constants
-    for grammar in compiled_grammars {
-        let fn_name = if let Some(symbol) = &grammar.symbol_name {
-            symbol.clone()
-        } else if grammar.name == "csharp" {
+    for name in compiled_grammars {
+        let fn_name = if name == "csharp" {
             "c_sharp".to_string()
         } else {
-            grammar.name.replace("-", "_")
+            name.replace("-", "_")
         };
-        let const_name = grammar.name.to_uppercase();
+        let const_name = name.to_uppercase();
         bindings.push_str(&format!(
             "pub const {}_LANGUAGE: LanguageFn = unsafe {{ LanguageFn::from_raw(tree_sitter_{}) }};\n",
             const_name, fn_name
@@ -428,11 +476,11 @@ fn generate_bindings(out_path: &Path, compiled_grammars: &[Grammar]) {
     bindings.push_str("    match name {\n");
     
     // Generate match arms
-    for grammar in compiled_grammars {
-        let const_name = grammar.name.to_uppercase();
+    for name in compiled_grammars {
+        let const_name = name.to_uppercase();
         bindings.push_str(&format!(
             "        \"{}\" => Some({}_LANGUAGE.into()),\n",
-            grammar.name, const_name
+            name, const_name
         ));
     }
     
@@ -444,11 +492,11 @@ fn generate_bindings(out_path: &Path, compiled_grammars: &[Grammar]) {
     bindings.push_str("    match name {\n");
     
     // Generate match arms for LanguageFn
-    for grammar in compiled_grammars {
-        let const_name = grammar.name.to_uppercase();
+    for name in compiled_grammars {
+        let const_name = name.to_uppercase();
         bindings.push_str(&format!(
             "        \"{}\" => Some({}_LANGUAGE),\n",
-            grammar.name, const_name
+            name, const_name
         ));
     }
     
@@ -458,8 +506,8 @@ fn generate_bindings(out_path: &Path, compiled_grammars: &[Grammar]) {
     
     bindings.push_str("pub fn available_grammars() -> &'static [&'static str] {\n");
     bindings.push_str("    &[\n");
-    for grammar in compiled_grammars {
-        bindings.push_str(&format!("        \"{}\",\n", grammar.name));
+    for name in compiled_grammars {
+        bindings.push_str(&format!("        \"{}\",\n", name));
     }
     bindings.push_str("    ]\n");
     bindings.push_str("}\n");
