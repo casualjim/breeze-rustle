@@ -89,6 +89,8 @@ impl ProjectChunk {
 
 #[cfg(test)]
 mod tests {
+    use crate::languages;
+
     use super::*;
     use tree_sitter::{Language, Parser};
     
@@ -120,7 +122,7 @@ mod tests {
         
         // Parse with tree-sitter (using rust parser as example)
         let mut parser = Parser::new();
-        let lang: Language = tree_sitter_rust::LANGUAGE.into();
+        let lang: Language = languages::get_language("rust").unwrap().into();
         parser.set_language(&lang).unwrap();
 
         let tree = parser.parse(source, None).unwrap();

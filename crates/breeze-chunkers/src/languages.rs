@@ -46,13 +46,25 @@ mod tests {
         let languages = supported_languages();
         assert!(!languages.is_empty());
         
-        // We now have 5 languages
-        assert_eq!(languages.len(), 5);
+        // We now have 163 languages from breeze-grammars
+        assert_eq!(languages.len(), 163);
+        
+        // Verify core languages are present
         assert!(languages.contains(&"python"));
         assert!(languages.contains(&"rust"));
         assert!(languages.contains(&"javascript"));
         assert!(languages.contains(&"typescript"));
         assert!(languages.contains(&"go"));
+        
+        // Verify additional languages
+        assert!(languages.contains(&"java"));
+        assert!(languages.contains(&"cpp"));
+        assert!(languages.contains(&"c"));
+        assert!(languages.contains(&"csharp"));
+        assert!(languages.contains(&"ruby"));
+        assert!(languages.contains(&"html"));
+        assert!(languages.contains(&"css"));
+        assert!(languages.contains(&"sql"));
     }
 
     #[test]

@@ -84,22 +84,62 @@ fn visit_node<'a>(cursor: &mut TreeCursor<'a>, best_node: &mut Node<'a>, start_b
 fn extract_node_name(node: &Node, content: &str) -> Option<String> {
     // Common patterns for different node types
     match node.kind() {
+        // Functions and methods
         "function_declaration" | "function_definition" | "method_definition" | 
-        "function_item" | "function" => {
+        "function_item" | "function" | "method_declaration" => {
             find_child_by_kind(node, "identifier")
                 .or_else(|| find_child_by_kind(node, "property_identifier"))
                 .map(|n| n.utf8_text(content.as_bytes()).unwrap_or("").to_string())
         }
+        
+        // Classes and similar constructs
         "class_declaration" | "class_definition" | "class" => {
             find_child_by_kind(node, "identifier")
                 .or_else(|| find_child_by_kind(node, "type_identifier"))
                 .map(|n| n.utf8_text(content.as_bytes()).unwrap_or("").to_string())
         }
-        "struct_item" => {
-            // Rust struct
-            find_child_by_kind(node, "type_identifier")
+        
+        // Interfaces and traits (conceptually equivalent - important block-level constructs)
+        "interface_declaration" | "trait_item" | "trait_definition" => {
+            find_child_by_kind(node, "identifier")
+                .or_else(|| find_child_by_kind(node, "type_identifier"))
                 .map(|n| n.utf8_text(content.as_bytes()).unwrap_or("").to_string())
         }
+        
+        // Enums (medium priority - 4 languages)
+        "enum_declaration" | "enum_specifier" => {
+            find_child_by_kind(node, "identifier")
+                .or_else(|| find_child_by_kind(node, "type_identifier"))
+                .map(|n| n.utf8_text(content.as_bytes()).unwrap_or("").to_string())
+        }
+        
+        // Structs (medium priority - multiple languages)
+        "struct_item" | "struct_declaration" | "struct_specifier" => {
+            find_child_by_kind(node, "type_identifier")
+                .or_else(|| find_child_by_kind(node, "identifier"))
+                .map(|n| n.utf8_text(content.as_bytes()).unwrap_or("").to_string())
+        }
+        
+        // Constructors (medium priority - 2 languages)
+        "constructor_declaration" => {
+            find_child_by_kind(node, "identifier")
+                .map(|n| n.utf8_text(content.as_bytes()).unwrap_or("").to_string())
+        }
+        
+        // Properties (medium priority - 3 languages)
+        "property_declaration" => {
+            find_child_by_kind(node, "identifier")
+                .map(|n| n.utf8_text(content.as_bytes()).unwrap_or("").to_string())
+        }
+        
+        // Modules (medium priority - 3 languages)
+        "module" | "module_definition" => {
+            find_child_by_kind(node, "identifier")
+                .or_else(|| find_child_by_kind(node, "module_name"))
+                .map(|n| n.utf8_text(content.as_bytes()).unwrap_or("").to_string())
+        }
+        
+        // Rust-specific
         "impl_item" => {
             // Rust impl block - look for the type being implemented
             if let Some(type_id) = find_child_by_kind(node, "type_identifier") {
@@ -112,6 +152,32 @@ fn extract_node_name(node: &Node, content: &str) -> Option<String> {
                 None
             }
         }
+        "enum_item" | "const_item" | "static_item" | "mod_item" => {
+            find_child_by_kind(node, "identifier")
+                .or_else(|| find_child_by_kind(node, "type_identifier"))
+                .map(|n| n.utf8_text(content.as_bytes()).unwrap_or("").to_string())
+        }
+        
+        // Language-specific function-like constructs
+        "def" | "defn" | "defp" | "defmodule" | "defprotocol" => {
+            find_child_by_kind(node, "identifier")
+                .map(|n| n.utf8_text(content.as_bytes()).unwrap_or("").to_string())
+        }
+        
+        // Additional important block-level constructs
+        "object_definition" | "object_declaration" => {
+            // Scala objects, Kotlin objects
+            find_child_by_kind(node, "identifier")
+                .or_else(|| find_child_by_kind(node, "type_identifier"))
+                .map(|n| n.utf8_text(content.as_bytes()).unwrap_or("").to_string())
+        }
+        
+        "namespace_declaration" | "namespace_definition" => {
+            // C# namespaces, C++ namespaces
+            find_child_by_kind(node, "identifier")
+                .map(|n| n.utf8_text(content.as_bytes()).unwrap_or("").to_string())
+        }
+        
         _ => None
     }
 }
@@ -148,9 +214,39 @@ fn build_scope_path(node: &Node, content: &str) -> Vec<String> {
 /// Check if a node type represents a significant scope
 fn is_significant_scope(kind: &str) -> bool {
     matches!(kind, 
+        // Functions and methods
         "function_declaration" | "function_definition" | "method_definition" |
-        "class_declaration" | "class_definition" | "module" | "impl_item" |
-        "function_item" | "trait_item" | "interface_declaration" | "namespace"
+        "function_item" | "function" | "method_declaration" |
+        
+        // Classes and similar
+        "class_declaration" | "class_definition" | "class" |
+        
+        // Interfaces and traits (conceptually equivalent block-level constructs)
+        "interface_declaration" | "trait_item" | "trait_definition" |
+        
+        // Enums (medium priority)
+        "enum_declaration" | "enum_specifier" |
+        
+        // Structs (medium priority)
+        "struct_item" | "struct_declaration" | "struct_specifier" |
+        
+        // Constructors and properties
+        "constructor_declaration" | "property_declaration" |
+        
+        // Modules (medium priority)
+        "module" | "module_definition" |
+        
+        // Rust-specific
+        "impl_item" | "enum_item" | "const_item" | "static_item" | "mod_item" |
+        
+        // Language-specific constructs
+        "def" | "defn" | "defp" | "defmodule" | "defprotocol" | "defimpl" |
+        
+        // Additional important block-level constructs
+        "object_definition" | "object_declaration" |
+        
+        // Other scopes
+        "namespace" | "namespace_declaration" | "namespace_definition"
     )
 }
 
@@ -213,16 +309,21 @@ fn extract_symbols_recursive(
                 definitions.push(text.to_string());
             }
         }
-        // Function/method definitions
-        "function_declaration" | "function_definition" | "method_definition" => {
+        
+        // Function/method definitions (expanded)
+        "function_declaration" | "function_definition" | "method_definition" | 
+        "function_item" | "function" | "method_declaration" => {
             if let Some(name_node) = find_child_by_kind(&node, "identifier") {
                 if let Ok(text) = name_node.utf8_text(content.as_bytes()) {
                     definitions.push(text.to_string());
                 }
             }
         }
-        // Class/struct definitions
-        "class_declaration" | "class_definition" | "struct_item" => {
+        
+        // Class/struct/interface/trait definitions (expanded)
+        "class_declaration" | "class_definition" | "struct_item" | 
+        "interface_declaration" | "struct_declaration" | "struct_specifier" |
+        "trait_definition" => {
             if let Some(name_node) = find_child_by_kind(&node, "identifier")
                 .or_else(|| find_child_by_kind(&node, "type_identifier")) {
                 if let Ok(text) = name_node.utf8_text(content.as_bytes()) {
@@ -230,14 +331,81 @@ fn extract_symbols_recursive(
                 }
             }
         }
+        
+        // Enum definitions
+        "enum_declaration" | "enum_specifier" | "enum_item" => {
+            if let Some(name_node) = find_child_by_kind(&node, "identifier")
+                .or_else(|| find_child_by_kind(&node, "type_identifier")) {
+                if let Ok(text) = name_node.utf8_text(content.as_bytes()) {
+                    definitions.push(text.to_string());
+                }
+            }
+        }
+        
+        // Constructor and property definitions
+        "constructor_declaration" | "property_declaration" => {
+            if let Some(name_node) = find_child_by_kind(&node, "identifier") {
+                if let Ok(text) = name_node.utf8_text(content.as_bytes()) {
+                    definitions.push(text.to_string());
+                }
+            }
+        }
+        
+        // Module definitions
+        "module" | "module_definition" | "mod_item" => {
+            if let Some(name_node) = find_child_by_kind(&node, "identifier")
+                .or_else(|| find_child_by_kind(&node, "module_name")) {
+                if let Ok(text) = name_node.utf8_text(content.as_bytes()) {
+                    definitions.push(text.to_string());
+                }
+            }
+        }
+        
+        // Rust-specific definitions
+        "const_item" | "static_item" => {
+            if let Some(name_node) = find_child_by_kind(&node, "identifier") {
+                if let Ok(text) = name_node.utf8_text(content.as_bytes()) {
+                    definitions.push(text.to_string());
+                }
+            }
+        }
+        
+        // Language-specific function definitions
+        "def" | "defn" | "defp" | "defmodule" | "defprotocol" | "defimpl" => {
+            if let Some(name_node) = find_child_by_kind(&node, "identifier") {
+                if let Ok(text) = name_node.utf8_text(content.as_bytes()) {
+                    definitions.push(text.to_string());
+                }
+            }
+        }
+        
+        // Additional important definitions
+        "object_definition" | "object_declaration" => {
+            if let Some(name_node) = find_child_by_kind(&node, "identifier")
+                .or_else(|| find_child_by_kind(&node, "type_identifier")) {
+                if let Ok(text) = name_node.utf8_text(content.as_bytes()) {
+                    definitions.push(text.to_string());
+                }
+            }
+        }
+        
+        "namespace_declaration" | "namespace_definition" => {
+            if let Some(name_node) = find_child_by_kind(&node, "identifier") {
+                if let Ok(text) = name_node.utf8_text(content.as_bytes()) {
+                    definitions.push(text.to_string());
+                }
+            }
+        }
+        
         // References (function calls, variable usage)
-        "call_expression" => {
+        "call_expression" | "call" => {
             if let Some(func_node) = node.child(0) {
                 if let Ok(text) = func_node.utf8_text(content.as_bytes()) {
                     references.push(text.to_string());
                 }
             }
         }
+        
         _ => {}
     }
     

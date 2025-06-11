@@ -1,6 +1,17 @@
 [package]
 name = "breeze-napi"
 version = "0.1.0"
-edition = "2024"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib"]
 
 [dependencies]
+breeze-chunkers = { path = "../breeze-chunkers" }
+napi = { version = "2", features = ["async", "tokio_rt"] }
+napi-derive = "2"
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros"] }
+futures = "0.3"
+
+[build-dependencies]
+napi-build = "2"

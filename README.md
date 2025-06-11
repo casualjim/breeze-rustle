@@ -11,7 +11,7 @@ High-performance semantic code chunking for [Breeze](https://github.com/casualji
 - **🚀 Fast**: Written in Rust with async/concurrent processing
 - **🎯 Semantic**: Uses nvim-treesitter queries for accurate code understanding
 - **📦 Zero Dependencies**: Distributed as a wheel - no Rust toolchain needed
-- **🌍 100+ Languages**: Supports any language with tree-sitter + nvim-treesitter
+- **🌍 163 Languages**: Comprehensive language support via tree-sitter grammars
 - **🔍 Rich Metadata**: Extracts scopes, definitions, references, and more
 - **⚡ Async First**: Native Python async/await support
 
@@ -91,14 +91,24 @@ results = await chunker.chunk_files(files)
 
 ### Language Support
 
-Supports 100+ languages through nvim-treesitter queries:
+breeze-rustle supports **163 programming languages** through compiled tree-sitter grammars, making it one of the most language-comprehensive code analysis tools available.
+
+**Supported Language Categories:**
+
+- **Major Languages**: Python, JavaScript, TypeScript, Java, C/C++, C#, Go, Rust, Swift, Kotlin, Ruby, etc.
+- **Web Technologies**: HTML, CSS, Vue, Svelte, Astro, TSX, JSX, SCSS, etc.
+- **Systems Languages**: Zig, V, D, Assembly, CUDA, Verilog, VHDL, etc.
+- **Functional Languages**: Haskell, OCaml, Elm, Clojure, Erlang, Elixir, Scheme, etc.
+- **Domain-Specific**: SQL, GraphQL, Dockerfile, Terraform, Prisma, Protobuf, etc.
+- **Configuration**: YAML, TOML, JSON, XML, HCL, Nix, etc.
+- **And many more specialized languages**
 
 ```python
 # Check supported languages
 languages = SemanticChunker.supported_languages()
-print(f"Supports {len(languages)} languages")
+print(f"Supports {len(languages)} languages")  # 163 languages!
 
-# Check specific language
+# Check specific language (case-insensitive)
 if SemanticChunker.is_language_supported("rust"):
     chunks = await chunker.chunk_file(rust_code, "rust")
 ```
@@ -181,7 +191,7 @@ python tools/fetch-queries
 ├─────────────────────────┤
 │   Embedded Queries      │
 │   - nvim-treesitter     │
-│   - 100+ languages      │
+│   - 163 languages       │
 └─────────────────────────┘
 ```
 
@@ -277,5 +287,6 @@ Contributions welcome! Please:
 
 - [tree-sitter](https://tree-sitter.github.io/) for the parsing framework
 - [nvim-treesitter](https://github.com/nvim-treesitter/nvim-treesitter) for the amazing query files
+- [tree-sitter-language-pack](https://github.com/Goldziher/tree-sitter-language-pack) for the comprehensive grammar curation
 - [PyO3](https://pyo3.rs/) for Rust-Python bindings
 - [smol](https://github.com/smol-rs/smol) for the async runtime

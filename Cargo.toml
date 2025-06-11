@@ -18,3 +18,4 @@ tiktoken-rs = "0.7"
 tree-sitter = "0.25"
 tree-sitter-language = "0.1.5"
 
+tokio = { version = "1", features = ["rt", "macros", "fs", "sync"] }

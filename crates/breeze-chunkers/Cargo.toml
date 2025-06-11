@@ -17,23 +17,6 @@ tiktoken-rs = { workspace = true }
 
 tree-sitter = { workspace = true }
 tree-sitter-language = { workspace = true }
-tree-sitter-python = "0.23"
-tree-sitter-javascript = "0.23"
-tree-sitter-typescript = "0.23"
-tree-sitter-java = "0.23"
-tree-sitter-cpp = "0.23"
-tree-sitter-c = "0.24"
-tree-sitter-c-sharp = "0.23"
-tree-sitter-go = "0.23"
-tree-sitter-rust = "0.24"
-tree-sitter-ruby = "0.23"
-# tree-sitter-php = "0.23"  # PHP breaks everything
-tree-sitter-swift = "0.7"
-# tree-sitter-kotlin = "0.3"  # Uses incompatible tree-sitter 0.19
-tree-sitter-scala = "0.24"
-# tree-sitter-sql = "0.0.2"    # Uses incompatible tree-sitter 0.20
-tree-sitter-bash = "0.25"
-tree-sitter-r = "1.2"
 
 # Error handling
 thiserror = "2.0"

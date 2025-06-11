@@ -73,5 +73,5 @@ docs/_build/
 
 # Local benchmarks with hardcoded paths
 benchmarks/
-test_*.py
+/test_*.py
 /notused

@@ -50,39 +50,69 @@ mod tests {
     }
     
     #[test]
-    fn test_new_languages() {
-        // Test that all our new languages are available
-        let languages = ["python", "rust", "javascript", "typescript", "go"];
+    fn test_expanded_language_support() {
+        // Test that we have all 44 languages
+        let all_languages = supported_languages();
+        assert!(
+            all_languages.len() >= 44,
+            "Should have at least 44 languages, got {}",
+            all_languages.len()
+        );
         
-        for lang in &languages {
+        // Test core languages (top 10)
+        let core_languages = [
+            "python", "javascript", "java", "cpp", "c", 
+            "csharp", "typescript", "sql", "php", "go"
+        ];
+        
+        for lang in &core_languages {
             assert!(
                 is_language_supported(lang),
                 "{} should be supported",
                 lang
             );
-            
-            let language = get_language(lang);
+        }
+        
+        // Test web languages including the ones that were missing
+        let web_languages = ["html", "css", "tsx"];
+        for lang in &web_languages {
             assert!(
-                language.is_some(),
-                "{} language should be loaded",
-                lang
-            );
-            
-            let language_fn = get_language_fn(lang);
-            assert!(
-                language_fn.is_some(),
-                "{} LanguageFn should be loaded",
+                is_language_supported(lang),
+                "{} should be supported",
                 lang
             );
         }
         
-        // Verify we have at least these 5 languages
-        let all_languages = supported_languages();
-        assert!(
-            all_languages.len() >= 5,
-            "Should have at least 5 languages, got {}",
-            all_languages.len()
-        );
+        // Test popular languages (11-20)
+        let popular_languages = [
+            "rust", "swift", "kotlin", "ruby", "r",
+            "bash", "scala", "dart", "powershell"
+        ];
+        
+        for lang in &popular_languages {
+            assert!(
+                is_language_supported(lang),
+                "{} should be supported",
+                lang
+            );
+        }
+        
+        // Test that all languages can be loaded
+        for lang_name in all_languages {
+            let language = get_language(lang_name);
+            assert!(
+                language.is_some(),
+                "{} language should be loaded",
+                lang_name
+            );
+            
+            let language_fn = get_language_fn(lang_name);
+            assert!(
+                language_fn.is_some(),
+                "{} LanguageFn should be loaded",
+                lang_name
+            );
+        }
     }
     
     #[test]
@@ -94,6 +124,11 @@ mod tests {
             ("javascript", "function hello() {}"),
             ("typescript", "function hello(): void {}"),
             ("go", "func main() {}"),
+            ("c", "int main() { return 0; }"),
+            ("cpp", "int main() { return 0; }"),
+            ("java", "public class Main { public static void main(String[] args) {} }"),
+            ("ruby", "def hello\n  puts 'hello'\nend"),
+            ("html", "<html><body>Hello</body></html>"),
         ];
         
         for (lang_name, code) in test_cases {
