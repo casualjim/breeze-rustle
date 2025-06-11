@@ -88,12 +88,22 @@ jobs:
         uses: taiki-e/install-action@v2
         with:
           tool: nextest
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
       - name: Run Rust tests
         run: |
           cargo nextest run
       - name: Run Python tests
         run: |
           cd crates/breeze-py && uv run --python ../../.venv pytest -v
+      - name: Install Node.js dependencies
+        run: |
+          cd crates/breeze-napi && npm install
+      - name: Run Node.js tests
+        run: |
+          cd crates/breeze-napi && npm run test:all
 
   linux:
     runs-on: ${{ matrix.platform.runner }}
@@ -251,6 +261,102 @@ jobs:
         with:
           name: wheels-sdist
           path: crates/breeze-py/dist
+
+  build-node:
+    runs-on: ${{ matrix.settings.host }}
+    needs: test
+    strategy:
+      fail-fast: false
+      matrix:
+        settings:
+          - host: macos-14
+            target: aarch64-apple-darwin
+            build: |
+              npm run build
+              strip -x *.node
+          - host: macos-13
+            target: x86_64-apple-darwin
+            build: |
+              npm run build
+              strip -x *.node
+          - host: windows-latest
+            build: npm run build
+            target: x86_64-pc-windows-msvc
+          - host: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            build: |
+              npm run build
+              strip *.node
+          - host: ubuntu-22.04
+            target: aarch64-unknown-linux-gnu
+            build: |
+              npm run build
+              aarch64-linux-gnu-strip *.node
+    name: Build Node.js ${{ matrix.settings.target }}
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Download precompiled grammars
+        uses: actions/download-artifact@v4
+        with:
+          name: precompiled-grammars
+          path: crates/breeze-grammars/precompiled
+        
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+          targets: ${{ matrix.settings.target }}
+          
+      - name: Setup cross compilation (Linux ARM64)
+        if: matrix.settings.target == 'aarch64-unknown-linux-gnu'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu
+          
+      - name: Install dependencies
+        run: cd crates/breeze-napi && npm install
+        
+      - name: Build
+        run: cd crates/breeze-napi && ${{ matrix.settings.build }}
+        env:
+          CARGO_BUILD_TARGET: ${{ matrix.settings.target }}
+          
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: bindings-${{ matrix.settings.target }}
+          path: crates/breeze-napi/*.node
+          if-no-files-found: error
+
+  publish-npm:
+    runs-on: ubuntu-latest
+    needs: build-node
+    if: startsWith(github.ref, 'refs/tags/')
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          registry-url: https://registry.npmjs.org/
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: bindings-*
+          path: crates/breeze-napi/
+          merge-multiple: true
+      - name: Install dependencies
+        run: cd crates/breeze-napi && npm install
+      - name: Publish to NPM
+        run: cd crates/breeze-napi && npm publish
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
   release:
     name: Release

@@ -1,10 +1,17 @@
 {
   "description": "High-performance semantic code chunking for Node.js",
   "devDependencies": {
-    "@napi-rs/cli": "^2.18.4"
+    "@napi-rs/cli": "=3.0.0-alpha.88"
   },
   "engines": {
     "node": ">= 20"
+  },
+  "exports": {
+    ".": {
+      "import": "./index.mjs",
+      "require": "./index.js",
+      "types": "./index.d.ts"
+    }
   },
   "keywords": [
     "code-chunking",
@@ -17,11 +24,11 @@
     "rag"
   ],
   "license": "MIT",
-  "type": "module",
   "main": "index.js",
+  "module": "index.mjs",
   "name": "@breeze/chunkers",
   "napi": {
-    "name": "breeze",
+    "binaryName": "breeze",
     "triples": {
       "additional": [
         "x86_64-pc-windows-msvc",
@@ -43,9 +50,16 @@
   },
   "scripts": {
     "artifacts": "napi artifacts",
-    "build": "napi build --platform --release",
-    "build:debug": "napi build --platform",
+    "build": "napi build --platform --release --js index.native.js --dts index.native.d.ts",
+    "build:debug": "napi build --platform --js index.native.js --dts index.native.d.ts",
     "prepublishOnly": "napi prepublish -t npm",
+    "test": "npm run build:debug && node test/test.js",
+    "test:all": "npm run build:debug && npm run test:js && npm run test:mjs",
+    "test:async-generators": "node test/test-async-generators.js",
+    "test:async-generators:esm": "node test/test-async-generators.mjs",
+    "test:esm": "node test/test-esm.mjs",
+    "test:js": "for f in test/test*.js; do echo \"Running $f\"; node \"$f\" || exit 1; done",
+    "test:mjs": "for f in test/test*.mjs; do echo \"Running $f\"; node \"$f\" || exit 1; done",
     "version": "napi version"
   },
   "types": "index.d.ts",

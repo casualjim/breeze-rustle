@@ -1,4 +1,7 @@
-// Wrapper for the native module that adds async generator support
+// ESM wrapper for the NAPI module with async generator support
+import { createRequire } from 'module';
+
+const require = createRequire(import.meta.url);
 const native = require('./index.native.js');
 
 // Helper to convert our iterator to an async generator
@@ -38,17 +41,21 @@ async function* walkProject(path, maxChunkSize, tokenizer, hfModel, maxParallel)
   yield* makeAsyncGenerator(iterator);
 }
 
-// Only export our wrapped interface
-module.exports = {
-  // Re-export only the enums/constants users need
-  TokenizerType: native.TokenizerType,
-  ChunkType: native.ChunkType,
-  
-  // Re-export language utility functions
-  supportedLanguages: native.supportedLanguages,
-  isLanguageSupported: native.isLanguageSupported,
-  
-  // Export our wrapped versions
+// Re-export only the enums/constants users need
+export const { TokenizerType, ChunkType } = native;
+
+// Re-export language utility functions
+export const { supportedLanguages, isLanguageSupported } = native;
+
+// Export our wrapped versions
+export { SemanticChunker, walkProject };
+
+// Also export as default for convenience
+export default {
+  TokenizerType,
+  ChunkType,
+  supportedLanguages,
+  isLanguageSupported,
   SemanticChunker,
   walkProject,
 };

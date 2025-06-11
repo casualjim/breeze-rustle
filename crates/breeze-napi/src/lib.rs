@@ -1,7 +1,6 @@
 use breeze_chunkers::{
     ChunkMetadata, Chunk as RustChunk, ProjectChunk as RustProjectChunk,
     InnerChunker, Tokenizer as RustTokenizer,
-    supported_languages, is_language_supported,
     walk_project as rust_walk_project, WalkOptions,
 };
 
@@ -9,7 +8,7 @@ use napi::bindgen_prelude::*;
 use napi_derive::napi;
 use std::sync::Arc;
 use futures::StreamExt;
-use napi::threadsafe_function::{ErrorStrategy, ThreadsafeFunction, ThreadsafeFunctionCallMode};
+use tokio::sync::{mpsc, Mutex};
 
 #[napi]
 pub enum TokenizerType {
@@ -19,6 +18,7 @@ pub enum TokenizerType {
 }
 
 #[napi]
+#[derive(Clone)]
 pub enum ChunkType {
     Semantic,
     Text,
@@ -103,6 +103,93 @@ impl From<RustProjectChunk> for ProjectChunkJs {
     }
 }
 
+// Result type for channels
+type ChunkResult<T> = std::result::Result<T, String>;
+
+// Result type for iterator next() method - Semantic chunks
+#[napi(object)]
+pub struct SemanticChunkIteratorResult {
+    pub done: bool,
+    pub value: Option<SemanticChunkJs>,
+}
+
+// Result type for iterator next() method - Project chunks
+#[napi(object)]
+pub struct ProjectChunkIteratorResult {
+    pub done: bool,
+    pub value: Option<ProjectChunkJs>,
+}
+
+// Iterator wrapper for semantic chunks
+#[napi]
+pub struct SemanticChunkIterator {
+    receiver: Arc<Mutex<mpsc::Receiver<ChunkResult<SemanticChunkJs>>>>,
+}
+
+#[napi]
+impl SemanticChunkIterator {
+    /// Get the next chunk from the iterator
+    #[napi]
+    pub async fn next(&self) -> Result<SemanticChunkIteratorResult> {
+        let mut receiver = self.receiver.lock().await;
+        
+        match receiver.recv().await {
+            Some(Ok(chunk)) => Ok(SemanticChunkIteratorResult {
+                done: false,
+                value: Some(chunk),
+            }),
+            Some(Err(e)) => Err(Error::new(Status::GenericFailure, e)),
+            None => Ok(SemanticChunkIteratorResult {
+                done: true,
+                value: None,
+            }),
+        }
+    }
+}
+
+// Language support functions
+/// Get list of supported languages
+#[napi]
+pub fn supported_languages() -> Vec<String> {
+    breeze_chunkers::supported_languages()
+        .into_iter()
+        .map(|s| s.to_string())
+        .collect()
+}
+
+/// Check if a language is supported (case-insensitive)
+#[napi]
+pub fn is_language_supported(language: String) -> bool {
+    breeze_chunkers::is_language_supported(&language)
+}
+
+// Iterator wrapper for project chunks
+#[napi]
+pub struct ProjectChunkIterator {
+    receiver: Arc<Mutex<mpsc::Receiver<ChunkResult<ProjectChunkJs>>>>,
+}
+
+#[napi]
+impl ProjectChunkIterator {
+    /// Get the next chunk from the iterator
+    #[napi]
+    pub async fn next(&self) -> Result<ProjectChunkIteratorResult> {
+        let mut receiver = self.receiver.lock().await;
+        
+        match receiver.recv().await {
+            Some(Ok(chunk)) => Ok(ProjectChunkIteratorResult {
+                done: false,
+                value: Some(chunk),
+            }),
+            Some(Err(e)) => Err(Error::new(Status::GenericFailure, e)),
+            None => Ok(ProjectChunkIteratorResult {
+                done: true,
+                value: None,
+            }),
+        }
+    }
+}
+
 #[napi]
 pub struct SemanticChunker {
     inner: Arc<InnerChunker>,
@@ -142,100 +229,85 @@ impl SemanticChunker {
             inner: Arc::new(inner),
         })
     }
-    
-    #[napi(ts_args_type = "content: string, language: string, filePath: string | undefined, onChunk: (chunk: SemanticChunkJs) => void, onError: (error: Error) => void, onComplete: () => void")]
-    pub fn chunk_code(
+
+    /// Chunk code and return an async iterator
+    #[napi]
+    pub async fn chunk_code(
         &self,
         content: String,
         language: String,
         file_path: Option<String>,
-        on_chunk: ThreadsafeFunction<SemanticChunkJs, ErrorStrategy::CalleeHandled>,
-        on_error: ThreadsafeFunction<String, ErrorStrategy::CalleeHandled>,
-        on_complete: ThreadsafeFunction<(), ErrorStrategy::CalleeHandled>,
-    ) -> Result<()> {
+    ) -> Result<SemanticChunkIterator> {
         let chunker = self.inner.clone();
+        let stream = chunker.chunk_code(content, language, file_path);
         
+        // Create a channel for the iterator
+        let (tx, rx) = mpsc::channel(100);
+        
+        // Spawn a task to process the stream
         tokio::spawn(async move {
-            let mut stream = Box::pin(chunker.chunk_code(content, language, file_path));
-            
+            let mut stream = Box::pin(stream);
             while let Some(result) = stream.next().await {
-                match result {
-                    Ok(chunk) => {
-                        let js_chunk = chunk.into();
-                        if on_chunk.call(Ok(js_chunk), ThreadsafeFunctionCallMode::NonBlocking).is_err() {
-                            break;
-                        }
-                    }
-                    Err(e) => {
-                        let _ = on_error.call(Ok(e.to_string()), ThreadsafeFunctionCallMode::NonBlocking);
-                        break;
-                    }
+                let send_result = match result {
+                    Ok(chunk) => tx.send(Ok(chunk.into())).await,
+                    Err(e) => tx.send(Err(format!("Chunk error: {:?}", e))).await,
+                };
+                if send_result.is_err() {
+                    // Receiver dropped
+                    break;
                 }
             }
-            
-            let _ = on_complete.call(Ok(()), ThreadsafeFunctionCallMode::NonBlocking);
         });
         
-        Ok(())
+        Ok(SemanticChunkIterator {
+            receiver: Arc::new(Mutex::new(rx)),
+        })
     }
-    
-    #[napi(ts_args_type = "content: string, filePath: string | undefined, onChunk: (chunk: SemanticChunkJs) => void, onError: (error: Error) => void, onComplete: () => void")]
-    pub fn chunk_text(
+
+    /// Chunk text and return an async iterator
+    #[napi]
+    pub async fn chunk_text(
         &self,
         content: String,
         file_path: Option<String>,
-        on_chunk: ThreadsafeFunction<SemanticChunkJs, ErrorStrategy::CalleeHandled>,
-        on_error: ThreadsafeFunction<String, ErrorStrategy::CalleeHandled>,
-        on_complete: ThreadsafeFunction<(), ErrorStrategy::CalleeHandled>,
-    ) -> Result<()> {
+    ) -> Result<SemanticChunkIterator> {
         let chunker = self.inner.clone();
+        let stream = chunker.chunk_text(content, file_path);
         
+        // Create a channel for the iterator
+        let (tx, rx) = mpsc::channel(100);
+        
+        // Spawn a task to process the stream
         tokio::spawn(async move {
-            let mut stream = Box::pin(chunker.chunk_text(content, file_path));
-            
+            let mut stream = Box::pin(stream);
             while let Some(result) = stream.next().await {
-                match result {
-                    Ok(chunk) => {
-                        let js_chunk = chunk.into();
-                        if on_chunk.call(Ok(js_chunk), ThreadsafeFunctionCallMode::NonBlocking).is_err() {
-                            break;
-                        }
-                    }
-                    Err(e) => {
-                        let _ = on_error.call(Ok(e.to_string()), ThreadsafeFunctionCallMode::NonBlocking);
-                        break;
-                    }
+                let send_result = match result {
+                    Ok(chunk) => tx.send(Ok(chunk.into())).await,
+                    Err(e) => tx.send(Err(format!("Chunk error: {:?}", e))).await,
+                };
+                if send_result.is_err() {
+                    // Receiver dropped
+                    break;
                 }
             }
-            
-            let _ = on_complete.call(Ok(()), ThreadsafeFunctionCallMode::NonBlocking);
         });
         
-        Ok(())
+        Ok(SemanticChunkIterator {
+            receiver: Arc::new(Mutex::new(rx)),
+        })
     }
-    
-    #[napi]
-    pub fn supported_languages() -> Vec<String> {
-        supported_languages().iter().map(|&s| s.to_string()).collect()
-    }
-    
-    #[napi]
-    pub fn is_language_supported(language: String) -> bool {
-        is_language_supported(&language)
-    }
+
 }
 
-#[napi(ts_args_type = "path: string, maxChunkSize: number | undefined, tokenizer: TokenizerType | undefined, hfModel: string | undefined, maxParallel: number | undefined, onChunk: (chunk: ProjectChunkJs) => void, onError: (error: Error) => void, onComplete: () => void")]
-pub fn walk_project(
+/// Walk a project directory and return an async iterator of chunks
+#[napi]
+pub async fn walk_project(
     path: String,
     max_chunk_size: Option<i32>,
     tokenizer: Option<TokenizerType>,
     hf_model: Option<String>,
     max_parallel: Option<i32>,
-    on_chunk: ThreadsafeFunction<ProjectChunkJs, ErrorStrategy::CalleeHandled>,
-    on_error: ThreadsafeFunction<String, ErrorStrategy::CalleeHandled>,
-    on_complete: ThreadsafeFunction<(), ErrorStrategy::CalleeHandled>,
-) -> Result<()> {
+) -> Result<ProjectChunkIterator> {
     let max_chunk_size = max_chunk_size.unwrap_or(1500) as usize;
     let max_parallel = max_parallel.unwrap_or(8) as usize;
     
@@ -256,8 +328,12 @@ pub fn walk_project(
         }
     };
     
+    // Create a channel for the iterator
+    let (tx, rx) = mpsc::channel(100);
+    
+    // Spawn a task to process the stream
     tokio::spawn(async move {
-        let mut stream = rust_walk_project(
+        let stream = rust_walk_project(
             path,
             WalkOptions {
                 max_chunk_size,
@@ -266,25 +342,21 @@ pub fn walk_project(
                 ..Default::default()
             },
         );
+        let mut stream = Box::pin(stream);
         
         while let Some(result) = stream.next().await {
-            match result {
-                Ok(chunk) => {
-                    let js_chunk = chunk.into();
-                    if on_chunk.call(Ok(js_chunk), ThreadsafeFunctionCallMode::NonBlocking).is_err() {
-                        break;
-                    }
-                }
-                Err(e) => {
-                    let _ = on_error.call(Ok(e.to_string()), ThreadsafeFunctionCallMode::NonBlocking);
-                    break;
-                }
+            let send_result = match result {
+                Ok(chunk) => tx.send(Ok(chunk.into())).await,
+                Err(e) => tx.send(Err(format!("Chunk error: {:?}", e))).await,
+            };
+            if send_result.is_err() {
+                // Receiver dropped
+                break;
             }
         }
-        
-        let _ = on_complete.call(Ok(()), ThreadsafeFunctionCallMode::NonBlocking);
     });
     
-    Ok(())
+    Ok(ProjectChunkIterator {
+        receiver: Arc::new(Mutex::new(rx)),
+    })
 }
-
