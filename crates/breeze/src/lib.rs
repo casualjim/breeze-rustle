@@ -1,4 +1,8 @@
 mod embeddings;
 mod models;
-pub mod app;
+mod app;
 mod config;
+mod pipeline;
+mod walker;
+
+mod testing;
