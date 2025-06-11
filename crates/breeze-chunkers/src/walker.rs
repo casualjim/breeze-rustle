@@ -13,6 +13,7 @@ use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 
 /// Options for walking a project directory
+#[derive(Debug, Clone)]
 pub struct WalkOptions {
     pub max_chunk_size: usize,
     pub tokenizer: Tokenizer,
