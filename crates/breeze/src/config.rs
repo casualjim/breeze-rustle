@@ -46,9 +46,13 @@ fn default_model() -> String {
 
 fn default_device() -> String {
   #[cfg(target_os = "macos")]
-  {"mps".to_string()}
+  {
+    "mps".to_string()
+  }
   #[cfg(not(target_os = "macos"))]
-  {"cpu".to_string()}
+  {
+    "cpu".to_string()
+  }
 }
 
 fn default_max_chunk_size() -> usize {

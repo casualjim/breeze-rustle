@@ -1,16 +1,16 @@
-mod embeddings;
-mod models;
-mod app;
-mod config;
-mod pipeline;
-mod walker;
-mod batcher;
 mod aggregator;
+mod app;
+mod batcher;
+mod config;
 mod converter;
-mod sinks;
+mod embeddings;
 mod indexer;
+mod models;
+mod pipeline;
+mod sinks;
+mod walker;
 
 mod testing;
 
-pub use config::Config;
 pub use app::App;
+pub use config::Config;
