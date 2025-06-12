@@ -1,218 +1,108 @@
-use candle_core::{DType, Device};
-use candle_nn::VarBuilder;
-use candle_transformers::models::bert::{BertModel, Config as BertConfig};
-use candle_transformers::models::jina_bert::{BertModel as JinaBertModel, Config as JinaConfig};
-use hf_hub::{Repo, RepoType, api::tokio::Api};
-use std::sync::Arc;
-use tokenizers::Tokenizer;
+use std::path::{Path, PathBuf};
+use hf_hub::{api::tokio::Api, Repo, RepoType};
+use text_embeddings_backend_core::{ModelType, Pool};
+use tracing::info;
 
-use crate::embeddings::{
-  EmbeddingError,
-  models::{ModelType, SentenceTransformerModel},
-  sentence_transformer::SentenceTransformerEmbedder,
-};
+use super::tei::TEIEmbedder;
+use super::EmbeddingError;
 
-/// Load a sentence transformer embedder
-pub async fn load_embedder(
-  model_type: ModelType,
-) -> Result<SentenceTransformerEmbedder, EmbeddingError> {
-  let device = select_device()?;
-  load_embedder_with_device(model_type, device).await
+/// Load a TEI embedder from a model path or HuggingFace model ID
+pub async fn load_tei_embedder(
+    model_id_or_path: &str,
+    dtype: &str,
+    pooling: Option<Pool>,
+) -> Result<TEIEmbedder, EmbeddingError> {
+    let model_path = resolve_model_path(model_id_or_path).await?;
+    
+    // Default to mean pooling if not specified
+    let pooling = pooling.unwrap_or(Pool::Mean);
+    let model_type = ModelType::Embedding(pooling);
+    
+    info!("Loading TEI embedder from: {:?} with dtype: {}", model_path, dtype);
+    TEIEmbedder::new(model_path, dtype, model_type).await
 }
 
-/// Load a sentence transformer embedder with a specific device
-pub async fn load_embedder_with_device(
-  model_type: ModelType,
-  device: Device,
-) -> Result<SentenceTransformerEmbedder, EmbeddingError> {
-  // Create API client
-  let api = Api::new()
-    .map_err(|e| EmbeddingError::ModelLoadError(format!("Failed to create API: {}", e)))?;
-
-  let repo = api.repo(Repo::new(
-    model_type.model_id().to_string(),
-    RepoType::Model,
-  ));
-
-  // Load config
-  let config_filename = repo
-    .get("config.json")
-    .await
-    .map_err(|e| EmbeddingError::ModelLoadError(format!("Failed to download config: {}", e)))?;
-
-  let config_str = std::fs::read_to_string(&config_filename)
-    .map_err(|e| EmbeddingError::ModelLoadError(format!("Failed to read config: {}", e)))?;
-
-  // Load model weights
-  let weights_filename = repo
-    .get("model.safetensors")
-    .await
-    .map_err(|e| EmbeddingError::ModelLoadError(format!("Failed to download weights: {}", e)))?;
-
-  let weights = candle_core::safetensors::load(&weights_filename, &device)
-    .map_err(|e| EmbeddingError::ModelLoadError(format!("Failed to load weights: {}", e)))?;
-  let vb = VarBuilder::from_tensors(weights, DType::F32, &device);
-
-  // Load tokenizer
-  let tokenizer_filename = repo
-    .get("tokenizer.json")
-    .await
-    .map_err(|e| EmbeddingError::ModelLoadError(format!("Failed to download tokenizer: {}", e)))?;
-
-  let tokenizer = Tokenizer::from_file(&tokenizer_filename)
-    .map_err(|e| EmbeddingError::ModelLoadError(format!("Failed to load tokenizer: {}", e)))?;
-
-  // Create model based on type and extract max sequence length and hidden size
-  let (model, max_seq_length, hidden_size) = match model_type {
-    ModelType::Granite | ModelType::AllMiniLM => {
-      let config: BertConfig = serde_json::from_str(&config_str)
-        .map_err(|e| EmbeddingError::ModelLoadError(format!("Failed to parse config: {}", e)))?;
-      let max_seq_length = config.max_position_embeddings;
-      let hidden_size = config.hidden_size;
-      let model = BertModel::load(vb, &config)
-        .map_err(|e| EmbeddingError::ModelLoadError(format!("Failed to load model: {}", e)))?;
-      (
-        SentenceTransformerModel::Bert(model),
-        max_seq_length,
-        hidden_size,
-      )
+/// Resolve a model ID or path to a local directory
+/// If it's a local path that exists, return it
+/// Otherwise, download from HuggingFace Hub
+async fn resolve_model_path(model_id_or_path: &str) -> Result<PathBuf, EmbeddingError> {
+    let path = Path::new(model_id_or_path);
+    
+    if path.exists() && path.is_dir() {
+        Ok(path.to_path_buf())
+    } else {
+        download_model_from_hub(model_id_or_path).await
     }
-    ModelType::JinaCodeV2 => {
-      let config: JinaConfig = serde_json::from_str(&config_str)
-        .map_err(|e| EmbeddingError::ModelLoadError(format!("Failed to parse config: {}", e)))?;
-      let max_seq_length = config.max_position_embeddings;
-      let hidden_size = config.hidden_size;
-      let model = JinaBertModel::new(vb, &config)
-        .map_err(|e| EmbeddingError::ModelLoadError(format!("Failed to load model: {}", e)))?;
-      (
-        SentenceTransformerModel::JinaBert(model),
-        max_seq_length,
-        hidden_size,
-      )
-    }
-  };
-
-  // TODO: Load pooling config from sentence_bert_config.json if available
-  // For now, use mean pooling as default
-  use crate::embeddings::models::PoolingMethod;
-  let pooling_method = PoolingMethod::Mean;
-
-  Ok(SentenceTransformerEmbedder::new(
-    model,
-    Arc::new(tokenizer),
-    device,
-    model_type,
-    max_seq_length,
-    pooling_method,
-    hidden_size,
-  ))
 }
 
-/// Select the best available device
-pub fn select_device() -> Result<Device, EmbeddingError> {
-  // Try CUDA first if available
-  if cfg!(feature = "cuda") {
-    if let Ok(device) = Device::new_cuda(0) {
-      return Ok(device);
-    }
-  }
-
-  // Try Metal Performance Shaders on macOS
-  if cfg!(target_os = "macos") {
-    if let Ok(device) = Device::new_metal(0) {
-      return Ok(device);
-    }
-  }
-
-  // Default to CPU
-  Ok(Device::Cpu)
+/// Download a model from HuggingFace Hub
+async fn download_model_from_hub(model_id: &str) -> Result<PathBuf, EmbeddingError> {
+    info!("Downloading model from HuggingFace Hub: {}", model_id);
+    
+    let api = Api::new()
+        .map_err(|e| EmbeddingError::ModelLoadError(format!("Failed to create HF API: {}", e)))?;
+    
+    let repo = api.repo(Repo::new(model_id.to_string(), RepoType::Model));
+    
+    // Download essential files
+    let config_path = repo
+        .get("config.json")
+        .await
+        .map_err(|e| EmbeddingError::ModelLoadError(format!("Failed to download config.json: {}", e)))?;
+    
+    let _tokenizer_path = repo
+        .get("tokenizer.json")
+        .await
+        .map_err(|e| EmbeddingError::ModelLoadError(format!("Failed to download tokenizer.json: {}", e)))?;
+    
+    // Try to download safetensors first, fallback to pytorch_model.bin
+    let _model_path = match repo.get("model.safetensors").await {
+        Ok(path) => path,
+        Err(_) => {
+            info!("model.safetensors not found, trying pytorch_model.bin");
+            repo.get("pytorch_model.bin")
+                .await
+                .map_err(|e| EmbeddingError::ModelLoadError(format!("Failed to download model weights: {}", e)))?
+        }
+    };
+    
+    // Return the directory containing the downloaded files
+    Ok(config_path.parent().unwrap().to_path_buf())
 }
 
-/// Get device name for display
-pub fn device_name(device: &Device) -> &str {
-  match device {
-    Device::Cpu => "CPU",
-    Device::Cuda(_) => "CUDA",
-    Device::Metal(_) => "Metal (MPS)",
-  }
+/// Get the recommended dtype for a device
+pub fn dtype_for_device(device: &str) -> &'static str {
+    match device {
+        "cuda" => "float16", // Use fp16 for GPU
+        _ => "float32",      // Use fp32 for CPU/Metal
+    }
+}
+
+/// Get the embedding dimension from model config
+pub async fn get_embedding_dim(model_path: &Path) -> Result<usize, EmbeddingError> {
+    let config_path = model_path.join("config.json");
+    let config_str = std::fs::read_to_string(config_path)
+        .map_err(|e| EmbeddingError::ModelLoadError(format!("Failed to read config.json: {}", e)))?;
+    
+    // Parse config to get hidden_size
+    let config: serde_json::Value = serde_json::from_str(&config_str)
+        .map_err(|e| EmbeddingError::ModelLoadError(format!("Failed to parse config.json: {}", e)))?;
+    
+    let hidden_size = config["hidden_size"]
+        .as_u64()
+        .ok_or_else(|| EmbeddingError::ModelLoadError("No hidden_size in config".to_string()))?;
+    
+    Ok(hidden_size as usize)
 }
 
 #[cfg(test)]
 mod tests {
-  use super::*;
-
-  #[test]
-  fn test_device_selection() {
-    let device = select_device().unwrap();
-    match device {
-      Device::Cpu => println!("Using CPU"),
-      Device::Cuda(_) => println!("Using CUDA"),
-      Device::Metal(_) => println!("Using Metal"),
+    use super::*;
+    
+    #[test]
+    fn test_dtype_for_device() {
+        assert_eq!(dtype_for_device("cuda"), "float16");
+        assert_eq!(dtype_for_device("cpu"), "float32");
+        assert_eq!(dtype_for_device("mps"), "float32");
     }
-  }
-
-  #[test]
-  fn test_device_name() {
-    let cpu = Device::Cpu;
-    assert_eq!(device_name(&cpu), "CPU");
-  }
-
-  #[tokio::test]
-  async fn test_load_embedder() {
-    // Try loading a small model
-    let embedder = load_embedder(ModelType::AllMiniLM).await.unwrap();
-
-    // Test that we can embed some text
-    use crate::pipeline::{Embedder, TextBatch};
-    use breeze_chunkers::{Chunk, ChunkMetadata, ProjectChunk, SemanticChunk};
-    use futures_util::stream;
-
-    let chunk = ProjectChunk {
-      file_path: "test.txt".to_string(),
-      chunk: Chunk::Text(SemanticChunk {
-        text: "Hello, world!".to_string(),
-        start_byte: 0,
-        end_byte: 13,
-        start_line: 1,
-        end_line: 1,
-        metadata: ChunkMetadata {
-          node_type: "text".to_string(),
-          node_name: None,
-          language: "text".to_string(),
-          parent_context: None,
-          scope_path: vec![],
-          definitions: vec![],
-          references: vec![],
-        },
-      }),
-    };
-
-    let batch: TextBatch = vec![chunk];
-    let stream = stream::once(async { batch }).boxed();
-    let mut results = embedder.embed(stream);
-
-    use futures_util::StreamExt;
-    let embedding_batch = results.next().await.unwrap();
-    assert_eq!(embedding_batch.len(), 1);
-    assert!(!embedding_batch[0].embeddings.is_empty());
-
-    // Verify embedding dimension matches what the model reports
-    assert_eq!(
-      embedding_batch[0].embeddings.len(),
-      embedder.embedding_dim()
-    );
-
-    // Check normalization
-    let norm: f32 = embedding_batch[0]
-      .embeddings
-      .iter()
-      .map(|x| x * x)
-      .sum::<f32>()
-      .sqrt();
-    assert!(
-      (norm - 1.0).abs() < 0.01,
-      "Embedding should be normalized, norm={}",
-      norm
-    );
-  }
 }

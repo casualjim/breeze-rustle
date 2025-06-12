@@ -1,24 +1,33 @@
 use std::path::Path;
 use std::sync::Arc;
 use tokio::sync::RwLock;
+use tracing::{debug, error, info, instrument};
 
 use crate::config::Config;
 use crate::embeddings::{
-  loader::load_embedder, models::ModelType, sentence_transformer::SentenceTransformerEmbedder,
+    loader::{load_tei_embedder, dtype_for_device},
+    tei::TEIEmbedder,
 };
 use crate::indexer::Indexer;
 use crate::models::CodeDocument;
 
 pub struct App {
   config: Config,
-  embedder: SentenceTransformerEmbedder,
+  embedder: TEIEmbedder,
   table: Arc<RwLock<lancedb::Table>>,
 }
 
 impl App {
   /// Create a new App instance with the given configuration
+  #[instrument(skip(config), fields(database_path = %config.database_path.display(), model = %config.model, table_name = %config.table_name))]
   pub async fn new(config: Config) -> Result<Self, Box<dyn std::error::Error>> {
+    info!("Initializing Breeze app");
+
     // Create LanceDB connection
+    debug!(
+      "Connecting to LanceDB at: {}",
+      config.database_path.display()
+    );
     let connection = lancedb::connect(
       config
         .database_path
@@ -27,30 +36,27 @@ impl App {
     )
     .execute()
     .await?;
+    info!("Set up LanceDB connection");
 
-    // Load embedder based on config
-    let model_type = match config.model.as_str() {
-      "ibm-granite/granite-embedding-125m-english" => ModelType::Granite,
-      "jinaai/jina-embeddings-v2-base-code" => ModelType::JinaCodeV2,
-      "sentence-transformers/all-MiniLM-L6-v2" => ModelType::AllMiniLM,
-      _ => {
-        return Err(
-          format!(
-            "Unsupported local model: {}. Supported models are: {}, {}, {}",
-            config.model,
-            ModelType::Granite.model_id(),
-            ModelType::JinaCodeV2.model_id(),
-            ModelType::AllMiniLM.model_id()
-          )
-          .into(),
-        );
-      }
-    };
-    let embedder = load_embedder(model_type).await?;
+    // Load TEI embedder
+    let dtype = dtype_for_device(&config.device);
+    info!("Loading TEI embedder: {} with dtype: {}", config.model, dtype);
+    
+    let embedder = load_tei_embedder(&config.model, dtype, None).await?;
+    let embedding_dim = embedder.embedding_dim();
+    
+    info!(
+      "Embedder loaded successfully, dimension: {}",
+      embedding_dim
+    );
 
     // Ensure table exists
-    let embedding_dim = embedder.embedding_dim();
+    debug!(
+      "Ensuring table '{}' exists with embedding dimension {}",
+      config.table_name, embedding_dim
+    );
     let table = CodeDocument::ensure_table(&connection, &config.table_name, embedding_dim).await?;
+    info!("Table ready");
 
     Ok(Self {
       config: config.clone(),
@@ -75,6 +81,7 @@ mod tests {
   use tempfile::tempdir;
 
   #[tokio::test]
+  #[ignore] // Ignore for now since we need a real model
   async fn test_app_index() {
     // Create test config
     let mut config = Config::default();

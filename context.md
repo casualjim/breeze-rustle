@@ -38,34 +38,43 @@
 ### Current Design
 
 ```text
-PathWalker → Batcher → Embedder → Aggregator → Sink
+                  ┌─> TEI Embedder (local)    ─┐
+                  │                             │
+PathWalker ────>─├─> Voyage Embedder (remote) ├─> DocumentBuilder → RecordBatchConverter → Sink
+                  │                             │
+                  └─> OpenAI Embedder (remote) ─┘
 ```
 
-### Refined Design (In Progress)
+### Key Design Principles
 
-```text
-Repository → Enhanced Walker → Smart Batcher → Embedder → File Aggregator → LanceDB
-             (with tokenization)  (provider-aware)  (with rate limiting)
-```
+1. **Chunking for Embedder Constraints**: Files are chunked to respect embedder token limits
+2. **Semantic Boundaries**: Chunks split at function/class boundaries, preserving code structure
+3. **File-Level Storage**: Despite chunking, we store one embedding per file via aggregation
+4. **Token Optimization**: Store tokens in chunks to avoid double tokenization
+5. **Multiple Providers**: Support local (TEI), Voyage, and OpenAI embedders
+6. **Aggregation Strategy**: Weighted average by token count (pluggable for future strategies)
 
 ### Key Pipeline Traits
 
 ```rust
 pub trait PathWalker {
-    fn walk(&self, path: &Path) -> BoxStream<ProjectChunk>;
+    fn walk(&self, path: &Path) -> BoxStream<ProjectFile>;
 }
 
-pub trait SmartBatcher {
-    fn batch_with_limits(&self, chunks: BoxStream<ProjectChunk>) -> BoxStream<TokenAwareBatch>;
+pub trait Embedder {
+    fn embed(&self, files: BoxStream<ProjectFile>) -> BoxStream<ProjectFileWithEmbeddings>;
 }
 
-pub trait EmbeddingProvider {
-    async fn embed_batch(&self, texts: &[String]) -> Result<Vec<Vec<f32>>>;
-    fn rate_limiter(&self) -> &dyn RateLimiter;
+pub trait DocumentBuilder {
+    fn build_documents(&self, files: BoxStream<ProjectFileWithEmbeddings>) -> BoxStream<CodeDocument>;
 }
 
-pub trait Aggregator {
-    fn aggregate(&self, embeddings: BoxStream<ChunkWithEmbedding>) -> BoxStream<CodeDocument>;
+pub trait RecordBatchConverter {
+    fn convert(&self, documents: BoxStream<CodeDocument>) -> BoxStream<RecordBatch>;
+}
+
+pub trait Sink {
+    fn sink(&self, batches: BoxStream<RecordBatch>) -> BoxStream<()>;
 }
 ```
 
@@ -73,31 +82,32 @@ pub trait Aggregator {
 
 ### Provider Types
 
-1. **HTTP Providers** (via async_openai)
+1. **Local Provider (TEI)**
+   - Text-embeddings-inference backend
+   - 20+ model architectures (BERT, DistilBERT, JinaBERT, MPNet, etc.)
+   - Hardware acceleration (CUDA, Metal, MKL)
+   - Token optimization via pre-tokenized input
+
+2. **Remote Providers** (via async_openai)
    - OpenAI: Standard limits, text-embedding-3-small/large
    - Voyage: High limits (3M tokens/min), voyage-code-2
    - Built-in retry logic and error handling
 
-2. **Local Provider**
-   - Sentence transformers via candle
-   - Device optimization (CPU/MPS/CUDA)
-   - Memory-efficient batch processing
+### Processing Strategy
 
-### Smart Batching Strategy
-
-| Provider | Batch Size | Max Tokens | Rate Limit |
-|----------|------------|------------|------------|
-| Voyage   | 128 items  | 120k       | 3M/min     |
-| OpenAI   | 50 items   | 8k         | Varies     |
-| Local    | Device-optimized | N/A   | N/A        |
+| Provider | Token Handling | Optimization | Hardware |
+|----------|---------------|--------------|----------|
+| TEI      | Pre-tokenized | Flash attention | CUDA/Metal/CPU |
+| Voyage   | Text chunks   | Large batches | Cloud API |
+| OpenAI   | Text chunks   | Standard batches | Cloud API |
 
 ### Key Improvements in Progress
 
-1. **Token-aware batching**: Each ProjectChunk includes token count
-2. **Chunk-embedding pairs**: Maintain 1:1 mapping through pipeline
-3. **Provider-specific optimization**: Different batching strategies
-4. **File-aware aggregation**: Group chunks by file, weighted averaging
-5. **Overlap support**: Configurable chunk overlap for better RAG
+1. **Token storage in chunks**: Store token IDs in chunks to avoid double tokenization
+2. **TEI integration**: Replace custom local embedder with text-embeddings-inference
+3. **Multiple provider support**: Local (TEI), Voyage, and OpenAI embedders
+4. **DocumentBuilder pattern**: Separate chunk embedding from file aggregation
+5. **Tokenizer compatibility**: Ensure chunking and embedding use same tokenizer
 
 ## Code Document Model
 
@@ -163,16 +173,18 @@ progress_report_interval = 100
 
 ### 🚧 In Progress
 
-- Smart batching with token awareness
-- HTTP embedding providers (OpenAI, Voyage)
-- Local embedding provider
-- File-aware aggregation
+- Token storage in SemanticChunk
+- TEI integration for local embedder
+- Voyage and OpenAI embedder implementations
+- Chunker updates to store tokens
 
 ### 📋 TODO
 
-- Configuration system for embedding providers
+- Complete TEI backend integration
+- Remote provider implementations
+- Configuration system for all providers
 - Rate limiting implementation
-- Chunk overlap support
+- Tokenizer compatibility validation
 - Progress tracking and resumability
 - Error recovery and retry logic
 - CLI application

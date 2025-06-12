@@ -21,8 +21,8 @@ use futures::{Stream, StreamExt};
 pub use crate::chunker::InnerChunker;
 
 // Re-export main types
-pub use crate::types::{Chunk, ChunkError, ChunkMetadata, ProjectChunk, SemanticChunk};
-pub use crate::walker::{WalkOptions, walk_project};
+pub use crate::types::{Chunk, ChunkError, ChunkMetadata, FileMetadata, ProjectChunk, ProjectFile, SemanticChunk};
+pub use crate::walker::{WalkOptions, walk_project, walk_project_streaming};
 
 /// Tokenizer type for chunk size calculation
 #[derive(Clone, Debug)]

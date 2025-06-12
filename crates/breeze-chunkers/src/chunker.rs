@@ -100,8 +100,19 @@ impl InnerChunker {
                 }
             };
 
+            // Extract tokens if using HuggingFace tokenizer
+            let tokens = match &chunker.chunk_sizer {
+                ConcreteSizer::HuggingFace(tokenizer) => {
+                    tokenizer.encode(chunk_text, false)
+                        .map(|encoding| encoding.get_ids().to_vec())
+                        .ok()
+                }
+                _ => None,
+            };
+
             yield Chunk::Semantic(SemanticChunk {
                 text: chunk_text.to_string(),
+                tokens,
                 start_byte: offset,
                 end_byte: end_offset,
                 start_line,
@@ -176,8 +187,19 @@ impl InnerChunker {
                 references: vec![],
             };
 
+            // Extract tokens if using HuggingFace tokenizer
+            let tokens = match &chunker.chunk_sizer {
+                ConcreteSizer::HuggingFace(tokenizer) => {
+                    tokenizer.encode(chunk_text, false)
+                        .map(|encoding| encoding.get_ids().to_vec())
+                        .ok()
+                }
+                _ => None,
+            };
+
             yield Chunk::Text(SemanticChunk {
                 text: chunk_text.to_string(),
+                tokens,
                 start_byte: offset,
                 end_byte: offset + chunk_text.len(),
                 start_line,
@@ -746,30 +768,6 @@ enum Result<T, E> {
       "Should have multiple chunks with small chunk size"
     );
   }
-
-  // #[tokio::test]
-  // async fn test_language_case_insensitive() {
-  //     use futures::StreamExt;
-
-  //     let chunker = InnerChunker::new(1000, Tokenizer::Characters).unwrap();
-
-  //     let code = "def main(): pass";
-
-  //     // These should all work
-  //     let mut stream1 = Box::pin(chunker.chunk_code(code.to_string(), "python".to_string(), None));
-  //     let result1 = stream1.next().await.unwrap();
-  //     if let Err(ref e) = result1 {
-  //         panic!("Failed to chunk with 'python': {:?}", e);
-  //     }
-  //     assert!(result1.is_ok());
-
-  //     let mut stream2 = Box::pin(chunker.chunk_code(code.to_string(), "Python".to_string(), None));
-  //     let result2 = stream2.next().await.unwrap();
-  //     if let Err(ref e) = result2 {
-  //         panic!("Failed to chunk with 'Python': {:?}", e);
-  //     }
-  //     assert!(result2.is_ok());
-  // }
 
   #[test]
   fn test_parser_debug() {

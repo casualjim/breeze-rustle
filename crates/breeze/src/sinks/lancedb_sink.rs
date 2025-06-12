@@ -52,28 +52,37 @@ impl Sink for LanceDbSink {
                             batch_count += 1;
                             total_rows += num_rows;
                             tracing::debug!(
-                                "Saved batch {} with {} rows to LanceDB (version: {})",
-                                batch_count,
-                                num_rows,
-                                result.version
+                                batch_number = batch_count,
+                                rows = num_rows,
+                                table_version = result.version,
+                                total_rows = total_rows,
+                                "Saved batch to LanceDB"
                             );
                             yield ();
                         }
                         Err(e) => {
-                            tracing::error!("Failed to save batch to LanceDB: {}", e);
+                            tracing::error!(
+                                error = %e,
+                                batch_number = batch_count + 1,
+                                rows = num_rows,
+                                "Failed to save batch to LanceDB"
+                            );
                         }
                     }
                 }
                 Err(e) => {
-                    tracing::error!("Error in record batch stream: {}", e);
+                    tracing::error!(
+                        error = %e,
+                        "Error in record batch stream"
+                    );
                 }
             }
         }
 
         tracing::info!(
-            "LanceDB sink completed: {} batches, {} total rows",
-            batch_count,
-            total_rows
+            batches_written = batch_count,
+            total_rows = total_rows,
+            "LanceDB sink completed"
         );
     };
 

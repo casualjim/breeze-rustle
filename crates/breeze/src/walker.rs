@@ -1,8 +1,9 @@
 use futures_util::StreamExt;
 use std::path::Path;
+use tracing::{debug, error, info, warn};
 
 use crate::pipeline::{BoxStream, PathWalker};
-use breeze_chunkers::{ProjectChunk, WalkOptions, walk_project};
+use breeze_chunkers::{ProjectFile, WalkOptions, walk_project_streaming};
 
 /// Default implementation of PathWalker that uses breeze_chunkers::walk_project
 #[derive(Debug, Clone, Default)]
@@ -17,20 +18,41 @@ impl ProjectWalker {
 }
 
 impl PathWalker for ProjectWalker {
-  fn walk(&self, path: &Path) -> BoxStream<ProjectChunk> {
+  fn walk(&self, path: &Path) -> BoxStream<ProjectFile> {
     // Convert path to owned PathBuf to avoid lifetime issues
     let path_buf = path.to_path_buf();
     let options = self.options.clone();
 
-    // Create the stream from walk_project
-    let stream = walk_project(path_buf, options);
+    info!(
+      path = %path.display(),
+      max_chunk_size = options.max_chunk_size,
+      max_parallel = options.max_parallel,
+      max_file_size = ?options.max_file_size,
+      "Starting project walk with streaming architecture"
+    );
+
+    // Create the stream from walk_project_streaming
+    let stream = walk_project_streaming(path_buf, options);
 
     // Filter out errors and log them, converting to BoxStream
     let filtered_stream = stream.filter_map(|result| async move {
       match result {
-        Ok(chunk) => Some(chunk),
+        Ok(project_file) => {
+          info!(
+            file_path = %project_file.file_path,
+            file_size = project_file.metadata.size,
+            language = ?project_file.metadata.primary_language,
+            line_count = project_file.metadata.line_count,
+            content_hash = %project_file.metadata.content_hash,
+            "Processing file"
+          );
+          Some(project_file)
+        },
         Err(e) => {
-          eprintln!("Error processing chunk: {}", e);
+          error!(
+            error = %e,
+            "Error processing file"
+          );
           None
         }
       }

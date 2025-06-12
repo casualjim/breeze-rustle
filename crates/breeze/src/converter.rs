@@ -6,24 +6,44 @@ use std::marker::PhantomData;
 use std::num::NonZeroUsize;
 use std::pin::Pin;
 use std::sync::Arc;
+use std::time::Duration;
+use tokio::time::interval;
 
 use crate::pipeline::{BoxStream, RecordBatchConverter};
 
 /// Generic converter that converts streams of T to Arrow RecordBatch streams
 /// where T implements IntoArrow trait from LanceDB
+/// 
+/// Batches writes based on:
+/// - Maximum documents per batch (configurable)
+/// - Timeout duration (configurable)
+/// Whichever comes first
 pub struct BufferedRecordBatchConverter<T> {
   batch_size: NonZeroUsize,
+  timeout_seconds: u64,
   schema: Arc<arrow::datatypes::Schema>,
   _phantom: PhantomData<T>,
 }
 
 impl<T> BufferedRecordBatchConverter<T> {
-  pub fn new(batch_size: NonZeroUsize, schema: Arc<arrow::datatypes::Schema>) -> Self {
+  pub fn new(batch_size: NonZeroUsize, timeout_seconds: u64, schema: Arc<arrow::datatypes::Schema>) -> Self {
     Self {
       batch_size,
+      timeout_seconds,
       schema,
       _phantom: PhantomData,
     }
+  }
+  
+  /// Create a converter with default timeout of 1 second
+  pub fn with_default_timeout(batch_size: NonZeroUsize, schema: Arc<arrow::datatypes::Schema>) -> Self {
+    Self::new(batch_size, 1, schema)
+  }
+  
+  /// Set the schema for the converter
+  pub fn with_schema(mut self, schema: Arc<arrow::datatypes::Schema>) -> Self {
+    self.schema = schema;
+    self
   }
 
   /// Convert a batch of items to RecordBatchReader
@@ -60,10 +80,22 @@ impl<T> BufferedRecordBatchConverter<T> {
   }
 }
 
+impl<T> Default for BufferedRecordBatchConverter<T> {
+  fn default() -> Self {
+    Self {
+      batch_size: NonZeroUsize::new(100).unwrap(),
+      timeout_seconds: 1,
+      schema: Arc::new(arrow::datatypes::Schema::empty()),
+      _phantom: PhantomData,
+    }
+  }
+}
+
 impl<T> Clone for BufferedRecordBatchConverter<T> {
   fn clone(&self) -> Self {
     Self {
       batch_size: self.batch_size,
+      timeout_seconds: self.timeout_seconds,
       schema: self.schema.clone(),
       _phantom: PhantomData,
     }
@@ -75,42 +107,119 @@ where
   T: IntoArrow + Send + 'static,
 {
   fn convert(&self, items: BoxStream<T>) -> Pin<Box<dyn RecordBatchStream + Send>> {
-    let batch_size = self.batch_size.get();
     let converter = self.clone();
     let schema = self.schema.clone();
+    let max_batch_size = self.batch_size.get();
+    let timeout_duration = Duration::from_secs(self.timeout_seconds);
 
-    // Convert items to batches using a simpler approach
-    let batch_stream = items
-      .ready_chunks(batch_size)
-      .map(move |items| {
-        let converter = converter.clone();
-        // Convert to RecordBatchReader then collect all batches
-        match converter.items_to_batch_reader(items) {
-          Ok(reader) => {
-            // Collect all batches from the reader
-            let batches: Vec<Result<RecordBatch, arrow::error::ArrowError>> = reader.collect();
-
-            if batches.is_empty() {
-              Ok(RecordBatch::new_empty(converter.schema.clone()))
-            } else {
-              // Collect all successful batches
-              let all_batches: Result<Vec<_>, _> = batches.into_iter().collect();
-              match all_batches {
-                Ok(batches) => {
-                  // Concatenate all batches into a single batch
-                  concat_batches(&converter.schema, &batches)
-                    .map_err(|e| lancedb::Error::Arrow { source: e })
+    // Create a stream that batches based on count or time
+    let batch_stream = async_stream::stream! {
+      let mut items = items;
+      let mut buffer = Vec::with_capacity(max_batch_size);
+      let mut timer = interval(timeout_duration);
+      timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+      
+      loop {
+        tokio::select! {
+          // Receive items from the stream
+          maybe_item = items.next() => {
+            match maybe_item {
+              Some(item) => {
+                buffer.push(item);
+                
+                // Flush if we hit the max batch size
+                if buffer.len() >= max_batch_size {
+                  if !buffer.is_empty() {
+                    let items_to_process = std::mem::take(&mut buffer);
+                    match converter.items_to_batch_reader(items_to_process) {
+                      Ok(reader) => {
+                        let batches: Vec<Result<RecordBatch, arrow::error::ArrowError>> = reader.collect();
+                        if !batches.is_empty() {
+                          let all_batches: Result<Vec<_>, _> = batches.into_iter().collect();
+                          match all_batches {
+                            Ok(batches) => {
+                              match concat_batches(&converter.schema, &batches) {
+                                Ok(batch) => yield Ok(batch),
+                                Err(e) => yield Err(lancedb::Error::Arrow { source: e }),
+                              }
+                            }
+                            Err(e) => yield Err(lancedb::Error::Arrow { source: e }),
+                          }
+                        }
+                      }
+                      Err(e) => {
+                        yield Err(lancedb::Error::Arrow {
+                          source: arrow::error::ArrowError::from_external_error(Box::new(e)),
+                        });
+                      }
+                    }
+                  }
+                  timer.reset();
                 }
-                Err(e) => Err(lancedb::Error::Arrow { source: e }),
+              }
+              None => {
+                // Stream ended, flush remaining items
+                if !buffer.is_empty() {
+                  let items_to_process = std::mem::take(&mut buffer);
+                  match converter.items_to_batch_reader(items_to_process) {
+                    Ok(reader) => {
+                      let batches: Vec<Result<RecordBatch, arrow::error::ArrowError>> = reader.collect();
+                      if !batches.is_empty() {
+                        let all_batches: Result<Vec<_>, _> = batches.into_iter().collect();
+                        match all_batches {
+                          Ok(batches) => {
+                            match concat_batches(&converter.schema, &batches) {
+                              Ok(batch) => yield Ok(batch),
+                              Err(e) => yield Err(lancedb::Error::Arrow { source: e }),
+                            }
+                          }
+                          Err(e) => yield Err(lancedb::Error::Arrow { source: e }),
+                        }
+                      }
+                    }
+                    Err(e) => {
+                      yield Err(lancedb::Error::Arrow {
+                        source: arrow::error::ArrowError::from_external_error(Box::new(e)),
+                      });
+                    }
+                  }
+                }
+                break;
               }
             }
           }
-          Err(e) => Err(lancedb::Error::Arrow {
-            source: arrow::error::ArrowError::from_external_error(Box::new(e)),
-          }),
+          
+          // Timeout elapsed, flush buffer
+          _ = timer.tick() => {
+            if !buffer.is_empty() {
+              let items_to_process = std::mem::take(&mut buffer);
+              match converter.items_to_batch_reader(items_to_process) {
+                Ok(reader) => {
+                  let batches: Vec<Result<RecordBatch, arrow::error::ArrowError>> = reader.collect();
+                  if !batches.is_empty() {
+                    let all_batches: Result<Vec<_>, _> = batches.into_iter().collect();
+                    match all_batches {
+                      Ok(batches) => {
+                        match concat_batches(&converter.schema, &batches) {
+                          Ok(batch) => yield Ok(batch),
+                          Err(e) => yield Err(lancedb::Error::Arrow { source: e }),
+                        }
+                      }
+                      Err(e) => yield Err(lancedb::Error::Arrow { source: e }),
+                    }
+                  }
+                }
+                Err(e) => {
+                  yield Err(lancedb::Error::Arrow {
+                    source: arrow::error::ArrowError::from_external_error(Box::new(e)),
+                  });
+                }
+              }
+            }
+          }
         }
-      })
-      .boxed();
+      }
+    }.boxed();
 
     // Return as a SimpleRecordBatchStream
     Box::pin(lancedb::arrow::SimpleRecordBatchStream::new(
@@ -143,8 +252,12 @@ mod tests {
   #[tokio::test]
   async fn test_buffered_conversion() {
     let schema = Arc::new(CodeDocument::schema(3));
-    let converter =
-      BufferedRecordBatchConverter::<CodeDocument>::new(NonZeroUsize::new(2).unwrap(), schema);
+    // Create converter with batch size of 2 to test batching
+    let converter = BufferedRecordBatchConverter::<CodeDocument>::new(
+      NonZeroUsize::new(2).unwrap(),
+      1,
+      schema,
+    );
 
     let docs = vec![
       create_test_document("file1.py"),
@@ -171,10 +284,8 @@ mod tests {
   #[tokio::test]
   async fn test_schema_consistency() {
     let schema = Arc::new(CodeDocument::schema(384));
-    let converter = BufferedRecordBatchConverter::<CodeDocument>::new(
-      NonZeroUsize::new(10).unwrap(),
-      schema.clone(),
-    );
+    let converter = BufferedRecordBatchConverter::<CodeDocument>::default()
+      .with_schema(schema.clone());
     let docs = vec![create_test_document("test.py")];
     let stream = stream::iter(docs).boxed();
 
@@ -205,8 +316,8 @@ mod tests {
   #[tokio::test]
   async fn test_empty_stream() {
     let schema = Arc::new(CodeDocument::schema(128));
-    let converter =
-      BufferedRecordBatchConverter::<CodeDocument>::new(NonZeroUsize::new(10).unwrap(), schema);
+    let converter = BufferedRecordBatchConverter::<CodeDocument>::default()
+      .with_schema(schema);
     let stream = stream::empty().boxed();
     let mut batch_stream = converter.convert(stream);
 

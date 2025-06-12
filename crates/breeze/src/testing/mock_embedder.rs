@@ -1,6 +1,6 @@
 use crate::pipeline::*;
 use async_stream::stream;
-use breeze_chunkers::{Chunk, ChunkMetadata, ProjectChunk, SemanticChunk};
+use breeze_chunkers::{Chunk, ChunkError, ProjectFile};
 use futures_util::StreamExt;
 
 /// Mock embedder that generates fake embeddings for testing
@@ -51,38 +51,48 @@ impl Default for MockEmbedder {
 }
 
 impl Embedder for MockEmbedder {
-  fn embed(&self, batches: BoxStream<TextBatch>) -> BoxStream<EmbeddingBatch> {
-    let delay_ms = self.delay_ms;
+  fn embed(&self, files: BoxStream<ProjectFile>) -> BoxStream<ProjectFileWithEmbeddings> {
     let embedder = self.clone();
 
-    Box::pin(stream! {
-        let mut batches = batches;
-        while let Some(batch) = batches.next().await {
-            // Simulate processing delay
-            if let Some(delay) = delay_ms {
+    Box::pin(files.map(move |project_file| {
+      let embedder = embedder.clone();
+      let delay_ms = embedder.delay_ms;
+      let file_path = project_file.file_path.clone();
+      let metadata = project_file.metadata.clone();
+
+      // Create a stream that embeds each chunk individually
+      let embedded_chunks = Box::pin(stream! {
+        let mut chunks = project_file.chunks;
+
+        while let Some(chunk_result) = chunks.next().await {
+          match chunk_result {
+            Ok(chunk) => {
+              // Simulate processing delay
+              if let Some(delay) = delay_ms {
                 tokio::time::sleep(tokio::time::Duration::from_millis(delay)).await;
+              }
+
+              let text = match &chunk {
+                Chunk::Semantic(sc) => &sc.text,
+                Chunk::Text(sc) => &sc.text,
+              };
+
+              // Generate embedding for this chunk
+              let embedding = embedder.generate_embedding(text);
+
+              yield Ok(EmbeddedChunk { chunk, embedding });
             }
-
-            // Create embeddings for each chunk
-            let batch_items: Vec<EmbeddingBatchItem> = batch.into_iter()
-                .map(|chunk| {
-                    let text = match &chunk.chunk {
-                        Chunk::Semantic(sc) => &sc.text,
-                        Chunk::Text(sc) => &sc.text,
-                    };
-
-                    let embedding = embedder.generate_embedding(text);
-
-                    EmbeddingBatchItem {
-                        embeddings: embedding,
-                        metadata: vec![chunk],
-                    }
-                })
-                .collect();
-
-            yield batch_items;
+            Err(e) => yield Err(e),
+          }
         }
-    })
+      });
+
+      ProjectFileWithEmbeddings {
+        file_path,
+        metadata,
+        embedded_chunks,
+      }
+    }))
   }
 }
 
@@ -102,16 +112,25 @@ mod tests {
 
   #[tokio::test]
   async fn test_mock_embedder() {
+    use tokio::sync::mpsc;
+    use tokio_stream::wrappers::ReceiverStream;
+    use breeze_chunkers::{ChunkMetadata, FileMetadata, SemanticChunk};
+    use std::time::SystemTime;
+
     let embedder = MockEmbedder::new(128);
 
-    let chunk1 = ProjectChunk {
-      file_path: "test1.rs".to_string(),
-      chunk: Chunk::Text(SemanticChunk {
+    // Create a test ProjectFile with chunks
+    let (chunk_tx, chunk_rx) = mpsc::channel::<Result<Chunk, ChunkError>>(32);
+
+    // Send some chunks
+    tokio::spawn(async move {
+      let chunk1 = Chunk::Text(SemanticChunk {
         text: "hello world".to_string(),
         start_byte: 0,
         end_byte: 11,
         start_line: 1,
         end_line: 1,
+        tokens: None,
         metadata: ChunkMetadata {
           node_type: "text".to_string(),
           node_name: None,
@@ -121,17 +140,15 @@ mod tests {
           definitions: vec![],
           references: vec![],
         },
-      }),
-    };
+      });
 
-    let chunk2 = ProjectChunk {
-      file_path: "test2.rs".to_string(),
-      chunk: Chunk::Text(SemanticChunk {
+      let chunk2 = Chunk::Text(SemanticChunk {
         text: "test text".to_string(),
-        start_byte: 0,
-        end_byte: 9,
-        start_line: 1,
-        end_line: 1,
+        start_byte: 12,
+        end_byte: 21,
+        start_line: 2,
+        end_line: 2,
+        tokens: None,
         metadata: ChunkMetadata {
           node_type: "text".to_string(),
           node_name: None,
@@ -141,23 +158,45 @@ mod tests {
           definitions: vec![],
           references: vec![],
         },
-      }),
+      });
+
+      let _ = chunk_tx.send(Ok(chunk1)).await;
+      let _ = chunk_tx.send(Ok(chunk2)).await;
+    });
+
+    let project_file = ProjectFile {
+      file_path: "test.rs".to_string(),
+      chunks: ReceiverStream::new(chunk_rx),
+      metadata: FileMetadata {
+        primary_language: Some("Rust".to_string()),
+        size: 100,
+        modified: SystemTime::now(),
+        content_hash: "hash123".to_string(),
+        line_count: 10,
+        is_binary: false,
+      },
     };
 
-    let batch: TextBatch = vec![chunk1, chunk2];
+    let files = Box::pin(futures_util::stream::once(async { project_file }));
+    let mut files_with_embeddings = embedder.embed(files);
 
-    let batches = Box::pin(futures_util::stream::once(async { batch }));
-    let mut embeddings = embedder.embed(batches);
+    // Get the first file with embeddings
+    let file_with_embeddings = files_with_embeddings.next().await.unwrap();
+    assert_eq!(file_with_embeddings.file_path, "test.rs");
 
-    let result = embeddings.next().await.unwrap();
-    assert_eq!(result.len(), 2); // Two batch items
-    assert_eq!(result[0].embeddings.len(), 128);
-    assert_eq!(result[1].embeddings.len(), 128);
+    // Collect embedded chunks
+    let embedded_chunks: Vec<EmbeddedChunk> = file_with_embeddings.embedded_chunks
+      .filter_map(|result| async move { result.ok() })
+      .collect()
+      .await;
 
-    // Check normalization
-    for batch_item in &result {
-      let norm: f32 = batch_item
-        .embeddings
+    assert_eq!(embedded_chunks.len(), 2); // Two chunks
+    assert_eq!(embedded_chunks[0].embedding.len(), 128);
+    assert_eq!(embedded_chunks[1].embedding.len(), 128);
+
+    // Check that embeddings are normalized
+    for embedded_chunk in &embedded_chunks {
+      let norm: f32 = embedded_chunk.embedding
         .iter()
         .map(|x| x * x)
         .sum::<f32>()
@@ -165,33 +204,7 @@ mod tests {
       assert!((norm - 1.0).abs() < 0.001);
     }
 
-    // Check deterministic
-    let embedder2 = MockEmbedder::new(128);
-    let chunk = ProjectChunk {
-      file_path: "test.rs".to_string(),
-      chunk: Chunk::Text(SemanticChunk {
-        text: "hello world".to_string(),
-        start_byte: 0,
-        end_byte: 11,
-        start_line: 1,
-        end_line: 1,
-        metadata: ChunkMetadata {
-          node_type: "text".to_string(),
-          node_name: None,
-          language: "rust".to_string(),
-          parent_context: None,
-          scope_path: vec![],
-          definitions: vec![],
-          references: vec![],
-        },
-      }),
-    };
-    let batch2: TextBatch = vec![chunk];
-
-    let batches2 = Box::pin(futures_util::stream::once(async { batch2 }));
-    let mut embeddings2 = embedder2.embed(batches2);
-    let result2 = embeddings2.next().await.unwrap();
-
-    assert_eq!(result[0].embeddings, result2[0].embeddings);
+    // Check that embeddings are different for different chunks
+    assert_ne!(embedded_chunks[0].embedding, embedded_chunks[1].embedding);
   }
 }

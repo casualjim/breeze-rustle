@@ -1,3 +1,4 @@
+use candle_core::{backend::BackendDevice, Device};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
@@ -45,18 +46,18 @@ fn default_model() -> String {
 }
 
 fn default_device() -> String {
-  #[cfg(target_os = "macos")]
-  {
-    "mps".to_string()
+  if cfg!(feature = "cuda") {
+    return "cuda".to_string()
+  } else if cfg!(target_os = "macos") && cfg!(feature = "metal") {
+    // Use MPS on macOS with Metal feature enabled
+    return "mps".to_string()
   }
-  #[cfg(not(target_os = "macos"))]
-  {
-    "cpu".to_string()
-  }
+  // Default to CPU on macOS without Metal
+  "cpu".to_string()
 }
 
 fn default_max_chunk_size() -> usize {
-  2048
+  512
 }
 
 fn default_max_file_size() -> Option<u64> {
@@ -92,6 +93,15 @@ impl Config {
     std::fs::write(path, content)?;
     Ok(())
   }
+
+  pub fn get_device(&self, idx: usize) -> Device {
+    match self.device.as_str()  {
+      "cpu" => Device::Cpu,
+      "mps" => Device::Metal(candle_core::MetalDevice::new(idx).expect("Failed to create MPS device")),
+      "cuda" => Device::Cuda(candle_core::CudaDevice::new(idx).expect("Failed to create CUDA device")),
+      _ => panic!("Unsupported device type: {}", self.device),
+    }
+  }
 }
 
 #[cfg(test)]
@@ -103,7 +113,7 @@ mod tests {
   fn test_default_config() {
     let config = Config::default();
     assert_eq!(config.model, "ibm-granite/granite-embedding-125m-english");
-    assert_eq!(config.max_chunk_size, 2048);
+    assert_eq!(config.max_chunk_size, 512);
   }
 
   #[test]

@@ -24,11 +24,16 @@ async-openai = "0.28"
 reqwest = { version = "0.12", features = ["json", "stream"] }
 
 # Local model support
-candle-core = "0.9"
+candle-core = { version = "0.9" }
 candle-nn = "0.9"
 candle-transformers = "0.9"
 hf-hub = "0.4"
 tokenizers = { workspace = true }
+
+# TEI backend support
+text-embeddings-backend-core = { git = "https://github.com/huggingface/text-embeddings-inference", branch = "main" }
+text-embeddings-backend-candle = { git = "https://github.com/huggingface/text-embeddings-inference", branch = "main" }
+nohash-hasher = "0.2"
 
 # Configuration and CLI
 clap = { version = "4.5", features = ["derive"] }
@@ -41,10 +46,21 @@ anyhow = "1.0"
 
 # Rate limiting and utilities
 tokio-util = { version = "0.7", features = ["rt"] }
+tokio-stream = "0.1"
 async-stream = "0.3"
-tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+tracing = "0.1.41"
+tracing-opentelemetry = "0.31.0"
+tracing-subscriber = { version = "0.3.19", features = ["env-filter", "fmt"] }
+
 num_cpus = "1"
 
 [dev-dependencies]
 tempfile = "3.11"
+
+[features]
+default = []
+cuda = ["candle-core/cuda", "candle-nn/cuda", "candle-transformers/cuda"]
+mkl = ["candle-core/mkl", "candle-nn/mkl", "candle-transformers/mkl"]
+accelerate = ["candle-core/accelerate", "candle-nn/accelerate", "candle-transformers/accelerate"]
+metal = ["candle-core/metal", "candle-nn/metal", "candle-transformers/metal"]

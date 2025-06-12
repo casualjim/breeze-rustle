@@ -451,3 +451,4 @@ mod tests {
     assert!(uuid::Uuid::parse_str(&doc.id).is_ok());
   }
 }
+

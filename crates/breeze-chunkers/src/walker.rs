@@ -2,7 +2,7 @@ use crate::{
   Tokenizer,
   chunker::InnerChunker,
   languages::get_language,
-  types::{ChunkError, ProjectChunk},
+  types::{Chunk, ChunkError, FileMetadata, ProjectChunk, ProjectFile},
 };
 use async_stream;
 use futures::{Stream, StreamExt};
@@ -11,6 +11,7 @@ use std::path::Path;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
+use blake3::Hasher;
 
 /// Options for walking a project directory
 #[derive(Debug, Clone)]
@@ -26,7 +27,7 @@ impl Default for WalkOptions {
     Self {
       max_chunk_size: 1000,
       tokenizer: Tokenizer::Characters,
-      max_parallel: 16,
+      max_parallel: 4,
       max_file_size: Some(5 * 1024 * 1024), // 5MB default
     }
   }
@@ -40,8 +41,8 @@ pub fn walk_project(
   let path = path.as_ref().to_owned();
   let max_file_size = options.max_file_size;
 
-  // Create a channel for streaming results
-  let (tx, rx) = mpsc::channel::<Result<ProjectChunk, ChunkError>>(400_000);
+  // Create a channel for streaming results with buffer matching parallelism
+  let (tx, rx) = mpsc::channel::<Result<ProjectChunk, ChunkError>>(options.max_parallel);
 
   // Create the chunker upfront
   let chunker = match InnerChunker::new(options.max_chunk_size, options.tokenizer) {
@@ -106,6 +107,213 @@ pub fn walk_project(
   });
 
   ReceiverStream::new(rx)
+}
+
+/// Walk a project directory and yield ProjectFile items with chunk streams
+pub fn walk_project_streaming(
+  path: impl AsRef<Path>,
+  options: WalkOptions,
+) -> impl Stream<Item = Result<ProjectFile, ChunkError>> {
+  let path = path.as_ref().to_owned();
+  let max_file_size = options.max_file_size;
+
+  // Create a channel for streaming results with buffer matching parallelism
+  let (tx, rx) = mpsc::channel::<Result<ProjectFile, ChunkError>>(options.max_parallel);
+
+  // Create the chunker upfront
+  let chunker = match InnerChunker::new(options.max_chunk_size, options.tokenizer) {
+    Ok(c) => Arc::new(c),
+    Err(e) => {
+      // Send error and return early
+      let tx_clone = tx.clone();
+      tokio::spawn(async move {
+        let _ = tx_clone.send(Err(e)).await;
+      });
+      return ReceiverStream::new(rx);
+    }
+  };
+
+  // Spawn blocking task for the walker
+  tokio::task::spawn_blocking(move || {
+    // Use tokio runtime handle to spawn async tasks from blocking context
+    let handle = tokio::runtime::Handle::current();
+
+    // Build the walker with parallelism
+    let walker = WalkBuilder::new(&path)
+      .threads(options.max_parallel)
+      .max_filesize(max_file_size)
+      .build_parallel();
+
+    let tx = Arc::new(tx);
+
+    walker.run(|| {
+      let tx = tx.clone();
+      let chunker = chunker.clone();
+      let handle = handle.clone();
+
+      Box::new(move |result| {
+        if let Ok(entry) = result {
+          if entry.file_type().map_or(false, |ft| ft.is_file()) {
+            let path = entry.path().to_owned();
+            let tx = tx.clone();
+            let chunker = chunker.clone();
+
+            // Spawn async task on the runtime
+            handle.spawn(async move {
+              // Process file with metadata
+              match process_file_with_metadata(&path, chunker).await {
+                Ok(project_file) => {
+                  if tx.send(Ok(project_file)).await.is_err() {
+                    return; // Receiver dropped
+                  }
+                }
+                Err(e) => {
+                  eprintln!("Error processing {}: {}", path.display(), e);
+                  if tx.send(Err(e)).await.is_err() {
+                    return; // Receiver dropped
+                  }
+                }
+              }
+            });
+          }
+        }
+        WalkState::Continue
+      })
+    });
+  });
+
+  ReceiverStream::new(rx)
+}
+
+/// Process a file and create a ProjectFile with metadata and chunk stream
+async fn process_file_with_metadata<P: AsRef<Path>>(
+  path: P,
+  chunker: Arc<InnerChunker>,
+) -> Result<ProjectFile, ChunkError> {
+  let path = path.as_ref();
+  let path_str = path.to_string_lossy().to_string();
+
+  // Get file metadata
+  let metadata = tokio::fs::metadata(&path).await.map_err(ChunkError::IoError)?;
+  
+  // Check if it's a text file
+  let is_text_file = if let Ok(Some(file_type)) = infer::get_from_path(&path) {
+    file_type.matcher_type() == infer::MatcherType::Text
+  } else {
+    // If infer can't determine, check with hyperpolyglot
+    hyperpolyglot::detect(&path).is_ok()
+  };
+
+  if !is_text_file {
+    return Err(ChunkError::UnsupportedLanguage("Binary file".to_string()));
+  }
+
+  // Read content and compute hash
+  let content = tokio::fs::read_to_string(&path).await.map_err(ChunkError::IoError)?;
+  
+  if content.is_empty() {
+    return Err(ChunkError::ParseError("Empty file".to_string()));
+  }
+
+  // Compute content hash
+  let mut hasher = Hasher::new();
+  hasher.update(content.as_bytes());
+  let hash = hasher.finalize();
+  let content_hash = format!("{}", hash.to_hex());
+
+  // Count lines
+  let line_count = content.matches('\n').count() + 1;
+
+  // Detect primary language
+  let primary_language = if let Ok(Some(detection)) = hyperpolyglot::detect(&path) {
+    Some(detection.language().to_string())
+  } else {
+    None
+  };
+
+  // Get modified time
+  let modified = metadata.modified().unwrap_or(std::time::SystemTime::now());
+
+  // Create file metadata
+  let file_metadata = FileMetadata {
+    primary_language,
+    size: metadata.len(),
+    modified,
+    content_hash,
+    line_count,
+    is_binary: false,
+  };
+
+  // Create channel for chunks with reasonable buffer for a single file
+  let (chunk_tx, chunk_rx) = mpsc::channel::<Result<Chunk, ChunkError>>(32);
+
+  // Spawn task to process chunks
+  let chunker_clone = chunker.clone();
+  let path_str_clone = path_str.clone();
+  let content_clone = content.clone();
+  
+  tokio::spawn(async move {
+    // Check if hyperpolyglot detects a supported language
+    let detected_language = if let Ok(Some(detection)) = hyperpolyglot::detect(Path::new(&path_str_clone)) {
+      let language = detection.language();
+      if get_language(language).is_some() {
+        Some(language.to_string())
+      } else {
+        None
+      }
+    } else {
+      None
+    };
+
+    // Try semantic chunking first if we have a supported language
+    if let Some(language) = detected_language {
+      let mut chunk_stream = Box::pin(chunker_clone.chunk_code(content_clone.clone(), language.clone(), Some(path_str_clone.clone())));
+      let mut had_success = false;
+
+      while let Some(chunk_result) = chunk_stream.next().await {
+        match chunk_result {
+          Ok(chunk) => {
+            had_success = true;
+            if chunk_tx.send(Ok(chunk)).await.is_err() {
+              return; // Receiver dropped
+            }
+          }
+          Err(_) => {
+            // If we haven't had any successful chunks, fall through to text chunking
+            if !had_success {
+              break;
+            }
+          }
+        }
+      }
+
+      if had_success {
+        return;
+      }
+    }
+
+    // Fall back to text chunking
+    let mut chunk_stream = Box::pin(chunker_clone.chunk_text(content_clone, Some(path_str_clone.clone())));
+    while let Some(chunk_result) = chunk_stream.next().await {
+      match chunk_result {
+        Ok(chunk) => {
+          if chunk_tx.send(Ok(chunk)).await.is_err() {
+            return; // Receiver dropped
+          }
+        }
+        Err(e) => {
+          let _ = chunk_tx.send(Err(e)).await;
+          return;
+        }
+      }
+    }
+  });
+
+  Ok(ProjectFile {
+    file_path: path_str,
+    chunks: ReceiverStream::new(chunk_rx),
+    metadata: file_metadata,
+  })
 }
 
 /// Process a single file and yield chunks as a stream

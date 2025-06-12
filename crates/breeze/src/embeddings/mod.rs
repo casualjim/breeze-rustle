@@ -1,26 +1,16 @@
 pub mod loader;
-pub mod models;
-pub mod sentence_transformer;
+pub mod tei;
 
-use std::fmt;
+use thiserror::Error;
 
-#[derive(Debug)]
+#[derive(Error, Debug)]
 pub enum EmbeddingError {
+  #[error("Model load error: {0}")]
   ModelLoadError(String),
-  InferenceError(String),
+  #[error("API error: {0}")]
   ApiError(String),
+  #[error("Configuration error: {0}")]
   ConfigError(String),
+  #[error("Inference error: {0}")]
+  InferenceError(String),
 }
-
-impl fmt::Display for EmbeddingError {
-  fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-    match self {
-      Self::ModelLoadError(msg) => write!(f, "Model load error: {}", msg),
-      Self::InferenceError(msg) => write!(f, "Inference error: {}", msg),
-      Self::ApiError(msg) => write!(f, "API error: {}", msg),
-      Self::ConfigError(msg) => write!(f, "Config error: {}", msg),
-    }
-  }
-}
-
-impl std::error::Error for EmbeddingError {}
