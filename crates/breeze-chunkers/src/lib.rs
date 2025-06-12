@@ -33,6 +33,9 @@ pub enum Tokenizer {
     Tiktoken,
     /// HuggingFace tokenizer with specified model
     HuggingFace(String),
+    /// Pre-loaded HuggingFace tokenizer (internal use only, not exposed to bindings)
+    #[doc(hidden)]
+    PreloadedHuggingFace(std::sync::Arc<tokenizers::Tokenizer>),
 }
 
 impl Default for Tokenizer {
@@ -66,7 +69,7 @@ pub struct Chunker {
 
 impl Default for Chunker {
     /// Create a chunker with default configuration
-    /// 
+    ///
     /// # Panics
     /// Panics if the default tokenizer (Characters) fails to initialize, which should never happen
     fn default() -> Self {

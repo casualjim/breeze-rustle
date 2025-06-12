@@ -16,6 +16,7 @@ pub struct SentenceTransformerEmbedder {
     model_type: ModelType,
     max_length: usize,
     pooling_method: PoolingMethod,
+    embedding_dim: usize,
 }
 
 impl SentenceTransformerEmbedder {
@@ -25,10 +26,10 @@ impl SentenceTransformerEmbedder {
         tokenizer: Arc<Tokenizer>,
         device: Device,
         model_type: ModelType,
+        max_length: usize,
+        pooling_method: PoolingMethod,
+        embedding_dim: usize,
     ) -> Self {
-        let max_length = model_type.max_sequence_length();
-        let pooling_method = model_type.default_pooling();
-        
         Self {
             model: Arc::new(Mutex::new(model)),
             tokenizer,
@@ -36,7 +37,18 @@ impl SentenceTransformerEmbedder {
             model_type,
             max_length,
             pooling_method,
+            embedding_dim,
         }
+    }
+    
+    /// Get the embedding dimension
+    pub fn embedding_dim(&self) -> usize {
+        self.embedding_dim
+    }
+    
+    /// Get the tokenizer
+    pub fn tokenizer(&self) -> Arc<Tokenizer> {
+        self.tokenizer.clone()
     }
     
     /// Override the pooling method
@@ -89,8 +101,8 @@ impl SentenceTransformerEmbedder {
         }
         
         // Flatten and create tensors
-        let flat_ids: Vec<u32> = input_ids.iter().flatten().copied().collect();
-        let flat_mask: Vec<u32> = attention_mask.iter().flatten().copied().collect();
+        let flat_ids: Vec<i64> = input_ids.iter().flatten().map(|&x| x as i64).collect();
+        let flat_mask: Vec<f32> = attention_mask.iter().flatten().map(|&x| x as f32).collect();
         
         let input_ids_tensor = Tensor::new(flat_ids.as_slice(), &self.device)
             .map_err(|e| EmbeddingError::InferenceError(format!("Failed to create input tensor: {}", e)))?
@@ -213,6 +225,7 @@ impl Clone for SentenceTransformerEmbedder {
             model_type: self.model_type,
             max_length: self.max_length,
             pooling_method: self.pooling_method,
+            embedding_dim: self.embedding_dim,
         }
     }
 }

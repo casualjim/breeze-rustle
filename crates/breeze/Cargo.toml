@@ -25,7 +25,7 @@ reqwest = { version = "0.12", features = ["json", "stream"] }
 
 # Local model support
 candle-core = "0.9"
-candle-nn = "0.9" 
+candle-nn = "0.9"
 candle-transformers = "0.9"
 hf-hub = "0.4"
 tokenizers = { workspace = true }
@@ -44,6 +44,7 @@ tokio-util = { version = "0.7", features = ["rt"] }
 async-stream = "0.3"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+num_cpus = "1"
 
 [dev-dependencies]
 tempfile = "3.11"
