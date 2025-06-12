@@ -38,7 +38,8 @@ mod tests {
         
         // Test unknown languages
         assert!(get_language("COBOL").is_none());
-        assert!(get_language("fortran").is_none());
+        // Fortran is now supported in breeze-grammars
+        assert!(get_language("fortran").is_some());
     }
 
     #[test]
@@ -90,6 +91,7 @@ mod tests {
         // These are not supported
         assert!(!is_language_supported("C++"));
         assert!(!is_language_supported("COBOL"));
-        assert!(!is_language_supported("Fortran"));
+        // Fortran is now supported in breeze-grammars
+        assert!(is_language_supported("Fortran"));
     }
 }
