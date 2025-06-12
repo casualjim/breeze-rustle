@@ -21,6 +21,9 @@ tree-sitter-language = { workspace = true }
 # Error handling
 thiserror = "2.0"
 
+# Hashing
+blake3 = "1.5"
+
 # Project walker
 ignore = "0.4"              # Gitignore-aware traversal
 futures = "0.3"             # Async streams

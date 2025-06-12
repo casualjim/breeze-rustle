@@ -3,42 +3,39 @@ use std::path::Path;
 use std::pin::Pin;
 
 use crate::models::CodeDocument;
-use breeze_chunkers::ProjectChunk;
+use breeze_chunkers::{Chunk, ChunkError, ProjectFile};
 use lancedb::arrow::RecordBatchStream;
 
 /// Type alias for a boxed stream
 pub type BoxStream<T> = Pin<Box<dyn Stream<Item = T> + Send>>;
 
-/// Represents a batch of texts ready for embedding
-pub type TextBatch = Vec<ProjectChunk>;
-
-pub type EmbeddingBatch = Vec<EmbeddingBatchItem>;
-
-/// Represents embeddings for a batch
-#[derive(Debug)]
-pub struct EmbeddingBatchItem {
-  pub embeddings: Vec<f32>,
-  pub metadata: TextBatch,
+/// Represents a chunk with its embedding
+#[derive(Debug, Clone)]
+pub struct EmbeddedChunk {
+    pub chunk: Chunk,
+    pub embedding: Vec<f32>,
 }
 
-/// Trait for the directory walking stage: (Path) -> Stream<ProjectChunk>
+/// Represents a project file with embedded chunks
+pub struct ProjectFileWithEmbeddings {
+    pub file_path: String,
+    pub metadata: breeze_chunkers::FileMetadata,
+    pub embedded_chunks: BoxStream<Result<EmbeddedChunk, ChunkError>>,
+}
+
+/// Trait for the directory walking stage: (Path) -> Stream<ProjectFile>
 pub trait PathWalker {
-  fn walk(&self, path: &Path) -> BoxStream<ProjectChunk>;
+  fn walk(&self, path: &Path) -> BoxStream<ProjectFile>;
 }
 
-/// Trait for the batching stage: Stream<ProjectChunk> -> Stream<TextBatch>
-pub trait Batcher {
-  fn batch(&self, chunks: BoxStream<ProjectChunk>) -> BoxStream<TextBatch>;
-}
-
-/// Trait for the embedding stage: Stream<TextBatch> -> Stream<EmbeddingBatch>
+/// Trait for the embedding stage: Stream<ProjectFile> -> Stream<ProjectFileWithEmbeddings>
 pub trait Embedder {
-  fn embed(&self, batches: BoxStream<TextBatch>) -> BoxStream<EmbeddingBatch>;
+  fn embed(&self, files: BoxStream<ProjectFile>) -> BoxStream<ProjectFileWithEmbeddings>;
 }
 
-/// Trait for the aggregation stage: Stream<EmbeddingBatch> -> Stream<CodeDocument>
-pub trait Aggregator {
-  fn aggregate(&self, embeddings: BoxStream<EmbeddingBatch>) -> BoxStream<CodeDocument>;
+/// Trait for building documents from embedded chunks
+pub trait DocumentBuilder {
+  fn build_documents(&self, files: BoxStream<ProjectFileWithEmbeddings>) -> BoxStream<CodeDocument>;
 }
 
 /// Trait for converting streams of T to Arrow RecordBatchStream

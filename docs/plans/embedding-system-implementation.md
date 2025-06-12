@@ -1,7 +1,7 @@
 # Breeze Rustle Embedding System Implementation Plan
 
 ## Overview
-A refined embedding system that leverages our streaming pipeline architecture with provider-specific optimizations. The system maintains chunk-embedding pairs throughout processing and implements smart batching based on token counts.
+A refined embedding system that leverages our streaming pipeline architecture with provider-specific optimizations. The system maintains chunk-embedding pairs throughout processing, stores tokens with chunks to avoid double tokenization, and uses HuggingFace's text-embeddings-inference for robust local model support while maintaining remote provider support.
 
 ## Current Status & Next Steps
 
@@ -9,161 +9,186 @@ A refined embedding system that leverages our streaming pipeline architecture wi
 - LanceDB sink with Arc<RwLock<Table>> design
 - Basic pipeline traits and PassthroughBatcher
 - Core chunking and grammar support
+- DocumentBuilder trait for aggregating chunk embeddings
+- Refactored to embed chunks individually, then aggregate
+
+### 🚧 In Progress
+- **Token Storage in Chunks** - Chunks now include token IDs to avoid double tokenization
+- **TEI Integration** - Replacing custom local embedder with text-embeddings-inference
+- **Remote Providers** - Implementing Voyage and OpenAI providers
 
 ### 🎯 Priority Tasks
-1. **Configuration System** (Medium Priority)
-   - Embedding provider configurations
-   - Chunking parameters
-   - Processing options
+1. **Local TEI Backend** (High Priority)
+   - Replace SentenceTransformerEmbedder with TEI for local models
+   - Support 20+ model architectures out of the box
+   - Hardware acceleration (CUDA, Metal, MKL)
    
-2. **Smart Batching** (High Priority)
-   - Token-aware batching
-   - Provider-specific strategies
-   - Batch timeout handling
+2. **Remote Providers** (High Priority)
+   - Voyage API integration (voyage-code-2)
+   - OpenAI API integration (text-embedding-3-small/large)
+   - Provider-specific batching strategies
+   
+3. **Token-Aware Chunking** (High Priority)
+   - Store token IDs in chunks during chunking
+   - Pass pre-tokenized input when possible
+   - Handle tokenizer compatibility across providers
 
-3. **Embedding Providers** (High Priority)
-   - HTTP providers via async_openai
-   - Local provider with sentence transformers
-   - Rate limiting integration
+4. **Configuration System** (Medium Priority)
+   - Provider selection (local/voyage/openai)
+   - Model configuration per provider
+   - Rate limiting and retry policies
 
 ## Architecture
 
 ```
-Enhanced Walker → Smart Batcher → Embedder → File Aggregator → LanceDB
-(token counting)   (provider-aware)  (rate limited)  (weighted avg)    (FTS+Vector)
+                  ┌─> TEI Embedder (local)    ─┐
+                  │                             │
+Enhanced Walker ─>├─> Voyage Embedder (remote) ├─> DocumentBuilder → RecordBatchConverter → LanceDB
+(yields ProjectFile) │                             │  (aggregation)     (Arrow format)    (Vector DB)
+                  └─> OpenAI Embedder (remote) ─┘
 ```
+
+**Key Points**:
+- Walker yields `ProjectFile` items containing chunk streams
+- Chunks include pre-tokenized data (`tokens: Option<Vec<u32>>`)
+- Multiple embedder implementations:
+  - TEI for local models (20+ architectures)
+  - Voyage for high-performance code embedding
+  - OpenAI for general-purpose embedding
+- DocumentBuilder aggregates chunk embeddings to file embeddings
+- Token optimization: Reuse tokens from chunking when possible
 
 ## Core Types
 
-### Enhanced ProjectChunk
+### Enhanced SemanticChunk
 ```rust
-pub struct ProjectChunk {
-    pub file_path: String,
-    pub chunk: Chunk,
-    pub token_count: usize,  // NEW: Essential for batching
-    pub overlap_with_previous: Option<String>, // NEW: For RAG
+pub struct SemanticChunk {
+    pub text: String,
+    pub tokens: Option<Vec<u32>>,  // NEW: Pre-tokenized IDs
+    pub start_byte: usize,
+    pub end_byte: usize,
+    pub start_line: usize,
+    pub end_line: usize,
+    pub metadata: ChunkMetadata,
 }
 ```
 
-### Chunk with Embedding
+### TEI Integration Types
 ```rust
-pub struct ChunkWithEmbedding {
-    pub chunk: ProjectChunk,
+pub struct EmbeddedChunk {
+    pub chunk: Chunk,
     pub embedding: Vec<f32>,
 }
 
-pub type EmbeddingBatch = Vec<ChunkWithEmbedding>;
+pub struct ProjectFileWithEmbeddings {
+    pub file_path: String,
+    pub metadata: FileMetadata,
+    pub embedded_chunks: BoxStream<Result<EmbeddedChunk, ChunkError>>,
+}
 ```
 
 ## Implementation Plan
 
-### Phase 1: Smart Batching System
+### Phase 1: Token-Aware Chunking
 
-1. **Smart Batcher Trait**
+1. **Update Chunker to Store Tokens**
 ```rust
-pub trait SmartBatcher {
-    fn optimal_batch_size(&self) -> BatchConfig;
-    fn batch_with_limits(&self, chunks: BoxStream<ProjectChunk>) -> BoxStream<TokenAwareBatch>;
-}
-
-pub struct BatchConfig {
-    pub max_tokens_per_batch: usize,
-    pub max_items_per_batch: usize,
-    pub timeout_ms: u64,
-}
-
-pub struct TokenAwareBatch {
-    pub chunks: Vec<ProjectChunk>,
-    pub total_tokens: usize,
+impl InnerChunker {
+    pub fn chunk_code_with_tokens(
+        &self,
+        content: String,
+        language: String,
+        file_path: Option<String>,
+    ) -> impl Stream<Item = Result<Chunk, ChunkError>> {
+        // When using HuggingFace tokenizer:
+        // 1. Tokenize chunk text
+        // 2. Store token IDs in chunk.tokens
+        // 3. Use token count for size limits
+    }
 }
 ```
 
-2. **Provider-Specific Implementations**
+2. **Tokenizer Compatibility**
 ```rust
-pub struct VoyageBatcher {
-    // 128 items, 120k tokens per batch
-    // Optimized for Voyage's high limits
-}
-
-pub struct OpenAIBatcher {
-    // 50 items, 8k tokens per batch
-    // Conservative for standard tiers
-}
-
-pub struct LocalBatcher {
-    // Device-specific optimization
-    // MPS: 16-32 items
-    // CUDA: 64-128 items
+pub struct TokenizerConfig {
+    pub chunking_tokenizer: String,  // Must match embedding model
+    pub embedding_model: String,
 }
 ```
 
-### Phase 2: Enhanced Embedding Providers
+### Phase 2: Multiple Embedding Providers
 
-1. **Embedding Provider Trait**
+1. **Provider Trait (shared interface)**
 ```rust
-pub trait EmbeddingProvider {
-    async fn embed_batch(&self, texts: &[String]) -> Result<Vec<Vec<f32>>>;
-    fn dimensions(&self) -> usize;
-    fn rate_limiter(&self) -> &dyn RateLimiter;
-}
-
-pub trait RateLimiter {
-    async fn acquire_permits(&self, tokens: usize, requests: usize);
-    fn available_capacity(&self) -> (usize, usize); // (tokens, requests)
+pub trait Embedder {
+    fn embed(&self, files: BoxStream<ProjectFile>) -> BoxStream<ProjectFileWithEmbeddings>;
 }
 ```
 
-2. **HTTP Provider (async_openai)**
+2. **TEI Local Provider**
 ```rust
-pub struct HttpEmbeddingProvider {
+pub struct TEIEmbedder {
+    backend: text_embeddings_backend::Backend,
+    model_type: ModelType,
+    tokenizer: Option<Tokenizer>, // For pre-tokenized input
+}
+
+impl TEIEmbedder {
+    pub fn embed_pretokenized(&self, chunks: &[(Vec<u32>, &str)]) -> Result<Vec<Vec<f32>>>;
+    pub fn embed_text(&self, chunks: &[&str]) -> Result<Vec<Vec<f32>>>;
+}
+```
+
+3. **Remote HTTP Providers**
+```rust
+pub struct VoyageEmbedder {
     client: async_openai::Client,
-    config: HttpProviderConfig,
-    rate_limiter: Box<dyn RateLimiter>,
+    model: String,
+    rate_limiter: TokenBucketRateLimiter,
 }
 
-pub struct HttpProviderConfig {
-    pub base_url: Option<String>,
-    pub model: String,
-    pub api_key: String,
-    pub input_type: Option<String>, // For Voyage
-    pub dimensions: Option<usize>,
-}
-```
-
-3. **Local Provider (candle)**
-```rust
-pub struct LocalEmbeddingProvider {
-    model: Arc<dyn SentenceTransformer>,
-    device: Device,
-    batch_size: usize,
+pub struct OpenAIEmbedder {
+    client: async_openai::Client, 
+    model: String,
+    rate_limiter: TokenBucketRateLimiter,
 }
 ```
 
 ### Phase 3: File-Aware Aggregation
 
-```rust
-pub struct FileAggregator;
+**Note**: Aggregation is now internal to the Embedder trait implementation.
 
-impl Aggregator for FileAggregator {
-    fn aggregate(&self, embeddings: BoxStream<ChunkWithEmbedding>) -> BoxStream<CodeDocument> {
-        embeddings
-            .group_by(|chunk| chunk.chunk.file_path.clone())
-            .map(|(file_path, chunks)| {
-                // Weighted average by token count
-                let total_tokens: usize = chunks.iter()
-                    .map(|c| c.chunk.token_count)
-                    .sum();
-                
-                let weighted_embedding = compute_weighted_average(chunks, total_tokens);
-                
-                CodeDocument {
-                    file_path,
-                    content_embedding: weighted_embedding,
-                    // ... other fields
-                }
-            })
+```rust
+// Aggregation strategy trait for future extensibility
+pub trait AggregationStrategy {
+    fn aggregate(&self, chunk_embeddings: Vec<(Vec<f32>, usize)>) -> Vec<f32>;
+}
+
+pub struct WeightedAverageStrategy;
+
+impl AggregationStrategy for WeightedAverageStrategy {
+    fn aggregate(&self, chunk_embeddings: Vec<(Vec<f32>, usize)>) -> Vec<f32> {
+        // chunk_embeddings: Vec of (embedding, token_count) pairs
+        let total_tokens: usize = chunk_embeddings.iter()
+            .map(|(_, tokens)| tokens)
+            .sum();
+        
+        // Weighted average by token count
+        let mut result = vec![0.0; chunk_embeddings[0].0.len()];
+        for (embedding, token_count) in chunk_embeddings {
+            let weight = *token_count as f32 / total_tokens as f32;
+            for (i, val) in embedding.iter().enumerate() {
+                result[i] += val * weight;
+            }
+        }
+        result
     }
 }
+
+// Future strategies could include:
+// - AttentionBasedAggregation
+// - MaxPoolingAggregation  
+// - HierarchicalAggregation
 ```
 
 ### Phase 4: LanceDB Integration ✅ COMPLETED

@@ -37,6 +37,7 @@ pub struct ChunkMetadata {
 #[derive(Debug, Clone)]
 pub struct SemanticChunk {
   pub text: String,
+  pub tokens: Option<Vec<u32>>,  // Token IDs if pre-tokenized
   pub start_byte: usize,
   pub end_byte: usize,
   pub start_line: usize,
@@ -57,6 +58,7 @@ impl SemanticChunk {
 
     Self {
       text,
+      tokens: None,
       start_byte,
       end_byte,
       start_line,
@@ -83,6 +85,24 @@ impl ProjectChunk {
   pub fn is_text(&self) -> bool {
     matches!(self.chunk, Chunk::Text(_))
   }
+}
+
+/// A project file with a stream of chunks and rich metadata
+pub struct ProjectFile {
+  pub file_path: String,
+  pub chunks: tokio_stream::wrappers::ReceiverStream<Result<Chunk, ChunkError>>,
+  pub metadata: FileMetadata,
+}
+
+/// File-level metadata
+#[derive(Debug, Clone)]
+pub struct FileMetadata {
+  pub primary_language: Option<String>,  // Primary language (e.g., "Python", "Rust")
+  pub size: u64,                         // File size in bytes
+  pub modified: std::time::SystemTime,   // Last modification time
+  pub content_hash: String,              // SHA-256 hash of content
+  pub line_count: usize,                 // Total number of lines
+  pub is_binary: bool,                   // Whether file was detected as binary
 }
 
 #[cfg(test)]
@@ -146,6 +166,7 @@ mod tests {
     let chunk = SemanticChunk::from_node(&function_node, source, metadata);
 
     assert_eq!(chunk.text, source);
+    assert_eq!(chunk.tokens, None); // SemanticChunk::from_node doesn't set tokens
     assert_eq!(chunk.start_byte, 0);
     assert_eq!(chunk.end_byte, source.len());
     assert_eq!(chunk.start_line, 1);

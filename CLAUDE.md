@@ -6,6 +6,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 breeze-rustle is a high-performance Rust library with Python bindings that provides semantic code chunking capabilities. It uses tree-sitter parsers and nvim-treesitter queries to intelligently split code into meaningful semantic units while preserving context and extracting rich metadata.
 
+### Chunking and Embedding Strategy
+
+- **Chunking is for embedder constraints**: We chunk files to fit within embedding model token limits (e.g., 8k tokens)
+- **Semantic boundaries**: Chunks split at function/class boundaries, not arbitrarily mid-code
+- **File-level storage**: Despite chunking, we store embeddings at the file level by aggregating chunk embeddings
+- **Aggregation strategy**: Currently uses weighted average by token count, but designed to be pluggable
+
 ## Coding rules
 
 * KISS: keep it stupid simple.
@@ -94,6 +101,8 @@ When implementing features:
 * Support 100+ languages via nvim-treesitter queries
 * Target <100ms parsing for 1MB files
 * Never split semantic units (functions, classes) unless necessary
+* Chunk files to fit embedder constraints but aggregate back to file-level embeddings
+* Make aggregation strategies pluggable (start with weighted average)
 
 ## Preferred Tools
 
