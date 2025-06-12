@@ -454,7 +454,6 @@ python -m pytest tests/
     }
 
     #[tokio::test]
-    #[ignore = "Multi-language support not yet implemented in breeze-grammars"]
     async fn test_walk_project_languages() {
         let temp_dir = create_test_project().await;
         let path = temp_dir.path();
@@ -488,13 +487,13 @@ python -m pytest tests/
             _ => false,
         }));
 
-        // Check Markdown files (should be text chunks)
+        // Check Markdown files (should be semantic chunks)
         let md_chunks: Vec<_> = chunks
             .iter()
             .filter(|c| c.file_path.ends_with(".md"))
             .collect();
         assert!(!md_chunks.is_empty(), "Should have Markdown chunks");
-        assert!(md_chunks.iter().all(|c| c.is_text()));
+        assert!(md_chunks.iter().all(|c| c.is_semantic()));
     }
 
     #[tokio::test]
@@ -551,7 +550,6 @@ python -m pytest tests/
     }
 
     #[tokio::test]
-    #[ignore = "Rust language support not yet implemented in breeze-grammars"]
     async fn test_process_file_stream() {
         let temp_dir = TempDir::new().unwrap();
         let rust_file = temp_dir.path().join("test.rs");

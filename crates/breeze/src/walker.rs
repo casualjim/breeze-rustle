@@ -5,6 +5,7 @@ use crate::pipeline::{BoxStream, PathWalker};
 use breeze_chunkers::{ProjectChunk, WalkOptions, walk_project};
 
 /// Default implementation of PathWalker that uses breeze_chunkers::walk_project
+#[derive(Debug, Clone, Default)]
 pub struct ProjectWalker {
     options: WalkOptions,
 }
@@ -12,10 +13,6 @@ pub struct ProjectWalker {
 impl ProjectWalker {
     pub fn new(options: WalkOptions) -> Self {
         Self { options }
-    }
-
-    pub fn with_defaults() -> Self {
-        Self::new(WalkOptions::default())
     }
 }
 
@@ -80,7 +77,7 @@ def goodbye():
     #[tokio::test]
     async fn test_project_walker_basic() {
         let temp_dir = create_test_files().await;
-        let walker = ProjectWalker::with_defaults();
+        let walker = ProjectWalker::default();
 
         let mut stream = walker.walk(temp_dir.path());
         let mut chunks = Vec::new();

@@ -1137,6 +1137,7 @@ dependencies = [
  "futures-util",
  "hf-hub",
  "lancedb",
+ "num_cpus",
  "pretty_env_logger",
  "reqwest",
  "serde",

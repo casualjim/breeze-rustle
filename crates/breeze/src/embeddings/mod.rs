@@ -1,6 +1,7 @@
 
 pub mod models;
 pub mod sentence_transformer;
+pub mod loader;
 
 use std::fmt;
 

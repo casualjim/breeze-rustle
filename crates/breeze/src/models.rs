@@ -60,6 +60,92 @@ impl CodeDocument {
         
         Schema::new(fields)
     }
+    
+    /// Create a LanceDB table for storing CodeDocuments
+    /// LanceDB requires at least one batch to create a table, so we create a dummy row and delete it
+    pub async fn create_table(
+        connection: &lancedb::Connection,
+        table_name: &str,
+        embedding_dim: usize,
+    ) -> lancedb::Result<lancedb::Table> {
+        use arrow::array::*;
+        use arrow::datatypes::{Field, DataType};
+        use arrow::record_batch::{RecordBatch, RecordBatchIterator};
+        
+        let schema = std::sync::Arc::new(Self::schema(embedding_dim));
+        
+        // Create dummy data - LanceDB requires at least one batch
+        let id_array = StringArray::from(vec!["00000000-0000-0000-0000-000000000000"]);
+        let file_path_array = StringArray::from(vec!["__dummy__.txt"]);
+        let content_array = StringArray::from(vec!["dummy"]);
+        
+        let mut content_hash_builder = FixedSizeBinaryBuilder::with_capacity(1, 32);
+        content_hash_builder.append_value(&[0u8; 32]).unwrap();
+        let content_hash_array = content_hash_builder.finish();
+        
+        // Create dummy embedding
+        let embedding_array = Float32Array::from(vec![0.0; embedding_dim]);
+        let embedding_field = std::sync::Arc::new(Field::new("item", DataType::Float32, true));
+        let embedding_list = FixedSizeListArray::try_new(
+            embedding_field,
+            embedding_dim as i32,
+            std::sync::Arc::new(embedding_array),
+            None,
+        ).map_err(|e| lancedb::Error::Arrow { source: e })?;
+        
+        let file_size_array = UInt64Array::from(vec![0u64]);
+        let last_modified_array = TimestampNanosecondArray::from(vec![0i64]);
+        let indexed_at_array = TimestampNanosecondArray::from(vec![0i64]);
+        
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![
+                std::sync::Arc::new(id_array),
+                std::sync::Arc::new(file_path_array),
+                std::sync::Arc::new(content_array),
+                std::sync::Arc::new(content_hash_array),
+                std::sync::Arc::new(embedding_list),
+                std::sync::Arc::new(file_size_array),
+                std::sync::Arc::new(last_modified_array),
+                std::sync::Arc::new(indexed_at_array),
+            ],
+        ).map_err(|e| lancedb::Error::Arrow { source: e })?;
+        
+        let batch_iter = RecordBatchIterator::new(vec![Ok(batch)].into_iter(), schema);
+        
+        // Create table
+        let table = connection
+            .create_table(table_name, Box::new(batch_iter))
+            .execute()
+            .await?;
+        
+        // Delete the dummy row
+        table.delete("id = '00000000-0000-0000-0000-000000000000'").await?;
+        
+        Ok(table)
+    }
+    
+    /// Ensure a table exists - open if it exists, create if it doesn't
+    pub async fn ensure_table(
+        connection: &lancedb::Connection,
+        table_name: &str,
+        embedding_dim: usize,
+    ) -> lancedb::Result<lancedb::Table> {
+        // Try to open the table first
+        match connection.open_table(table_name).execute().await {
+            Ok(table) => Ok(table),
+            Err(e) => {
+                // Check if it's a table not found error
+                match &e {
+                    lancedb::Error::TableNotFound { .. } => {
+                        // Create the table
+                        Self::create_table(connection, table_name, embedding_dim).await
+                    }
+                    _ => Err(e), // Propagate other errors
+                }
+            }
+        }
+    }
 
     /// Read file content and compute hash in a single pass
     pub async fn from_file(file_path: impl Into<PathBuf>) -> std::io::Result<Self> {
