@@ -165,6 +165,26 @@ fn use_precompiled_binaries(precompiled_dir: &Path, out_path: &Path) {
     
     println!("cargo:rustc-link-search=native={}", out_path.display());
     
+    // Check if any grammars use C++ scanners by looking for marker files
+    let has_cpp_grammars = precompiled_dir.read_dir()
+        .map(|entries| {
+            entries.filter_map(|e| e.ok())
+                .any(|entry| {
+                    entry.path().extension()
+                        .map_or(false, |ext| ext == "cpp")
+                })
+        })
+        .unwrap_or(false);
+    
+    // Link C++ standard library if needed
+    if has_cpp_grammars {
+        if cfg!(target_os = "macos") {
+            println!("cargo:rustc-link-lib=c++");
+        } else if cfg!(target_os = "linux") {
+            println!("cargo:rustc-link-lib=stdc++");
+        }
+    }
+    
     // Copy the grammars.rs bindings file
     if let Ok(bindings) = fs::read_to_string(precompiled_dir.join("grammars.rs")) {
         fs::write(out_path.join("grammars.rs"), bindings).unwrap();
@@ -308,25 +328,25 @@ fn compile_from_source(out_path: &Path) {
     }
     
     // Compile each grammar individually but let cc use parallelism internally
-    for (grammar, parser_c, scanner_c, scanner_cc, has_scanner, _is_cpp, src_dir, grammar_dir) in all_builds {
+    for (grammar, parser_c, scanner_c, scanner_cc, has_scanner, is_cpp, src_dir, grammar_dir) in &all_builds {
         println!("cargo:warning=Compiling grammar: {}", grammar.name);
         
         let mut build = cc::Build::new();
-        build.include(&src_dir);
-        build.include(&grammar_dir);
+        build.include(src_dir);
+        build.include(grammar_dir);
         
         // Set C standard
         build.flag_if_supported("-std=c11");
         
         // Add parser.c
-        build.file(&parser_c);
+        build.file(parser_c);
         
         // Add scanner if present
-        if has_scanner {
+        if *has_scanner {
             if scanner_c.exists() {
-                build.file(&scanner_c);
+                build.file(scanner_c);
             } else if scanner_cc.exists() {
-                build.file(&scanner_cc);
+                build.file(scanner_cc);
                 build.cpp(true);
                 build.flag_if_supported("-std=c++14");
             }
@@ -380,6 +400,28 @@ fn compile_from_source(out_path: &Path) {
     
     // Generate bindings
     generate_bindings(out_path, &compiled_grammars);
+    
+    // Track which grammars use C++ scanners
+    let mut has_cpp_scanner = false;
+    
+    for (grammar, _, _, _, _, is_cpp, _, _) in &all_builds {
+        if compiled_grammars.iter().any(|g| g.name == grammar.name) && *is_cpp {
+            has_cpp_scanner = true;
+            // Create marker file for future reference
+            let marker_path = out_path.join(format!("{}.cpp", grammar.name));
+            fs::write(marker_path, "").unwrap();
+        }
+    }
+    
+    // Link C++ standard library if any grammar uses C++ scanner
+    println!("cargo:rustc-link-search=native={}", out_path.display());
+    if has_cpp_scanner {
+        if cfg!(target_os = "macos") {
+            println!("cargo:rustc-link-lib=c++");
+        } else if cfg!(target_os = "linux") {
+            println!("cargo:rustc-link-lib=stdc++");
+        }
+    }
 }
 
 fn generate_bindings(out_path: &Path, compiled_grammars: &[Grammar]) {
