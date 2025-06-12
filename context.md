@@ -166,9 +166,10 @@ async for chunk in walker:
 ### Language Support
 
 - Using LanguageFn type from tree-sitter-language crate
-- Direct tree-sitter-* crate dependencies instead of syntastica
-- Currently supporting: Python, JavaScript, TypeScript, TSX, Java, C++, C, C#, Go, Rust, Ruby, Swift, Scala, Shell/Bash, R
-- Removed: PHP (unclear API), Kotlin (compilation issues), SQL (compilation issues)
+- **163 languages supported** via compiled grammars in breeze-grammars crate
+- Case-insensitive API with automatic lowercase normalization
+- Precompiled binaries for fast builds (~5 seconds vs 10+ minutes)
+- Cross-platform support (Linux glibc/musl, macOS, Windows, all on x86_64/aarch64)
 
 ### Architecture
 
@@ -192,6 +193,65 @@ Key dependencies in Cargo.toml:
 1. **Tree-sitter version conflicts**: Use specific versions in Cargo.toml
 2. **LanguageFn vs Language**: Use tree-sitter-language crate and convert with `.into()`
 3. **Language API differences**: Some use LANGUAGE constants, others use language() functions
+
+## ✅ Grammar Integration - Complete (163 Languages)
+
+### Overview
+
+We've successfully implemented a comprehensive grammar compilation system supporting **163 programming languages**. This makes breeze-rustle one of the most language-comprehensive code analysis tools available.
+
+### Implementation Details
+
+1. **Architecture**:
+   - `grammars.json`: Configuration file with 163 supported languages
+   - `build.rs`: Smart build script that uses precompiled binaries when available
+   - `tools/build-grammars`: Python tool for cross-platform grammar compilation
+   - Precompiled binaries stored in `crates/breeze-grammars/precompiled/`
+   - Generated bindings follow official tree-sitter patterns using `LanguageFn::from_raw()`
+
+2. **Build System Features**:
+   - **Precompilation support**: ~5 seconds build time vs 10+ minutes from source
+   - **Cross-platform compilation**: Uses Zig for building on all platforms
+   - **Progress tracking**: Shows compilation progress for all 163 languages
+   - **Optimization**: Full -O3 and LTO optimizations for performance
+   - **CI/CD integration**: GitHub Actions caching based on grammars.json hash
+   - **Special case handling**: `symbol_name` field for grammars like C#
+
+3. **Supported Languages (163 total)**:
+   - All major languages: Python, JavaScript, TypeScript, Java, C/C++, C#, Go, Rust, etc.
+   - Web technologies: HTML, CSS, Vue, Svelte, Astro, etc.
+   - Systems languages: Zig, V, D, Assembly, CUDA, etc.
+   - Functional languages: Haskell, OCaml, Elm, Clojure, Erlang, Elixir, etc.
+   - Domain-specific: SQL, GraphQL, Dockerfile, Terraform, Prisma, etc.
+   - Configuration: YAML, TOML, JSON, HCL, Nix, etc.
+   - And many more specialized languages
+
+4. **Development Workflow**:
+   ```bash
+   # First time setup - build all grammars for all platforms
+   ./tools/build-grammars --all-platforms
+   
+   # Build for current platform only
+   ./tools/build-grammars
+   
+   # Use precompiled binaries (automatic)
+   cargo build  # Detects and uses precompiled binaries
+   ```
+
+5. **Verified Working**:
+   - ✅ All 163 languages load successfully at runtime
+   - ✅ Proper symbol resolution (including C# special case)
+   - ✅ Cross-platform binaries built and tested
+   - ✅ Comprehensive test coverage with `test_all_grammars.rs`
+
+### Important Notes
+
+- Grammar repositories must use format `owner/repo` (GitHub URLs are auto-constructed)
+- Some grammars have source in subdirectories (use `path` field in JSON)
+- Always use maturin for building Python bindings: `maturin develop`
+- Bus errors were caused by improper Language/LanguageFn conversion, now fixed
+
+See `docs/plans/tree-sitter-grammar-integration.md` for original plan.
 
 ## Build & Test Commands
 
@@ -277,6 +337,9 @@ With 512-character chunks on the kuzu project:
 
 1. ~~Write comprehensive Python acceptance tests~~ ✅ Done
 2. ~~Optimize performance~~ ✅ Achieved 12,883 chunks/s
-3. Set up CI/CD with GitHub Actions
-4. Package and publish to PyPI using maturin
-5. Add streaming file reader for files >5MB (currently skipped)
+3. ~~Implement tree-sitter grammar integration~~ ✅ Complete - 163 languages supported!
+4. Set up CI/CD with GitHub Actions (partially complete - grammar caching done)
+5. Package and publish to PyPI using maturin
+6. Add streaming file reader for files >5MB (currently skipped)
+7. Consider creating language groups/profiles for different use cases
+8. Remove old tree-sitter-* crate dependencies from main library
