@@ -16,6 +16,7 @@ breeze-rustle is a high-performance Rust library with Python bindings that provi
 * do not create a new file for every new task, work with what already exist.
 * do not create limits or fallbacks for specialized libraries.
 * Create the simplest possible thing that could possibly work
+* Use Uuid::now_v7 not v4
 
 ## Development Commands
 

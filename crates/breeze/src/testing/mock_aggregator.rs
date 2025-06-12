@@ -15,11 +15,14 @@ impl Aggregator for MockAggregator {
             
             let mut embeddings = embeddings;
             while let Some(batch) = embeddings.next().await {
-                for (embedding, metadata) in batch.embeddings.into_iter().zip(batch.metadata) {
-                    file_embeddings
-                        .entry(metadata.file_path.clone())
-                        .or_default()
-                        .push((embedding, metadata.token_count));
+                for batch_item in batch {
+                    // For mock aggregator, we'll just use the first chunk from metadata
+                    if let Some(first_chunk) = batch_item.metadata.first() {
+                        file_embeddings
+                            .entry(first_chunk.file_path.clone())
+                            .or_default()
+                            .push((batch_item.embeddings, 1)); // Using 1 as mock token count
+                    }
                 }
             }
             

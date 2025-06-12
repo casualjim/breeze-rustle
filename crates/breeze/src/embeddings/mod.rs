@@ -1,4 +1,7 @@
 
+pub mod models;
+pub mod sentence_transformer;
+
 use std::fmt;
 
 #[derive(Debug)]

@@ -1,6 +1,7 @@
 use async_stream::stream;
 use futures_util::StreamExt;
 use crate::pipeline::*;
+use breeze_chunkers::{Chunk, ProjectChunk, SemanticChunk, ChunkMetadata};
 
 /// Mock embedder that generates fake embeddings for testing
 pub struct MockEmbedder {
@@ -62,14 +63,24 @@ impl Embedder for MockEmbedder {
                     tokio::time::sleep(tokio::time::Duration::from_millis(delay)).await;
                 }
                 
-                let embeddings = batch.texts.iter()
-                    .map(|text| embedder.generate_embedding(text))
+                // Create embeddings for each chunk
+                let batch_items: Vec<EmbeddingBatchItem> = batch.into_iter()
+                    .map(|chunk| {
+                        let text = match &chunk.chunk {
+                            Chunk::Semantic(sc) => &sc.text,
+                            Chunk::Text(sc) => &sc.text,
+                        };
+                        
+                        let embedding = embedder.generate_embedding(text);
+                        
+                        EmbeddingBatchItem {
+                            embeddings: embedding,
+                            metadata: vec![chunk],
+                        }
+                    })
                     .collect();
                 
-                yield EmbeddingBatch {
-                    embeddings,
-                    metadata: batch.metadata,
-                };
+                yield batch_items;
             }
         })
     }
@@ -93,51 +104,89 @@ mod tests {
     async fn test_mock_embedder() {
         let embedder = MockEmbedder::new(128);
         
-        let batch = TextBatch {
-            texts: vec!["hello world".to_string(), "test text".to_string()],
-            metadata: vec![
-                BatchMetadata {
-                    file_path: "test.rs".to_string(),
-                    chunk_index: 0,
-                    token_count: 2,
+        let chunk1 = ProjectChunk {
+            file_path: "test1.rs".to_string(),
+            chunk: Chunk::Text(SemanticChunk {
+                text: "hello world".to_string(),
+                start_byte: 0,
+                end_byte: 11,
+                start_line: 1,
+                end_line: 1,
+                metadata: ChunkMetadata {
+                    node_type: "text".to_string(),
+                    node_name: None,
+                    language: "rust".to_string(),
+                    parent_context: None,
+                    scope_path: vec![],
+                    definitions: vec![],
+                    references: vec![],
                 },
-                BatchMetadata {
-                    file_path: "test.rs".to_string(),
-                    chunk_index: 1,
-                    token_count: 2,
-                },
-            ],
+            }),
         };
+        
+        let chunk2 = ProjectChunk {
+            file_path: "test2.rs".to_string(),
+            chunk: Chunk::Text(SemanticChunk {
+                text: "test text".to_string(),
+                start_byte: 0,
+                end_byte: 9,
+                start_line: 1,
+                end_line: 1,
+                metadata: ChunkMetadata {
+                    node_type: "text".to_string(),
+                    node_name: None,
+                    language: "rust".to_string(),
+                    parent_context: None,
+                    scope_path: vec![],
+                    definitions: vec![],
+                    references: vec![],
+                },
+            }),
+        };
+        
+        let batch: TextBatch = vec![chunk1, chunk2];
         
         let batches = Box::pin(futures_util::stream::once(async { batch }));
         let mut embeddings = embedder.embed(batches);
         
         let result = embeddings.next().await.unwrap();
-        assert_eq!(result.embeddings.len(), 2);
-        assert_eq!(result.embeddings[0].len(), 128);
-        assert_eq!(result.embeddings[1].len(), 128);
+        assert_eq!(result.len(), 2); // Two batch items
+        assert_eq!(result[0].embeddings.len(), 128);
+        assert_eq!(result[1].embeddings.len(), 128);
         
         // Check normalization
-        for embedding in &result.embeddings {
-            let norm: f32 = embedding.iter().map(|x| x * x).sum::<f32>().sqrt();
+        for batch_item in &result {
+            let norm: f32 = batch_item.embeddings.iter().map(|x| x * x).sum::<f32>().sqrt();
             assert!((norm - 1.0).abs() < 0.001);
         }
         
         // Check deterministic
         let embedder2 = MockEmbedder::new(128);
-        let batch2 = TextBatch {
-            texts: vec!["hello world".to_string()],
-            metadata: vec![BatchMetadata {
-                file_path: "test.rs".to_string(),
-                chunk_index: 0,
-                token_count: 2,
-            }],
+        let chunk = ProjectChunk {
+            file_path: "test.rs".to_string(),
+            chunk: Chunk::Text(SemanticChunk {
+                text: "hello world".to_string(),
+                start_byte: 0,
+                end_byte: 11,
+                start_line: 1,
+                end_line: 1,
+                metadata: ChunkMetadata {
+                    node_type: "text".to_string(),
+                    node_name: None,
+                    language: "rust".to_string(),
+                    parent_context: None,
+                    scope_path: vec![],
+                    definitions: vec![],
+                    references: vec![],
+                },
+            }),
         };
+        let batch2: TextBatch = vec![chunk];
         
         let batches2 = Box::pin(futures_util::stream::once(async { batch2 }));
         let mut embeddings2 = embedder2.embed(batches2);
         let result2 = embeddings2.next().await.unwrap();
         
-        assert_eq!(result.embeddings[0], result2.embeddings[0]);
+        assert_eq!(result[0].embeddings, result2[0].embeddings);
     }
 }
