@@ -278,6 +278,11 @@ def compile_grammar(grammar, cache_dir, platform_dir, platform_config=None, use_
             # This is handled in the Rust bindings generation
             pass
         
+        # Note if this grammar uses C++ (for build.rs metadata)
+        if is_cpp:
+            cpp_marker = platform_dir / f"{name}.cpp"
+            cpp_marker.touch()
+        
         return True, f"{name} - compiled successfully"
     except subprocess.CalledProcessError as e:
         # Clean up

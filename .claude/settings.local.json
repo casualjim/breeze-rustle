@@ -28,7 +28,9 @@
       "mcp__zep__search_memory_nodes",
       "mcp__zep__add_memory",
       "Bash(cargo:*)",
-      "mcp__github__search_repositories"
+      "mcp__github__search_repositories",
+      "Bash(nm:*)",
+      "Bash(find:*)"
     ],
     "deny": []
   }
