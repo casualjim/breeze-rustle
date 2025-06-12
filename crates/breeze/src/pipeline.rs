@@ -2,33 +2,23 @@ use futures_util::Stream;
 use std::path::Path;
 use std::pin::Pin;
 
-use crate::config::Config;
 use crate::models::CodeDocument;
 use breeze_chunkers::ProjectChunk;
+use lancedb::arrow::RecordBatchStream;
 
 /// Type alias for a boxed stream
 pub type BoxStream<T> = Pin<Box<dyn Stream<Item = T> + Send>>;
 
 /// Represents a batch of texts ready for embedding
-#[derive(Debug, Clone)]
-pub struct TextBatch {
-    pub texts: Vec<String>,
-    pub metadata: Vec<BatchMetadata>,
-}
+pub type TextBatch = Vec<ProjectChunk>;
 
-/// Metadata for each text in a batch
-#[derive(Debug, Clone)]
-pub struct BatchMetadata {
-    pub file_path: String,
-    pub chunk_index: usize,
-    pub token_count: usize,
-}
+pub type EmbeddingBatch = Vec<EmbeddingBatchItem>;
 
 /// Represents embeddings for a batch
 #[derive(Debug)]
-pub struct EmbeddingBatch {
-    pub embeddings: Vec<Vec<f32>>,
-    pub metadata: Vec<BatchMetadata>,
+pub struct EmbeddingBatchItem {
+    pub embeddings: Vec<f32>,
+    pub metadata: TextBatch,
 }
 
 
@@ -52,6 +42,12 @@ pub trait Aggregator {
     fn aggregate(&self, embeddings: BoxStream<EmbeddingBatch>) -> BoxStream<CodeDocument>;
 }
 
+/// Trait for converting streams of T to Arrow RecordBatchStream
+pub trait RecordBatchConverter<T> {
+    fn convert(&self, items: BoxStream<T>) -> Pin<Box<dyn RecordBatchStream + Send>>;
+}
+
+/// Trait for sinking RecordBatchStream to storage
 pub trait Sink {
-    fn sink(&self, documents: BoxStream<CodeDocument>) -> BoxStream<()>;
+    fn sink(&self, batches: Pin<Box<dyn RecordBatchStream + Send>>) -> BoxStream<()>;
 }

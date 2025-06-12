@@ -30,7 +30,8 @@
       "Bash(cargo:*)",
       "mcp__github__search_repositories",
       "Bash(nm:*)",
-      "Bash(find:*)"
+      "Bash(find:*)",
+      "Bash(rg:*)"
     ],
     "deny": []
   }
