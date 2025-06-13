@@ -1,0 +1,123 @@
+# Large data files
+*.csv
+*.tsv
+*.psv
+*.xml
+
+# Large SQL files (you'd need size-based filtering in your tool)
+# Or maybe target common dump patterns:
+*dump.sql
+*backup.sql
+*migration_data*.sql
+*.sql.gz
+
+# Lock/state files
+package-lock.json
+yarn.lock
+Cargo.lock
+Pipfile.lock
+poetry.lock
+composer.lock
+Gemfile.lock
+pnpm-lock.yaml
+go.sum
+mix.lock
+
+# Build/cache artifacts
+node_modules/
+.next/
+dist/
+build/
+target/
+.gradle/
+__pycache__/
+.pytest_cache/
+coverage/
+venv/
+.venv/
+env/
+.env/
+virtualenv/
+
+# IDE/editor files
+.vscode/settings.json
+.idea/
+*.swp
+*.swo
+*~
+
+# Large binary-ish data
+*.sqlite
+*.db
+*.dump
+
+# Terraform/OpenTofu state and plans
+*.tfstate
+*.tfstate.*
+*.tfplan
+*.tfplan.*
+.terraform/
+.terraform.lock.hcl
+
+# Pulumi state
+Pulumi.*.yaml
+.pulumi/
+
+# Ansible
+*.retry
+.ansible/
+
+
+# CDK
+cdk.out/
+.cdk.staging/
+
+# Kubernetes generated manifests (if large)
+k8s-generated/
+manifests/generated/
+
+# Helm charts cache/generated
+charts/*.tgz
+.helm/
+
+# AWS/Azure CLI cache
+.aws/cli/cache/
+.azure/
+
+# Docker build cache (if you're indexing those dirs)
+.docker/
+
+# Vagrant
+.vagrant/
+
+# Nomad
+.nomad/
+
+# direnv
+.direnv/              # Can contain full environment builds
+
+# Nix
+.nix-profile/
+.nix-defexpr/
+result                # Nix build symlinks
+result-*
+.nix-gc-roots/
+
+# Nix store symlinks (if somehow in project)
+/nix/
+
+# devenv (Nix-based dev environments)
+.devenv/
+
+# flake outputs
+.direnv/flake-profile*
+
+# cachix
+.cachix/
+
+# Development shells
+shell.nix
+flake.lock            # This one is small but generated
+
+# Docker/Podman related
+.devcontainer/
