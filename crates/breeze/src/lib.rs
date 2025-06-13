@@ -1,4 +1,5 @@
 mod app;
+pub mod cli;
 mod config;
 mod converter;
 mod document_builder;

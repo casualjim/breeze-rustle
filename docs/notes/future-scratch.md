@@ -9,3 +9,5 @@ Keeping some bullet points so I don't forget
 * Implement streaming writes to lancedb
 * make batch size configurable or derived from the model
 * avoid re-indexing files with the same path and content hash
+* add exclusions for pure data files
+* add final override file support with .breezeignore

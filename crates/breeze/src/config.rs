@@ -70,7 +70,7 @@ fn default_max_parallel_files() -> usize {
 
 impl Default for Config {
   fn default() -> Self {
-    Self {
+    let mut config = Self {
       database_path: default_database_path(),
       table_name: default_table_name(),
       model: default_model(),
@@ -78,14 +78,59 @@ impl Default for Config {
       max_chunk_size: default_max_chunk_size(),
       max_file_size: default_max_file_size(),
       max_parallel_files: default_max_parallel_files(),
-    }
+    };
+    config.apply_env_overrides();
+    config
   }
 }
 
 impl Config {
   pub fn from_file<P: AsRef<std::path::Path>>(path: P) -> anyhow::Result<Self> {
     let content = std::fs::read_to_string(path)?;
-    Ok(toml::from_str(&content)?)
+    let mut config: Self = toml::from_str(&content)?;
+    config.apply_env_overrides();
+    Ok(config)
+  }
+  
+  /// Apply environment variable overrides to the configuration
+  /// 
+  /// Environment variables:
+  /// - BREEZE_DATABASE_PATH: Override database path
+  /// - BREEZE_MODEL: Override model name
+  /// - BREEZE_DEVICE: Override device (cpu, mps, cuda)
+  /// - BREEZE_MAX_CHUNK_SIZE: Override max chunk size
+  /// - BREEZE_MAX_FILE_SIZE: Override max file size in bytes
+  /// - BREEZE_MAX_PARALLEL_FILES: Override max parallel files
+  pub fn apply_env_overrides(&mut self) {
+    if let Ok(path) = std::env::var("BREEZE_DATABASE_PATH") {
+      self.database_path = PathBuf::from(path);
+    }
+    
+    if let Ok(model) = std::env::var("BREEZE_MODEL") {
+      self.model = model;
+    }
+    
+    if let Ok(device) = std::env::var("BREEZE_DEVICE") {
+      self.device = device;
+    }
+    
+    if let Ok(size) = std::env::var("BREEZE_MAX_CHUNK_SIZE") {
+      if let Ok(parsed) = size.parse::<usize>() {
+        self.max_chunk_size = parsed;
+      }
+    }
+    
+    if let Ok(size) = std::env::var("BREEZE_MAX_FILE_SIZE") {
+      if let Ok(parsed) = size.parse::<u64>() {
+        self.max_file_size = Some(parsed);
+      }
+    }
+    
+    if let Ok(parallel) = std::env::var("BREEZE_MAX_PARALLEL_FILES") {
+      if let Ok(parsed) = parallel.parse::<usize>() {
+        self.max_parallel_files = parsed;
+      }
+    }
   }
 
   pub fn save_to_file<P: AsRef<std::path::Path>>(&self, path: P) -> anyhow::Result<()> {
