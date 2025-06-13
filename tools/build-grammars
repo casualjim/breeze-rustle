@@ -286,8 +286,8 @@ def compile_grammar(
         if source_is_cpp:
             cmd.extend(["-std=c++14"])
         else:
-            # For C files, use gnu99 to support both designated initializers and GNU extensions
-            cmd.extend(["-std=gnu99"])
+            # For C files, use gnu11 to support static_assert and GNU extensions
+            cmd.extend(["-std=gnu11"])
 
         obj_file = platform_dir / f"{name}_{Path(source).stem}.o"
         compile_cmd = cmd + [source, "-o", str(obj_file)]
