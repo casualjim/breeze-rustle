@@ -139,21 +139,23 @@ fn main() {
     ""
   };
 
-  let platform_dir = if platform_suffix.is_empty() {
+  let platform_name = if platform_suffix.is_empty() {
     format!("{}-{}", os, arch)
   } else {
     format!("{}-{}-{}", os, arch, platform_suffix)
   };
 
-  let precompiled_dir = Path::new("precompiled").join(&platform_dir);
+  let precompiled_dir = Path::new("precompiled");
+  let combined_lib = precompiled_dir.join(format!("libtree-sitter-all-{}.a", platform_name));
+  let metadata_file = precompiled_dir.join(format!("grammars-{}.json", platform_name));
 
   // If precompiled binaries exist, use them
-  if precompiled_dir.exists() && precompiled_dir.join("grammars.json").exists() {
+  if combined_lib.exists() && metadata_file.exists() {
     println!(
       "cargo:warning=Using precompiled grammars from {}",
-      precompiled_dir.display()
+      combined_lib.display()
     );
-    use_precompiled_binaries(&precompiled_dir, out_path);
+    use_precompiled_binaries(&combined_lib, &metadata_file, out_path);
     return;
   }
 
@@ -162,43 +164,24 @@ fn main() {
   compile_from_source(out_path);
 }
 
-fn use_precompiled_binaries(precompiled_dir: &Path, out_path: &Path) {
-  // Copy all library files
-  let lib_pattern = if cfg!(windows) { "lib" } else { "a" };
+fn use_precompiled_binaries(combined_lib: &Path, metadata_file: &Path, out_path: &Path) {
+  // Copy the combined library
+  let dest = out_path.join(combined_lib.file_name().unwrap());
+  fs::copy(&combined_lib, &dest).unwrap();
 
-  for entry in fs::read_dir(precompiled_dir).unwrap() {
-    let entry = entry.unwrap();
-    let path = entry.path();
-
-    // Copy library files
-    if path.extension().map_or(false, |ext| ext == lib_pattern) {
-      let filename = path.file_name().unwrap();
-      let dest = out_path.join(filename);
-      fs::copy(&path, &dest).unwrap();
-
-      // Tell Cargo where to find the library
-      let lib_name = path.file_stem().unwrap().to_str().unwrap();
-      if lib_name.starts_with("lib") {
-        // Unix-style library
-        println!("cargo:rustc-link-lib=static={}", &lib_name[3..]);
-      } else {
-        // Windows-style library
-        println!("cargo:rustc-link-lib=static={}", lib_name);
-      }
-    }
-  }
-
+  // Link the combined library
+  println!("cargo:rustc-link-lib=static=tree-sitter-all");
   println!("cargo:rustc-link-search=native={}", out_path.display());
 
-  // Check if any grammars use C++ scanners by looking for marker files
-  let has_cpp_grammars = precompiled_dir
-    .read_dir()
-    .map(|entries| {
-      entries
-        .filter_map(|e| e.ok())
-        .any(|entry| entry.path().extension().map_or(false, |ext| ext == "cpp"))
-    })
-    .unwrap_or(false);
+  // Read metadata to check for C++ grammars
+  let metadata_str = fs::read_to_string(metadata_file)
+    .expect("Failed to read metadata file");
+  let grammars: Vec<Grammar> = serde_json::from_str(&metadata_str)
+    .expect("Invalid grammars metadata");
+
+  // Check if any grammars use C++ by looking for specific grammars known to use C++
+  let cpp_grammars = ["cpp", "cuda", "arduino", "glsl", "hlsl", "wgsl", "wgsl_bevy"];
+  let has_cpp_grammars = grammars.iter().any(|g| cpp_grammars.contains(&g.name.as_str()));
 
   // Link C++ standard library if needed
   if has_cpp_grammars {
@@ -212,19 +195,8 @@ fn use_precompiled_binaries(precompiled_dir: &Path, out_path: &Path) {
     }
   }
 
-  // Copy the grammars.rs bindings file
-  if let Ok(bindings) = fs::read_to_string(precompiled_dir.join("grammars.rs")) {
-    fs::write(out_path.join("grammars.rs"), bindings).unwrap();
-  } else {
-    // Generate bindings from the grammars.json metadata
-    let grammars: Vec<Grammar> = serde_json::from_str(
-      &fs::read_to_string(precompiled_dir.join("grammars.json"))
-        .expect("Missing grammars.json in precompiled directory"),
-    )
-    .expect("Invalid grammars.json");
-
-    generate_bindings(out_path, &grammars);
-  }
+  // Generate bindings from the metadata
+  generate_bindings(out_path, &grammars);
 }
 
 fn compile_from_source(out_path: &Path) {
@@ -369,7 +341,7 @@ fn compile_from_source(out_path: &Path) {
   }
 
   // Compile each grammar individually but let cc use parallelism internally
-  for (grammar, parser_c, scanner_c, scanner_cc, has_scanner, is_cpp, src_dir, grammar_dir) in
+  for (grammar, parser_c, scanner_c, scanner_cc, has_scanner, _is_cpp, src_dir, grammar_dir) in
     &all_builds
   {
     println!("cargo:warning=Compiling grammar: {}", grammar.name);
@@ -378,10 +350,6 @@ fn compile_from_source(out_path: &Path) {
     build.include(src_dir);
     build.include(grammar_dir);
 
-    // Set C standard to C99 for better compatibility in CI environments
-    build.flag_if_supported("-std=c99");
-
-    // Add parser.c
     build.file(parser_c);
 
     // Add scanner if present
