@@ -38,6 +38,7 @@ jobs:
         with:
           path: crates/breeze-grammars/precompiled
           key: grammars-${{ hashFiles('crates/breeze-grammars/grammars.json') }}-v1
+          enableCrossOsArchive: true
           fail-on-cache-miss: true
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -97,6 +98,7 @@ jobs:
         with:
           path: crates/breeze-grammars/precompiled
           key: grammars-${{ hashFiles('crates/breeze-grammars/grammars.json') }}-v1
+          enableCrossOsArchive: true
           fail-on-cache-miss: true
       - uses: actions/setup-python@v5
         with:
@@ -132,6 +134,7 @@ jobs:
         with:
           path: crates/breeze-grammars/precompiled
           key: grammars-${{ hashFiles('crates/breeze-grammars/grammars.json') }}-v1
+          enableCrossOsArchive: true
           fail-on-cache-miss: true
       - uses: actions/setup-python@v5
         with:
@@ -167,6 +170,7 @@ jobs:
         with:
           path: crates/breeze-grammars/precompiled
           key: grammars-${{ hashFiles('crates/breeze-grammars/grammars.json') }}-v1
+          enableCrossOsArchive: true
           fail-on-cache-miss: true
       - uses: actions/setup-python@v5
         with:
@@ -202,6 +206,7 @@ jobs:
         with:
           path: crates/breeze-grammars/precompiled
           key: grammars-${{ hashFiles('crates/breeze-grammars/grammars.json') }}-v1
+          enableCrossOsArchive: true
           fail-on-cache-miss: true
       - uses: actions/setup-python@v5
         with:
@@ -229,6 +234,7 @@ jobs:
         with:
           path: crates/breeze-grammars/precompiled
           key: grammars-${{ hashFiles('crates/breeze-grammars/grammars.json') }}-v1
+          enableCrossOsArchive: true
           fail-on-cache-miss: true
       - name: Build sdist
         uses: PyO3/maturin-action@v1
@@ -281,6 +287,7 @@ jobs:
         with:
           path: crates/breeze-grammars/precompiled
           key: grammars-${{ hashFiles('crates/breeze-grammars/grammars.json') }}-v1
+          enableCrossOsArchive: true
           fail-on-cache-miss: true
 
       - name: Setup Node.js

@@ -32,7 +32,9 @@
       "Bash(nm:*)",
       "Bash(find:*)",
       "Bash(rg:*)",
-      "Bash(RUST_LOG=breeze=debug cargo test:*)"
+      "Bash(RUST_LOG=breeze=debug cargo test:*)",
+      "mcp__github__list_commits",
+      "Bash(gh api:*)"
     ],
     "deny": []
   }

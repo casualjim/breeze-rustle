@@ -18,10 +18,17 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
       - name: Install Zig
         uses: goto-bus-stop/setup-zig@v2
         with:
           version: 0.14.1
+
+      - name: Install tree-sitter-cli
+        run: |
+          cargo install tree-sitter-cli
 
       - name: Cache precompiled grammars
         id: cache-grammars
@@ -29,6 +36,7 @@ jobs:
         with:
           path: crates/breeze-grammars/precompiled
           key: grammars-${{ hashFiles('crates/breeze-grammars/grammars.json') }}-v1
+          enableCrossOsArchive: true
 
       - name: Build grammars for all platforms
         if: steps.cache-grammars.outputs.cache-hit != 'true'
