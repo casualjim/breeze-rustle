@@ -82,9 +82,11 @@ function greet(name) {
             assert hasattr(chunk, 'file_path')
             assert hasattr(chunk, 'chunk')
             assert hasattr(chunk.chunk, 'chunk_type')
-            assert chunk.chunk.chunk_type in [ChunkType.SEMANTIC, ChunkType.TEXT]
-            assert chunk.chunk.start_line >= 1, "Line numbers should be 1-based"
-            assert chunk.chunk.end_line >= chunk.chunk.start_line
+            assert chunk.chunk.chunk_type in [ChunkType.SEMANTIC, ChunkType.TEXT, ChunkType.EOF]
+            # EOF chunks have different properties
+            if chunk.chunk.chunk_type != ChunkType.EOF:
+                assert chunk.chunk.start_line >= 1, "Line numbers should be 1-based"
+                assert chunk.chunk.end_line >= chunk.chunk.start_line
         
         # Check we got chunks from different files
         file_paths = {chunk.file_path for chunk in chunks}
@@ -170,7 +172,9 @@ function greet(name) {
             # Verify all chunks have valid structure
             for chunk in chunks:
                 assert chunk.chunk.text, "Chunk should have text content"
-                assert chunk.chunk.metadata.language, "Chunk should have language"
+                # EOF chunks have empty language field
+                if chunk.chunk.chunk_type != ChunkType.EOF:
+                    assert chunk.chunk.metadata.language, "Non-EOF chunks should have language"
     
     @pytest.mark.asyncio
     async def test_walker_respects_max_parallel(self, test_project_dir):
@@ -284,3 +288,55 @@ function greet(name) {
         expected_extensions = {'.rs', '.py', '.txt', '.js'}
         assert expected_extensions.issubset(file_extensions), \
             f"Should have found files with extensions {expected_extensions}, got {file_extensions}"
+    
+    @pytest.mark.asyncio
+    async def test_eof_chunks_contain_content_and_hash(self, test_project_dir):
+        """Test that EOF chunks contain file content and hash."""
+        chunker = SemanticChunker()
+        walker = await chunker.walk_project(test_project_dir)
+        
+        file_contents = {}
+        eof_chunks = []
+        regular_chunks = []
+        
+        async for chunk in walker:
+            if chunk.chunk.chunk_type == ChunkType.EOF:
+                eof_chunks.append(chunk)
+                # EOF chunks should have content and hash
+                assert hasattr(chunk.chunk, 'content'), "EOF chunk should have content attribute"
+                assert hasattr(chunk.chunk, 'content_hash'), "EOF chunk should have content_hash attribute"
+                assert chunk.chunk.content is not None, "EOF chunk content should not be None"
+                assert chunk.chunk.content_hash is not None, "EOF chunk content_hash should not be None"
+                assert isinstance(chunk.chunk.content, str), "EOF chunk content should be a string"
+                assert isinstance(chunk.chunk.content_hash, bytes), "EOF chunk content_hash should be bytes"
+                assert len(chunk.chunk.content_hash) == 32, "Blake3 hash should be 32 bytes"
+                
+                # Store content for verification
+                file_contents[chunk.file_path] = chunk.chunk.content
+            else:
+                regular_chunks.append(chunk)
+                # Non-EOF chunks should not have content/hash
+                assert chunk.chunk.content is None, "Non-EOF chunks should have None content"
+                assert chunk.chunk.content_hash is None, "Non-EOF chunks should have None content_hash"
+        
+        # Should have EOF chunks for each file
+        assert len(eof_chunks) > 0, "Should have EOF chunks"
+        assert len(eof_chunks) == len(file_contents), "Should have one EOF chunk per file"
+        
+        # Verify content matches actual files
+        for file_path, content in file_contents.items():
+            with open(file_path, 'r') as f:
+                actual_content = f.read()
+                assert content == actual_content, f"EOF chunk content should match file content for {file_path}"
+        
+        # Verify we can reconstruct the full content from chunks
+        for file_path in file_contents:
+            file_chunks = [c for c in regular_chunks if c.file_path == file_path]
+            if file_chunks:
+                # The chunks text combined should be part of the full content
+                combined_text = ''.join(c.chunk.text for c in file_chunks)
+                full_content = file_contents[file_path]
+                # Due to chunking logic, combined text might not be exactly the full content
+                # but each chunk text should be found in the full content
+                for chunk in file_chunks:
+                    assert chunk.chunk.text in full_content, "Chunk text should be found in full content"

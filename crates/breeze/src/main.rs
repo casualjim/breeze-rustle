@@ -1,20 +1,20 @@
 use std::path::Path;
-use tracing::{info, error};
+use tracing::{error, info};
 
 #[tokio::main]
 async fn main() {
   let _log_guard = breeze::init_logging(env!("CARGO_PKG_NAME"));
-  
+
   info!("Starting Breeze indexer");
 
   let config = breeze::Config::default();
   info!("Loaded configuration: {:?}", config);
-  
+
   match breeze::App::new(config).await {
     Ok(app) => {
       let index_path = Path::new("/Users/ivan/github/kuzudb/kuzu");
       info!("Indexing directory: {}", index_path.display());
-      
+
       match app.index(index_path).await {
         Ok(_) => info!("Indexing completed successfully!"),
         Err(e) => {

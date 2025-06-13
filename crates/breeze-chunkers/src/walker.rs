@@ -5,13 +5,52 @@ use crate::{
   types::{Chunk, ChunkError, FileMetadata, ProjectChunk, ProjectFile},
 };
 use async_stream;
+use blake3::Hasher;
 use futures::{Stream, StreamExt};
-use ignore::{WalkBuilder, WalkState};
+use ignore::{DirEntry, WalkBuilder, WalkState};
 use std::path::Path;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
-use blake3::Hasher;
+use tracing::{debug, error};
+
+/// Check if an entry should be traversed (for directories) or processed (for files)
+fn should_process_entry(entry: &DirEntry) -> bool {
+  // Always traverse directories
+  if entry.file_type().map_or(false, |ft| ft.is_dir()) {
+    return true;
+  }
+
+  // For files, apply our filtering logic
+  if !entry.file_type().map_or(false, |ft| ft.is_file()) {
+    return false;
+  }
+
+  let path = entry.path();
+
+  // Skip empty files
+  if let Ok(metadata) = entry.metadata() {
+    if metadata.len() == 0 {
+      debug!("Skipping empty file: {}", path.display());
+      return false;
+    }
+  }
+
+  // Skip binary files
+  let is_text_file = if let Ok(Some(file_type)) = infer::get_from_path(&path) {
+    file_type.matcher_type() == infer::MatcherType::Text
+  } else {
+    // If infer can't determine, check with hyperpolyglot
+    hyperpolyglot::detect(&path).is_ok()
+  };
+
+  if !is_text_file {
+    debug!("Skipping binary file: {}", path.display());
+    return false;
+  }
+
+  true
+}
 
 /// Options for walking a project directory
 #[derive(Debug, Clone)]
@@ -66,6 +105,7 @@ pub fn walk_project(
     let walker = WalkBuilder::new(&path)
       .threads(options.max_parallel)
       .max_filesize(max_file_size)
+      .filter_entry(should_process_entry)
       .build_parallel();
 
     let tx = Arc::new(tx);
@@ -77,29 +117,36 @@ pub fn walk_project(
 
       Box::new(move |result| {
         if let Ok(entry) = result {
-          if entry.file_type().map_or(false, |ft| ft.is_file()) {
-            let path = entry.path().to_owned();
-            let tx = tx.clone();
-            let chunker = chunker.clone();
+          let path = entry.path().to_owned();
+          let tx = tx.clone();
+          let chunker = chunker.clone();
 
-            // Spawn async task on the runtime
-            handle.spawn(async move {
-              let mut stream = Box::pin(process_file(&path, chunker));
-              while let Some(result) = stream.next().await {
-                match result {
-                  Ok(chunk) => {
-                    if tx.send(Ok(chunk)).await.is_err() {
-                      return; // Receiver dropped
-                    }
+          // Spawn async task on the runtime
+          handle.spawn(async move {
+            let mut stream = Box::pin(process_file(&path, chunker));
+            while let Some(result) = stream.next().await {
+              match result {
+                Ok(chunk) => {
+                  if tx.send(Ok(chunk)).await.is_err() {
+                    return; // Receiver dropped
                   }
-                  Err(e) => {
-                    // Log error but continue processing other files
-                    eprintln!("Error processing {}: {}", path.display(), e);
+                }
+                Err(e) => {
+                  // Log based on error type
+                  match &e {
+                    ChunkError::IoError(io_err)
+                      if io_err.kind() == std::io::ErrorKind::InvalidData =>
+                    {
+                      debug!("Skipping non-UTF8 file {}: {}", path.display(), e);
+                    }
+                    _ => {
+                      error!("Error processing {}: {}", path.display(), e);
+                    }
                   }
                 }
               }
-            });
-          }
+            }
+          });
         }
         WalkState::Continue
       })
@@ -142,6 +189,7 @@ pub fn walk_project_streaming(
     let walker = WalkBuilder::new(&path)
       .threads(options.max_parallel)
       .max_filesize(max_file_size)
+      .filter_entry(should_process_entry)
       .build_parallel();
 
     let tx = Arc::new(tx);
@@ -153,6 +201,7 @@ pub fn walk_project_streaming(
 
       Box::new(move |result| {
         if let Ok(entry) = result {
+          // Only process files, not directories
           if entry.file_type().map_or(false, |ft| ft.is_file()) {
             let path = entry.path().to_owned();
             let tx = tx.clone();
@@ -168,7 +217,17 @@ pub fn walk_project_streaming(
                   }
                 }
                 Err(e) => {
-                  eprintln!("Error processing {}: {}", path.display(), e);
+                  // Log based on error type
+                  match &e {
+                    ChunkError::IoError(io_err)
+                      if io_err.kind() == std::io::ErrorKind::InvalidData =>
+                    {
+                      debug!("Skipping non-UTF8 file {}: {}", path.display(), e);
+                    }
+                    _ => {
+                      error!("Error processing {}: {}", path.display(), e);
+                    }
+                  }
                   if tx.send(Err(e)).await.is_err() {
                     return; // Receiver dropped
                   }
@@ -194,26 +253,14 @@ async fn process_file_with_metadata<P: AsRef<Path>>(
   let path_str = path.to_string_lossy().to_string();
 
   // Get file metadata
-  let metadata = tokio::fs::metadata(&path).await.map_err(ChunkError::IoError)?;
-  
-  // Check if it's a text file
-  let is_text_file = if let Ok(Some(file_type)) = infer::get_from_path(&path) {
-    file_type.matcher_type() == infer::MatcherType::Text
-  } else {
-    // If infer can't determine, check with hyperpolyglot
-    hyperpolyglot::detect(&path).is_ok()
-  };
-
-  if !is_text_file {
-    return Err(ChunkError::UnsupportedLanguage("Binary file".to_string()));
-  }
+  let metadata = tokio::fs::metadata(&path)
+    .await
+    .map_err(ChunkError::IoError)?;
 
   // Read content and compute hash
-  let content = tokio::fs::read_to_string(&path).await.map_err(ChunkError::IoError)?;
-  
-  if content.is_empty() {
-    return Err(ChunkError::ParseError("Empty file".to_string()));
-  }
+  let content = tokio::fs::read_to_string(&path)
+    .await
+    .map_err(ChunkError::IoError)?;
 
   // Compute content hash
   let mut hasher = Hasher::new();
@@ -251,23 +298,28 @@ async fn process_file_with_metadata<P: AsRef<Path>>(
   let chunker_clone = chunker.clone();
   let path_str_clone = path_str.clone();
   let content_clone = content.clone();
-  
+
   tokio::spawn(async move {
     // Check if hyperpolyglot detects a supported language
-    let detected_language = if let Ok(Some(detection)) = hyperpolyglot::detect(Path::new(&path_str_clone)) {
-      let language = detection.language();
-      if get_language(language).is_some() {
-        Some(language.to_string())
+    let detected_language =
+      if let Ok(Some(detection)) = hyperpolyglot::detect(Path::new(&path_str_clone)) {
+        let language = detection.language();
+        if get_language(language).is_some() {
+          Some(language.to_string())
+        } else {
+          None
+        }
       } else {
         None
-      }
-    } else {
-      None
-    };
+      };
 
     // Try semantic chunking first if we have a supported language
     if let Some(language) = detected_language {
-      let mut chunk_stream = Box::pin(chunker_clone.chunk_code(content_clone.clone(), language.clone(), Some(path_str_clone.clone())));
+      let mut chunk_stream = Box::pin(chunker_clone.chunk_code(
+        content_clone.clone(),
+        language.clone(),
+        Some(path_str_clone.clone()),
+      ));
       let mut had_success = false;
 
       while let Some(chunk_result) = chunk_stream.next().await {
@@ -293,7 +345,8 @@ async fn process_file_with_metadata<P: AsRef<Path>>(
     }
 
     // Fall back to text chunking
-    let mut chunk_stream = Box::pin(chunker_clone.chunk_text(content_clone, Some(path_str_clone.clone())));
+    let mut chunk_stream =
+      Box::pin(chunker_clone.chunk_text(content_clone, Some(path_str_clone.clone())));
     while let Some(chunk_result) = chunk_stream.next().await {
       match chunk_result {
         Ok(chunk) => {
@@ -347,6 +400,13 @@ fn process_file<P: AsRef<Path>>(
           return;
       }
 
+      // Compute content hash
+      let mut hasher = Hasher::new();
+      hasher.update(content.as_bytes());
+      let hash = hasher.finalize();
+      let mut content_hash = [0u8; 32];
+      content_hash.copy_from_slice(hash.as_bytes());
+
       // Check if hyperpolyglot detects a supported language
       let detected_language = if let Ok(Some(detection)) = hyperpolyglot::detect(&path) {
           let language = detection.language();
@@ -359,9 +419,12 @@ fn process_file<P: AsRef<Path>>(
           None
       };
 
+      // Clone content once for the EOF marker
+      let content_for_eof = content.clone();
+
       // Try semantic chunking first if we have a supported language
       if let Some(language) = detected_language {
-          let mut chunk_stream = Box::pin(chunker.chunk_code(content.clone(), language.clone(), Some(path_str.clone())));
+          let mut chunk_stream = Box::pin(chunker.chunk_code(content, language.clone(), Some(path_str.clone())));
           let mut had_success = false;
 
           while let Some(chunk_result) = chunk_stream.next().await {
@@ -384,12 +447,24 @@ fn process_file<P: AsRef<Path>>(
 
           // If semantic chunking succeeded, we're done
           if had_success {
+              // Emit EOF marker for this file
+              yield ProjectChunk {
+                  file_path: path_str.clone(),
+                  chunk: Chunk::EndOfFile {
+                      file_path: path_str.clone(),
+                      content: content_for_eof,
+                      content_hash,
+                  },
+              };
               return;
           }
       }
 
       // Fall back to text chunking
-      let mut chunk_stream = Box::pin(chunker.chunk_text(content, Some(path_str.clone())));
+      // Note: content was already moved into chunk_code if we tried semantic chunking
+      let content_for_text = content_for_eof.clone();
+
+      let mut chunk_stream = Box::pin(chunker.chunk_text(content_for_text, Some(path_str.clone())));
       while let Some(chunk_result) = chunk_stream.next().await {
           let chunk = chunk_result?;
           yield ProjectChunk {
@@ -397,6 +472,16 @@ fn process_file<P: AsRef<Path>>(
               chunk,
           };
       }
+
+      // Emit EOF marker for this file
+      yield ProjectChunk {
+          file_path: path_str.clone(),
+          chunk: Chunk::EndOfFile {
+              file_path: path_str,
+              content: content_for_eof,
+              content_hash,
+          },
+      };
   }
 }
 
@@ -697,7 +782,7 @@ python -m pytest tests/
     // Check Markdown files (should be semantic chunks)
     let md_chunks: Vec<_> = chunks
       .iter()
-      .filter(|c| c.file_path.ends_with(".md"))
+      .filter(|c| c.file_path.ends_with(".md") && !matches!(c.chunk, Chunk::EndOfFile { .. }))
       .collect();
     assert!(!md_chunks.is_empty(), "Should have Markdown chunks");
     assert!(md_chunks.iter().all(|c| c.is_semantic()));
@@ -784,10 +869,24 @@ fn helper() {
     }
 
     assert!(!chunks.is_empty(), "Should get chunks from Rust file");
-    assert!(chunks.iter().all(|c| c.is_semantic()));
-    assert!(chunks.iter().all(|c| match &c.chunk {
+
+    // Filter out EOF chunks for semantic checks
+    let semantic_chunks: Vec<_> = chunks
+      .iter()
+      .filter(|c| !matches!(c.chunk, Chunk::EndOfFile { .. }))
+      .collect();
+
+    assert!(!semantic_chunks.is_empty(), "Should have semantic chunks");
+    assert!(semantic_chunks.iter().all(|c| c.is_semantic()));
+    assert!(semantic_chunks.iter().all(|c| match &c.chunk {
       Chunk::Semantic(sc) => sc.metadata.language == "Rust",
       _ => false,
     }));
+
+    // Should have exactly one EOF chunk at the end
+    assert!(matches!(
+      chunks.last().unwrap().chunk,
+      Chunk::EndOfFile { .. }
+    ));
   }
 }

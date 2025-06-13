@@ -1,4 +1,4 @@
-use candle_core::{backend::BackendDevice, Device};
+use candle_core::{Device, backend::BackendDevice};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
@@ -47,10 +47,10 @@ fn default_model() -> String {
 
 fn default_device() -> String {
   if cfg!(feature = "cuda") {
-    return "cuda".to_string()
+    return "cuda".to_string();
   } else if cfg!(target_os = "macos") && cfg!(feature = "metal") {
     // Use MPS on macOS with Metal feature enabled
-    return "mps".to_string()
+    return "mps".to_string();
   }
   // Default to CPU on macOS without Metal
   "cpu".to_string()
@@ -95,11 +95,29 @@ impl Config {
   }
 
   pub fn get_device(&self, idx: usize) -> Device {
-    match self.device.as_str()  {
+    match self.device.as_str() {
       "cpu" => Device::Cpu,
-      "mps" => Device::Metal(candle_core::MetalDevice::new(idx).expect("Failed to create MPS device")),
-      "cuda" => Device::Cuda(candle_core::CudaDevice::new(idx).expect("Failed to create CUDA device")),
+      "mps" => {
+        Device::Metal(candle_core::MetalDevice::new(idx).expect("Failed to create MPS device"))
+      }
+      "cuda" => {
+        Device::Cuda(candle_core::CudaDevice::new(idx).expect("Failed to create CUDA device"))
+      }
       _ => panic!("Unsupported device type: {}", self.device),
+    }
+  }
+
+  /// Create a config suitable for tests with a small, fast model
+  #[cfg(test)]
+  pub fn test() -> Self {
+    Self {
+      database_path: PathBuf::from("./test_db"),
+      table_name: "test_documents".to_string(),
+      model: "sentence-transformers/all-MiniLM-L6-v2".to_string(),
+      device: "cpu".to_string(),
+      max_chunk_size: 512,
+      max_file_size: Some(1024 * 1024), // 1MB
+      max_parallel_files: 2,
     }
   }
 }

@@ -11,32 +11,40 @@ A refined embedding system that leverages our streaming pipeline architecture wi
 - Core chunking and grammar support
 - DocumentBuilder trait for aggregating chunk embeddings
 - Refactored to embed chunks individually, then aggregate
+- EOF chunks with file content and hash for single-read optimization
+- **Token Storage in Chunks** - SemanticChunk includes `tokens: Option<Vec<u32>>`
+- **TEI Integration** - Full text-embeddings-inference backend with pre-tokenized support
+- Comprehensive indexer testing with real models
 
 ### 🚧 In Progress
-- **Token Storage in Chunks** - Chunks now include token IDs to avoid double tokenization
-- **TEI Integration** - Replacing custom local embedder with text-embeddings-inference
-- **Remote Providers** - Implementing Voyage and OpenAI providers
+- **Remote Providers** - Implementing Voyage and OpenAI providers with rate limiting
+- **CLI Application** - Building the main breeze executable
+- **Configuration System** - Wiring up TOML config to provider selection
 
-### 🎯 Priority Tasks
-1. **Local TEI Backend** (High Priority)
-   - Replace SentenceTransformerEmbedder with TEI for local models
-   - Support 20+ model architectures out of the box
-   - Hardware acceleration (CUDA, Metal, MKL)
-   
-2. **Remote Providers** (High Priority)
-   - Voyage API integration (voyage-code-2)
-   - OpenAI API integration (text-embedding-3-small/large)
+### 🎯 Next Priority Tasks
+
+1. **Remote Provider Implementations** (High Priority)
+   - Voyage API integration using async-openai
+   - OpenAI API integration with tier-based rate limiting
    - Provider-specific batching strategies
+   - Retry logic with exponential backoff
    
-3. **Token-Aware Chunking** (High Priority)
-   - Store token IDs in chunks during chunking
-   - Pass pre-tokenized input when possible
-   - Handle tokenizer compatibility across providers
-
-4. **Configuration System** (Medium Priority)
-   - Provider selection (local/voyage/openai)
+2. **CLI Application** (High Priority)
+   - `breeze index` command to index a codebase
+   - `breeze search` command for similarity search
+   - Progress bars and status tracking
+   - Configuration file support
+   
+3. **Configuration System Integration** (Medium Priority)
+   - Load provider selection from TOML config
    - Model configuration per provider
    - Rate limiting and retry policies
+   - Environment variable overrides
+
+4. **Integration Testing** (Medium Priority)
+   - End-to-end tests with real embedders
+   - Performance benchmarks for different providers
+   - Error recovery scenarios
 
 ## Architecture
 
@@ -51,6 +59,7 @@ Enhanced Walker ─>├─> Voyage Embedder (remote) ├─> DocumentBuilder →
 **Key Points**:
 - Walker yields `ProjectFile` items containing chunk streams
 - Chunks include pre-tokenized data (`tokens: Option<Vec<u32>>`)
+- EOF chunks contain full file content and hash - single file read optimization
 - Multiple embedder implementations:
   - TEI for local models (20+ architectures)
   - Voyage for high-performance code embedding
@@ -70,6 +79,19 @@ pub struct SemanticChunk {
     pub start_line: usize,
     pub end_line: usize,
     pub metadata: ChunkMetadata,
+}
+```
+
+### EOF Chunk (End of File)
+```rust
+pub enum Chunk {
+    Semantic(SemanticChunk),
+    Text(SemanticChunk),
+    EndOfFile { 
+        file_path: String,
+        content: String,      // Full file content
+        content_hash: [u8; 32],  // Blake3 hash
+    },
 }
 ```
 

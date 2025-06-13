@@ -1,12 +1,12 @@
 use std::path::Path;
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use tracing::{debug, error, info, instrument};
+use tracing::{debug, info, instrument};
 
 use crate::config::Config;
 use crate::embeddings::{
-    loader::{load_tei_embedder, dtype_for_device},
-    tei::TEIEmbedder,
+  loader::{dtype_for_device, load_tei_embedder},
+  tei::TEIEmbedder,
 };
 use crate::indexer::Indexer;
 use crate::models::CodeDocument;
@@ -40,15 +40,15 @@ impl App {
 
     // Load TEI embedder
     let dtype = dtype_for_device(&config.device);
-    info!("Loading TEI embedder: {} with dtype: {}", config.model, dtype);
-    
+    info!(
+      "Loading TEI embedder: {} with dtype: {}",
+      config.model, dtype
+    );
+
     let embedder = load_tei_embedder(&config.model, dtype, None).await?;
     let embedding_dim = embedder.embedding_dim();
-    
-    info!(
-      "Embedder loaded successfully, dimension: {}",
-      embedding_dim
-    );
+
+    info!("Embedder loaded successfully, dimension: {}", embedding_dim);
 
     // Ensure table exists
     debug!(
@@ -66,7 +66,10 @@ impl App {
   }
 
   /// Index a repository at the given path
-  pub async fn index(&self, path: &Path) -> Result<usize, Box<dyn std::error::Error>> {
+  pub async fn index(
+    &self,
+    path: &Path,
+  ) -> Result<usize, Box<dyn std::error::Error + Send + Sync>> {
     // Create an indexer with our resources
     let indexer = Indexer::new(&self.config, &self.embedder, self.table.clone());
 

@@ -1,23 +1,22 @@
-use std::num::NonZeroUsize;
 use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Instant;
 
-use breeze_chunkers::{Tokenizer, WalkOptions};
+use breeze_chunkers::{Chunk, Tokenizer, WalkOptions, walk_project};
 use futures_util::StreamExt;
 use lancedb::Table;
-use tokio::sync::RwLock;
-use tracing::{debug, info};
+use tokio::sync::{RwLock, mpsc};
+use tokio_util::sync::CancellationToken;
+use tracing::{debug, error, info};
 
 use crate::config::Config;
 use crate::converter::BufferedRecordBatchConverter;
-use crate::document_builder::WeightedAverageDocumentBuilder;
+use crate::document_builder::build_document_from_accumulator;
 use crate::embeddings::tei::TEIEmbedder;
 use crate::models::CodeDocument;
-use crate::pipeline::{DocumentBuilder, Embedder, PathWalker, RecordBatchConverter, Sink};
+use crate::pipeline::{ChunkBatch, EmbeddedChunk, EmbeddedChunkWithFile, FileAccumulator};
 use crate::sinks::lancedb_sink::LanceDbSink;
-use crate::walker::ProjectWalker;
 
 pub struct Indexer<'a> {
   config: &'a Config,
@@ -26,12 +25,7 @@ pub struct Indexer<'a> {
 }
 
 impl<'a> Indexer<'a> {
-  /// Create a new pipeline with external resources
-  pub fn new(
-    config: &'a Config,
-    embedder: &'a TEIEmbedder,
-    table: Arc<RwLock<Table>>,
-  ) -> Self {
+  pub fn new(config: &'a Config, embedder: &'a TEIEmbedder, table: Arc<RwLock<Table>>) -> Self {
     Self {
       config,
       embedder,
@@ -39,15 +33,14 @@ impl<'a> Indexer<'a> {
     }
   }
 
-  /// Run the indexing pipeline
-  pub async fn index(&self, path: &Path) -> Result<usize, Box<dyn std::error::Error>> {
+  pub async fn index(
+    &self,
+    path: &Path,
+  ) -> Result<usize, Box<dyn std::error::Error + Send + Sync>> {
     let start_time = Instant::now();
-    info!(
-      path = %path.display(),
-      "Starting indexing"
-    );
+    info!(path = %path.display(), "Starting channel-based indexing");
 
-    // Use the tokenizer from the embedding model for consistent tokenization
+    // Setup
     let tokenizer = self.embedder.tokenizer();
     let walk_options = WalkOptions {
       max_chunk_size: self.config.max_chunk_size,
@@ -56,146 +49,790 @@ impl<'a> Indexer<'a> {
       max_file_size: self.config.max_file_size,
     };
 
-    debug!(
-      max_chunk_size = self.config.max_chunk_size,
-      max_parallel_files = self.config.max_parallel_files,
-      max_file_size = ?self.config.max_file_size,
-      "Walk options configured"
-    );
-
-    let walker = ProjectWalker::new(walk_options);
-
-    let embedding_dim = self.embedder.embedding_dim();
-    info!(
-      embedding_dim = embedding_dim,
-      "Embedding model initialized"
-    );
-
-    let document_builder = WeightedAverageDocumentBuilder::new(embedding_dim);
-    
-    let converter = BufferedRecordBatchConverter::<CodeDocument>::default()
-      .with_schema(Arc::new(CodeDocument::schema(embedding_dim)));
-
-    let sink = LanceDbSink::new(self.table.clone());
-
-    // Counters for progress tracking
-    let files_processed = Arc::new(AtomicUsize::new(0));
-    let files_with_embeddings_processed = Arc::new(AtomicUsize::new(0));
-    let documents_processed = Arc::new(AtomicUsize::new(0));
-    let batches_written = Arc::new(AtomicUsize::new(0));
-
-    // Connect the pipeline stages with logging
-    let files_counter = files_processed.clone();
-    let files = walker.walk(path).inspect(move |file| {
-      let count = files_counter.fetch_add(1, Ordering::Relaxed) + 1;
-      info!(
-        file_number = count,
-        file_path = %file.file_path,
-        file_size = file.metadata.size,
-        line_count = file.metadata.line_count,
-        language = ?file.metadata.primary_language,
-        "Processing file"
-      );
-    });
-
-    let files_with_embeddings_counter = files_with_embeddings_processed.clone();
-    let files_with_embeddings = self.embedder.embed(Box::pin(files)).inspect(move |file| {
-      let count = files_with_embeddings_counter.fetch_add(1, Ordering::Relaxed) + 1;
-      debug!(
-        files_embedded = count,
-        file_path = %file.file_path,
-        "File chunks embedded"
-      );
-    });
-
-    let docs_counter = documents_processed.clone();
-    let documents = document_builder.build_documents(Box::pin(files_with_embeddings)).inspect(move |doc| {
-      let count = docs_counter.fetch_add(1, Ordering::Relaxed) + 1;
-      if count % 10 == 0 {
-        debug!(
-          documents_processed = count,
-          current_file = %doc.file_path,
-          "Document building progress"
-        );
-      }
-    });
-
-    let record_batches = converter.convert(Box::pin(documents));
-
-    // Process through sink
-    let batches_counter = batches_written.clone();
-    let mut sink_stream = sink.sink(record_batches).inspect(move |_| {
-      let count = batches_counter.fetch_add(1, Ordering::Relaxed) + 1;
-      debug!(
-        batch_number = count,
-        "Written batch to LanceDB"
-      );
-    });
-
-    while let Some(()) = sink_stream.next().await {
-      // Sink processes batches
-    }
-
-    // Get the actual count from the table
-    let table = self.table.read().await;
-    let count = table.count_rows(None).await?;
+    let chunk_stream = walk_project(path.to_path_buf(), walk_options);
+    let result = self.index_stream(chunk_stream, 32).await?;
 
     let elapsed = start_time.elapsed();
-    let total_files = files_processed.load(Ordering::Relaxed);
-    let total_files_embedded = files_with_embeddings_processed.load(Ordering::Relaxed);
-    let total_documents = documents_processed.load(Ordering::Relaxed);
-    let total_batches = batches_written.load(Ordering::Relaxed);
-
     info!(
       elapsed_seconds = elapsed.as_secs_f64(),
-      files_processed = total_files,
-      files_embedded = total_files_embedded,
-      documents_created = total_documents,
-      batches_written = total_batches,
-      documents_in_index = count,
+      documents_written = result,
       "Indexing completed"
     );
 
-    Ok(count)
+    Ok(result)
   }
+
+  // Testable pipeline that accepts any stream of chunks
+  pub async fn index_stream(
+    &self,
+    chunk_stream: impl futures_util::Stream<
+      Item = Result<breeze_chunkers::ProjectChunk, breeze_chunkers::ChunkError>,
+    > + Send
+    + 'static,
+    max_batch_size: usize,
+  ) -> Result<usize, Box<dyn std::error::Error + Send + Sync>> {
+    let embedding_dim = self.embedder.embedding_dim();
+
+    // Create channels with bounded capacity for backpressure
+    let (batch_tx, batch_rx) = mpsc::channel::<ChunkBatch>(10);
+    let (embedded_tx, embedded_rx) = mpsc::channel::<EmbeddedChunkWithFile>(100);
+    let (doc_tx, doc_rx) = mpsc::channel::<CodeDocument>(50);
+
+    // Progress tracking and cancellation
+    let stats = IndexingStats::new();
+    let cancel_token = CancellationToken::new();
+
+    // Start pipeline stages with cancellation support
+    // we start this with in the reverse order of execution
+    let sink_handle = self.spawn_sink(doc_rx, stats.clone());
+    let doc_handle = self.spawn_document_builder(
+      embedded_rx,
+      doc_tx,
+      embedding_dim,
+      stats.clone(),
+      cancel_token.clone(),
+    );
+    let embed_handle =
+      self.spawn_embedder(batch_rx, embedded_tx, stats.clone(), cancel_token.clone());
+    let walk_handle = self.spawn_stream_processor(
+      chunk_stream,
+      batch_tx,
+      max_batch_size,
+      stats.clone(),
+      cancel_token.clone(),
+    );
+
+    // Wait for pipeline completion with proper error handling
+    let (walk_result, embed_result, doc_result, sink_result) =
+      tokio::join!(walk_handle, embed_handle, doc_handle, sink_handle);
+
+    // Check all results and report errors, cancelling other tasks on first error
+    if let Err(e) = walk_result {
+      cancel_token.cancel();
+      return Err(format!("Stream processor task failed: {}", e).into());
+    }
+    if let Err(e) = embed_result {
+      cancel_token.cancel();
+      return Err(format!("Embedder task failed: {}", e).into());
+    }
+    if let Err(e) = doc_result {
+      cancel_token.cancel();
+      return Err(format!("Document builder task failed: {}", e).into());
+    }
+
+    let documents_written = sink_result
+      .map_err(|e| format!("Sink task panicked: {}", e))?
+      .map_err(|e| format!("Sink task failed: {}", e))?;
+
+    // Report results
+    info!(
+      files = stats.files.load(Ordering::Relaxed),
+      chunks = stats.chunks.load(Ordering::Relaxed),
+      batches = stats.batches.load(Ordering::Relaxed),
+      documents = stats.documents.load(Ordering::Relaxed),
+      documents_written,
+      "Indexing completed"
+    );
+
+    Ok(documents_written)
+  }
+
+  fn spawn_stream_processor(
+    &self,
+    chunk_stream: impl futures_util::Stream<
+      Item = Result<breeze_chunkers::ProjectChunk, breeze_chunkers::ChunkError>,
+    > + Send
+    + 'static,
+    batch_tx: mpsc::Sender<ChunkBatch>,
+    max_batch_size: usize,
+    stats: IndexingStats,
+    cancel_token: CancellationToken,
+  ) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(stream_processor_task(
+      chunk_stream,
+      batch_tx,
+      max_batch_size,
+      stats,
+      cancel_token,
+    ))
+  }
+
+  fn spawn_embedder(
+    &self,
+    batch_rx: mpsc::Receiver<ChunkBatch>,
+    embedded_tx: mpsc::Sender<EmbeddedChunkWithFile>,
+    stats: IndexingStats,
+    cancel_token: CancellationToken,
+  ) -> tokio::task::JoinHandle<()> {
+    let embedder = self.embedder.clone();
+    tokio::spawn(embedder_task(
+      embedder,
+      batch_rx,
+      embedded_tx,
+      stats,
+      cancel_token,
+    ))
+  }
+
+  fn spawn_document_builder(
+    &self,
+    embedded_rx: mpsc::Receiver<EmbeddedChunkWithFile>,
+    doc_tx: mpsc::Sender<CodeDocument>,
+    embedding_dim: usize,
+    stats: IndexingStats,
+    cancel_token: CancellationToken,
+  ) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(document_builder_task(
+      embedded_rx,
+      doc_tx,
+      embedding_dim,
+      stats,
+      cancel_token,
+    ))
+  }
+
+  fn spawn_sink(
+    &self,
+    doc_rx: mpsc::Receiver<CodeDocument>,
+    stats: IndexingStats,
+  ) -> tokio::task::JoinHandle<Result<usize, Box<dyn std::error::Error + Send + Sync>>> {
+    let table = self.table.clone();
+    let embedding_dim = self.embedder.embedding_dim();
+    tokio::spawn(sink_task(doc_rx, table, embedding_dim, stats))
+  }
+}
+
+#[derive(Clone)]
+struct IndexingStats {
+  files: Arc<AtomicUsize>,
+  chunks: Arc<AtomicUsize>,
+  batches: Arc<AtomicUsize>,
+  documents: Arc<AtomicUsize>,
+}
+
+impl IndexingStats {
+  fn new() -> Self {
+    Self {
+      files: Arc::new(AtomicUsize::new(0)),
+      chunks: Arc::new(AtomicUsize::new(0)),
+      batches: Arc::new(AtomicUsize::new(0)),
+      documents: Arc::new(AtomicUsize::new(0)),
+    }
+  }
+}
+
+async fn send_batch(
+  tx: &mpsc::Sender<ChunkBatch>,
+  buffer: &mut Vec<breeze_chunkers::ProjectChunk>,
+) {
+  if !buffer.is_empty() {
+    debug!("Sending batch with {} chunks", buffer.len());
+    let batch = ChunkBatch {
+      chunks: buffer.clone(),
+    };
+    if tx.send(batch).await.is_err() {
+      debug!("Receiver dropped, stopping batch sender");
+    }
+    buffer.clear();
+  }
+}
+
+// Standalone task functions
+
+struct TaskGuard {
+  name: &'static str,
+}
+
+impl TaskGuard {
+  fn new(name: &'static str) -> Self {
+    debug!("{} task started", name);
+    Self { name }
+  }
+}
+
+impl Drop for TaskGuard {
+  fn drop(&mut self) {
+    debug!("{} task finished", self.name);
+  }
+}
+
+async fn stream_processor_task(
+  chunk_stream: impl futures_util::Stream<
+    Item = Result<breeze_chunkers::ProjectChunk, breeze_chunkers::ChunkError>,
+  > + Send
+  + 'static,
+  batch_tx: mpsc::Sender<ChunkBatch>,
+  max_batch_size: usize,
+  stats: IndexingStats,
+  cancel_token: CancellationToken,
+) {
+  let _guard = TaskGuard::new("Stream processor");
+  let mut chunk_stream = Box::pin(chunk_stream);
+  let mut batch_buffer = Vec::new();
+
+  loop {
+    tokio::select! {
+      _ = cancel_token.cancelled() => {
+        info!("Walker cancelled");
+        break;
+      }
+      result = chunk_stream.next() => {
+        match result {
+          Some(Ok(project_chunk)) => {
+            if matches!(project_chunk.chunk, Chunk::EndOfFile { .. }) {
+              // Flush pending batch before EOF
+              if !batch_buffer.is_empty() {
+                send_batch(&batch_tx, &mut batch_buffer).await;
+              }
+              // Forward EOF marker
+              send_batch(&batch_tx, &mut vec![project_chunk]).await;
+              stats.files.fetch_add(1, Ordering::Relaxed);
+            } else {
+              // Regular chunk
+              stats.chunks.fetch_add(1, Ordering::Relaxed);
+              batch_buffer.push(project_chunk);
+
+              if batch_buffer.len() >= max_batch_size {
+                send_batch(&batch_tx, &mut batch_buffer).await;
+              }
+            }
+          }
+          Some(Err(e)) => error!("Error processing chunk: {}", e),
+          None => break,
+        }
+      }
+    }
+  }
+
+  // Send remaining chunks
+  if !batch_buffer.is_empty() {
+    send_batch(&batch_tx, &mut batch_buffer).await;
+  }
+
+  info!(
+    files = stats.files.load(Ordering::Relaxed),
+    chunks = stats.chunks.load(Ordering::Relaxed),
+    "Stream processor completed"
+  );
+}
+
+async fn embedder_task(
+  embedder: TEIEmbedder,
+  mut batch_rx: mpsc::Receiver<ChunkBatch>,
+  embedded_tx: mpsc::Sender<EmbeddedChunkWithFile>,
+  stats: IndexingStats,
+  cancel_token: CancellationToken,
+) {
+  let _guard = TaskGuard::new("Embedder");
+  loop {
+    tokio::select! {
+      _ = cancel_token.cancelled() => {
+        info!("Embedder cancelled");
+        break;
+      }
+      batch = batch_rx.recv() => {
+        match batch {
+          Some(batch) => {
+            // Separate EOF markers from regular chunks
+            let (eof_chunks, regular_chunks): (Vec<_>, Vec<_>) = batch.chunks.into_iter()
+              .partition(|pc| matches!(pc.chunk, Chunk::EndOfFile { .. }));
+
+            // Process regular chunks if any
+            if !regular_chunks.is_empty() {
+              debug!("Processing {} regular chunks", regular_chunks.len());
+              let chunks: Vec<_> = regular_chunks.iter()
+                .map(|pc| (pc.file_path.clone(), pc.chunk.clone()))
+                .collect();
+
+              let chunk_list: Vec<_> = chunks.iter().map(|(_, c)| c.clone()).collect();
+              debug!("Calling embed_chunk_batch with {} chunks", chunk_list.len());
+
+              match embedder.embed_chunk_batch(chunk_list).await {
+                Ok(embedded_chunks) => {
+                  debug!("Successfully embedded {} chunks", embedded_chunks.len());
+                  stats.batches.fetch_add(1, Ordering::Relaxed);
+
+                  for (embedded, (file_path, _)) in embedded_chunks.into_iter().zip(chunks.iter()) {
+                    let item = EmbeddedChunkWithFile {
+                      file_path: file_path.clone(),
+                      chunk: embedded.chunk,
+                      embedding: embedded.embedding,
+                    };
+                    if embedded_tx.send(item).await.is_err() {
+                      return;
+                    }
+                  }
+                }
+                Err(e) => {
+                  error!("Failed to embed batch: {}", e);
+                  // Batch failure strategy: Skip failed batches but continue processing
+                  // This ensures:
+                  // 1. Other files can still be processed
+                  // 2. EOF markers are still sent so document builder doesn't deadlock
+                  // 3. Partial indexing is better than complete failure
+                  // Failed chunks will simply not have embeddings
+                }
+              }
+            } else {
+              debug!("No regular chunks in batch, only EOF markers");
+            }
+
+            // Always forward EOF chunks, even if embedding failed
+            for pc in eof_chunks {
+              if let Chunk::EndOfFile { .. } = pc.chunk {
+                let eof = EmbeddedChunkWithFile {
+                  file_path: pc.file_path.clone(),
+                  chunk: pc.chunk,
+                  embedding: vec![],
+                };
+                if embedded_tx.send(eof).await.is_err() {
+                  return; // Channel closed, safe to exit
+                }
+              }
+            }
+          }
+          None => break,
+        }
+      }
+    }
+  }
+
+  info!(
+    batches = stats.batches.load(Ordering::Relaxed),
+    "Embedder completed"
+  );
+}
+
+async fn document_builder_task(
+  mut embedded_rx: mpsc::Receiver<EmbeddedChunkWithFile>,
+  doc_tx: mpsc::Sender<CodeDocument>,
+  embedding_dim: usize,
+  stats: IndexingStats,
+  cancel_token: CancellationToken,
+) {
+  let _guard = TaskGuard::new("Document builder");
+  let mut file_accumulators: std::collections::HashMap<String, FileAccumulator> =
+    std::collections::HashMap::new();
+
+  loop {
+    tokio::select! {
+      _ = cancel_token.cancelled() => {
+        info!("Document builder cancelled");
+        break;
+      }
+      embedded_chunk = embedded_rx.recv() => {
+        match embedded_chunk {
+          Some(embedded_chunk) => {
+            let file_path = embedded_chunk.file_path.clone();
+
+            if matches!(embedded_chunk.chunk, Chunk::EndOfFile { .. }) {
+              // Build document for completed file
+              if let Some(mut accumulator) = file_accumulators.remove(&file_path) {
+                debug!("Building document for file: {}", file_path);
+                // Add the EOF chunk to the accumulator
+                accumulator.add_chunk(EmbeddedChunk {
+                  chunk: embedded_chunk.chunk,
+                  embedding: embedded_chunk.embedding,
+                });
+                if let Some(doc) = build_document_from_accumulator(accumulator, embedding_dim).await {
+                  stats.documents.fetch_add(1, Ordering::Relaxed);
+                  debug!("Sending document for file: {}", file_path);
+                  if doc_tx.send(doc).await.is_err() {
+                    debug!("Document receiver dropped");
+                    break;
+                  }
+                }
+              }
+            } else {
+              // Accumulate chunk
+              let accumulator = file_accumulators.entry(file_path)
+                .or_insert_with(|| FileAccumulator::new(embedded_chunk.file_path.clone()));
+
+              accumulator.add_chunk(EmbeddedChunk {
+                chunk: embedded_chunk.chunk,
+                embedding: embedded_chunk.embedding,
+              });
+            }
+          }
+          None => break,
+        }
+      }
+    }
+  }
+
+  // Process remaining files
+  for (_, accumulator) in file_accumulators {
+    if let Some(doc) = build_document_from_accumulator(accumulator, embedding_dim).await {
+      stats.documents.fetch_add(1, Ordering::Relaxed);
+      let _ = doc_tx.send(doc).await;
+    }
+  }
+
+  info!(
+    documents = stats.documents.load(Ordering::Relaxed),
+    "Document builder completed"
+  );
+}
+
+async fn sink_task(
+  doc_rx: mpsc::Receiver<CodeDocument>,
+  table: Arc<RwLock<Table>>,
+  embedding_dim: usize,
+  _stats: IndexingStats,
+) -> Result<usize, Box<dyn std::error::Error + Send + Sync>> {
+  let _guard = TaskGuard::new("Sink");
+  let converter = BufferedRecordBatchConverter::<CodeDocument>::default()
+    .with_schema(Arc::new(CodeDocument::schema(embedding_dim)));
+
+  let sink = LanceDbSink::new(table.clone());
+
+  let doc_stream = tokio_stream::wrappers::ReceiverStream::new(doc_rx);
+  let record_batches = converter.convert(Box::pin(doc_stream));
+
+  let mut sink_stream = sink.sink(record_batches);
+  let mut batch_count = 0;
+
+  while let Some(()) = sink_stream.next().await {
+    batch_count += 1;
+    debug!(batch_number = batch_count, "Written batch to LanceDB");
+  }
+
+  // Get final count from table
+  let table_guard = table.read().await;
+  let count = table_guard
+    .count_rows(None)
+    .await
+    .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?;
+
+  Ok(count)
 }
 
 #[cfg(test)]
 mod tests {
   use super::*;
   use crate::embeddings::loader::load_tei_embedder;
+  use breeze_chunkers::{ChunkError, ChunkMetadata, ProjectChunk, SemanticChunk};
+  use futures_util::stream;
   use tempfile::tempdir;
 
+  // Helper to create test chunks with fake tokens
+  fn create_test_chunk(file_path: &str, text: &str, is_eof: bool) -> ProjectChunk {
+    use std::collections::HashMap;
+    use std::sync::OnceLock;
+
+    // For tests, we'll accumulate content to pass in EOF
+    static TEST_CONTENT: OnceLock<std::sync::Mutex<HashMap<String, String>>> = OnceLock::new();
+    let test_content = TEST_CONTENT.get_or_init(|| std::sync::Mutex::new(HashMap::new()));
+
+    if is_eof {
+      // Get accumulated content for this file
+      let content = test_content
+        .lock()
+        .unwrap()
+        .get(file_path)
+        .cloned()
+        .unwrap_or_default();
+
+      // Compute hash
+      let hash = blake3::hash(content.as_bytes());
+      let mut content_hash = [0u8; 32];
+      content_hash.copy_from_slice(hash.as_bytes());
+
+      // Clear the content for this file after use
+      test_content.lock().unwrap().remove(file_path);
+
+      ProjectChunk {
+        file_path: file_path.to_string(),
+        chunk: Chunk::EndOfFile {
+          file_path: file_path.to_string(),
+          content,
+          content_hash,
+        },
+      }
+    } else {
+      // Accumulate content for this file
+      test_content
+        .lock()
+        .unwrap()
+        .entry(file_path.to_string())
+        .or_insert_with(String::new)
+        .push_str(text);
+
+      // Create fake tokens - just split by whitespace for tests
+      let tokens: Vec<u32> = text.split_whitespace().map(|_| 1234u32).collect();
+      ProjectChunk {
+        file_path: file_path.to_string(),
+        chunk: Chunk::Text(SemanticChunk {
+          text: text.to_string(),
+          start_byte: 0,
+          end_byte: text.len(),
+          start_line: 1,
+          end_line: 1,
+          tokens: Some(tokens),
+          metadata: ChunkMetadata {
+            node_type: "test".to_string(),
+            node_name: None,
+            language: "rust".to_string(),
+            parent_context: None,
+            scope_path: vec![],
+            definitions: vec![],
+            references: vec![],
+          },
+        }),
+      }
+    }
+  }
+
   #[tokio::test]
-  async fn test_indexer() {
-    let config = Config::default();
+  async fn test_pipeline_basic_flow() {
+    let config = Config::test();
+    let embedder = load_tei_embedder(&config.model, "float32", None)
+      .await
+      .unwrap();
 
-    // Create embedder
-    let embedder = load_tei_embedder(&config.model, "float32", None).await.unwrap();
+    // Create temporary LanceDB
+    let temp_db = tempdir().unwrap();
+    let connection = lancedb::connect(temp_db.path().to_str().unwrap())
+      .execute()
+      .await
+      .unwrap();
+    let table = CodeDocument::ensure_table(&connection, "test", embedder.embedding_dim())
+      .await
+      .unwrap();
+
+    let indexer = Indexer::new(&config, &embedder, Arc::new(RwLock::new(table)));
+
+    // Create test stream with 2 files
+    let chunks = vec![
+      Ok(create_test_chunk("file1.rs", "fn main() {}", false)),
+      Ok(create_test_chunk("file1.rs", "println!(\"Hello\");", false)),
+      Ok(create_test_chunk("file1.rs", "", true)), // EOF
+      Ok(create_test_chunk("file2.rs", "struct Foo;", false)),
+      Ok(create_test_chunk("file2.rs", "", true)), // EOF
+    ];
+
+    let chunk_stream = stream::iter(chunks);
+
+    let count = indexer.index_stream(chunk_stream, 2).await.unwrap();
+
+    assert_eq!(count, 2, "Should have indexed 2 documents");
+  }
+
+  #[tokio::test]
+  async fn test_pipeline_error_handling() {
+    let config = Config::test();
+    let embedder = load_tei_embedder(&config.model, "float32", None)
+      .await
+      .unwrap();
+
+    let temp_db = tempdir().unwrap();
+    let connection = lancedb::connect(temp_db.path().to_str().unwrap())
+      .execute()
+      .await
+      .unwrap();
+    let table = CodeDocument::ensure_table(&connection, "test", embedder.embedding_dim())
+      .await
+      .unwrap();
+
+    let indexer = Indexer::new(&config, &embedder, Arc::new(RwLock::new(table)));
+
+    // Stream with an error in the middle
+    let chunks = vec![
+      Ok(create_test_chunk("file1.rs", "valid", false)),
+      Ok(create_test_chunk("file1.rs", "", true)),
+      Err(ChunkError::ParseError("simulated error".to_string())),
+      Ok(create_test_chunk("file2.rs", "still valid", false)),
+      Ok(create_test_chunk("file2.rs", "", true)),
+    ];
+
+    let chunk_stream = stream::iter(chunks);
+    let count = indexer.index_stream(chunk_stream, 10).await.unwrap();
+
+    // Should still process valid files despite error
+    assert_eq!(count, 2, "Should have indexed 2 documents despite error");
+  }
+
+  #[tokio::test]
+  async fn test_pipeline_cancellation() {
+    // Create a stream that sends a few chunks then blocks forever
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+
+    // Send a few chunks
+    tx.send(Ok(create_test_chunk("file1.rs", "content", false)))
+      .unwrap();
+    tx.send(Ok(create_test_chunk("file1.rs", "", true)))
+      .unwrap();
+    // Don't close the channel - it will block forever waiting for more
+
+    let chunk_stream = tokio_stream::wrappers::UnboundedReceiverStream::new(rx);
+
+    // Start indexing in a task
+    let index_handle = tokio::spawn(async move {
+      let config = Config::test();
+      let embedder = load_tei_embedder(&config.model, "float32", None)
+        .await
+        .unwrap();
+
+      let temp_db = tempdir().unwrap();
+      let connection = lancedb::connect(temp_db.path().to_str().unwrap())
+        .execute()
+        .await
+        .unwrap();
+      let table = CodeDocument::ensure_table(&connection, "test", embedder.embedding_dim())
+        .await
+        .unwrap();
+
+      let indexer = Indexer::new(&config, &embedder, Arc::new(RwLock::new(table)));
+      indexer.index_stream(chunk_stream, 5).await
+    });
+
+    // Give it time to process the first chunks
+    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+
+    // Cancel the task
+    index_handle.abort();
+
+    // Should be cancelled
+    assert!(index_handle.await.is_err());
+  }
+
+  #[tokio::test]
+  async fn test_pipeline_batch_accumulation() {
+    let config = Config::test();
+    let embedder = load_tei_embedder(&config.model, "float32", None)
+      .await
+      .unwrap();
+
+    let temp_db = tempdir().unwrap();
+    let connection = lancedb::connect(temp_db.path().to_str().unwrap())
+      .execute()
+      .await
+      .unwrap();
+    let table = CodeDocument::ensure_table(&connection, "test", embedder.embedding_dim())
+      .await
+      .unwrap();
+
+    let indexer = Indexer::new(&config, &embedder, Arc::new(RwLock::new(table)));
+
+    // Create many chunks for one file to test batching
+    let mut chunks = vec![];
+    for i in 0..10 {
+      chunks.push(Ok(create_test_chunk(
+        "bigfile.rs",
+        &format!("chunk {}", i),
+        false,
+      )));
+    }
+    chunks.push(Ok(create_test_chunk("bigfile.rs", "", true)));
+
+    let chunk_stream = stream::iter(chunks);
+    let count = indexer.index_stream(chunk_stream, 3).await.unwrap(); // batch size 3
+
+    assert_eq!(count, 1, "Should have indexed 1 document with many chunks");
+  }
+
+  #[tokio::test]
+  async fn test_pipeline_empty_stream() {
+    let config = Config::test();
+    let embedder = load_tei_embedder(&config.model, "float32", None)
+      .await
+      .unwrap();
+
+    let temp_db = tempdir().unwrap();
+    let connection = lancedb::connect(temp_db.path().to_str().unwrap())
+      .execute()
+      .await
+      .unwrap();
+    let table = CodeDocument::ensure_table(&connection, "test", embedder.embedding_dim())
+      .await
+      .unwrap();
+
+    let indexer = Indexer::new(&config, &embedder, Arc::new(RwLock::new(table)));
+
+    let chunk_stream = stream::iter(vec![] as Vec<Result<ProjectChunk, ChunkError>>);
+    let count = indexer.index_stream(chunk_stream, 10).await.unwrap();
+
+    assert_eq!(count, 0, "Should handle empty stream gracefully");
+  }
+
+  #[tokio::test]
+  async fn test_pipeline_eof_only_files() {
+    let config = Config::test();
+    let embedder = load_tei_embedder(&config.model, "float32", None)
+      .await
+      .unwrap();
+
+    let temp_db = tempdir().unwrap();
+    let connection = lancedb::connect(temp_db.path().to_str().unwrap())
+      .execute()
+      .await
+      .unwrap();
+    let table = CodeDocument::ensure_table(&connection, "test", embedder.embedding_dim())
+      .await
+      .unwrap();
+
+    let indexer = Indexer::new(&config, &embedder, Arc::new(RwLock::new(table)));
+
+    // Files with only EOF markers (empty files)
+    let chunks = vec![
+      Ok(create_test_chunk("empty1.rs", "", true)),
+      Ok(create_test_chunk("empty2.rs", "", true)),
+    ];
+
+    let chunk_stream = stream::iter(chunks);
+    let count = indexer.index_stream(chunk_stream, 10).await.unwrap();
+
+    // Empty files should not create documents
+    assert_eq!(count, 0, "Should not index empty files");
+  }
+
+  // Integration test with real embedder (keep existing test)
+  #[tokio::test]
+  async fn test_indexer_integration() {
+    use crate::embeddings::loader::load_tei_embedder;
+
+    let _ = tracing_subscriber::fmt()
+      .with_env_filter("breeze=debug,breeze_chunkers=debug")
+      .try_init();
+
+    let config = Config::test();
+
+    info!("Loading embedder model: {}", config.model);
+    let embedder = load_tei_embedder(&config.model, "float32", None)
+      .await
+      .unwrap();
     let embedding_dim = embedder.embedding_dim();
+    info!("Embedder loaded, embedding dimension: {}", embedding_dim);
 
-    // Create temporary directory for LanceDB
     let temp_db = tempdir().unwrap();
     let connection = lancedb::connect(temp_db.path().to_str().unwrap())
       .execute()
       .await
       .unwrap();
 
-    // Create table
     let table = CodeDocument::ensure_table(&connection, "test_table", embedding_dim)
       .await
       .unwrap();
 
-    // Create pipeline with external resources
-    let pipeline = Indexer::new(&config, &embedder, Arc::new(RwLock::new(table)));
+    let indexer = Indexer::new(&config, &embedder, Arc::new(RwLock::new(table)));
 
-    // Create test file
     let test_dir = tempdir().unwrap();
     let test_file = test_dir.path().join("test.py");
-    std::fs::write(&test_file, "def hello():\n    print('world')").unwrap();
+    let test_content = r#"
+def hello():
+    """Say hello to the world."""
+    print('Hello, world!')
 
-    // Run indexing
-    let count = pipeline.index(test_dir.path()).await.unwrap();
+def goodbye():
+    """Say goodbye."""
+    print('Goodbye!')
+"#;
+    std::fs::write(&test_file, test_content).unwrap();
+    info!("Created test file: {}", test_file.display());
+
+    info!("Starting indexing...");
+    let count = indexer.index(test_dir.path()).await.unwrap();
+    info!("Indexing completed, document count: {}", count);
     assert_eq!(count, 1);
   }
 }

@@ -31,7 +31,8 @@
       "mcp__github__search_repositories",
       "Bash(nm:*)",
       "Bash(find:*)",
-      "Bash(rg:*)"
+      "Bash(rg:*)",
+      "Bash(RUST_LOG=breeze=debug cargo test:*)"
     ],
     "deny": []
   }

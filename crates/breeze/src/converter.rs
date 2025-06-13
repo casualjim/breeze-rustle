@@ -9,11 +9,11 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::time::interval;
 
-use crate::pipeline::{BoxStream, RecordBatchConverter};
+use crate::pipeline::BoxStream;
 
 /// Generic converter that converts streams of T to Arrow RecordBatch streams
 /// where T implements IntoArrow trait from LanceDB
-/// 
+///
 /// Batches writes based on:
 /// - Maximum documents per batch (configurable)
 /// - Timeout duration (configurable)
@@ -26,7 +26,11 @@ pub struct BufferedRecordBatchConverter<T> {
 }
 
 impl<T> BufferedRecordBatchConverter<T> {
-  pub fn new(batch_size: NonZeroUsize, timeout_seconds: u64, schema: Arc<arrow::datatypes::Schema>) -> Self {
+  pub fn new(
+    batch_size: NonZeroUsize,
+    timeout_seconds: u64,
+    schema: Arc<arrow::datatypes::Schema>,
+  ) -> Self {
     Self {
       batch_size,
       timeout_seconds,
@@ -34,12 +38,15 @@ impl<T> BufferedRecordBatchConverter<T> {
       _phantom: PhantomData,
     }
   }
-  
+
   /// Create a converter with default timeout of 1 second
-  pub fn with_default_timeout(batch_size: NonZeroUsize, schema: Arc<arrow::datatypes::Schema>) -> Self {
+  pub fn with_default_timeout(
+    batch_size: NonZeroUsize,
+    schema: Arc<arrow::datatypes::Schema>,
+  ) -> Self {
     Self::new(batch_size, 1, schema)
   }
-  
+
   /// Set the schema for the converter
   pub fn with_schema(mut self, schema: Arc<arrow::datatypes::Schema>) -> Self {
     self.schema = schema;
@@ -102,11 +109,11 @@ impl<T> Clone for BufferedRecordBatchConverter<T> {
   }
 }
 
-impl<T> RecordBatchConverter<T> for BufferedRecordBatchConverter<T>
+impl<T> BufferedRecordBatchConverter<T>
 where
   T: IntoArrow + Send + 'static,
 {
-  fn convert(&self, items: BoxStream<T>) -> Pin<Box<dyn RecordBatchStream + Send>> {
+  pub fn convert(&self, items: BoxStream<T>) -> Pin<Box<dyn RecordBatchStream + Send>> {
     let converter = self.clone();
     let schema = self.schema.clone();
     let max_batch_size = self.batch_size.get();
@@ -253,11 +260,8 @@ mod tests {
   async fn test_buffered_conversion() {
     let schema = Arc::new(CodeDocument::schema(3));
     // Create converter with batch size of 2 to test batching
-    let converter = BufferedRecordBatchConverter::<CodeDocument>::new(
-      NonZeroUsize::new(2).unwrap(),
-      1,
-      schema,
-    );
+    let converter =
+      BufferedRecordBatchConverter::<CodeDocument>::new(NonZeroUsize::new(2).unwrap(), 1, schema);
 
     let docs = vec![
       create_test_document("file1.py"),
@@ -284,8 +288,8 @@ mod tests {
   #[tokio::test]
   async fn test_schema_consistency() {
     let schema = Arc::new(CodeDocument::schema(384));
-    let converter = BufferedRecordBatchConverter::<CodeDocument>::default()
-      .with_schema(schema.clone());
+    let converter =
+      BufferedRecordBatchConverter::<CodeDocument>::default().with_schema(schema.clone());
     let docs = vec![create_test_document("test.py")];
     let stream = stream::iter(docs).boxed();
 
@@ -316,8 +320,7 @@ mod tests {
   #[tokio::test]
   async fn test_empty_stream() {
     let schema = Arc::new(CodeDocument::schema(128));
-    let converter = BufferedRecordBatchConverter::<CodeDocument>::default()
-      .with_schema(schema);
+    let converter = BufferedRecordBatchConverter::<CodeDocument>::default().with_schema(schema);
     let stream = stream::empty().boxed();
     let mut batch_stream = converter.convert(stream);
 

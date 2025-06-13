@@ -1186,7 +1186,6 @@ dependencies = [
  "tokio-util",
  "toml",
  "tracing",
- "tracing-opentelemetry",
  "tracing-subscriber",
  "uuid",
 ]
@@ -1209,6 +1208,7 @@ dependencies = [
  "tokenizers",
  "tokio",
  "tokio-stream",
+ "tracing",
  "tree-sitter",
  "tree-sitter-language",
 ]
@@ -1329,10 +1329,14 @@ version = "0.8.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "06ccf5ee3532e66868516d9b315f73aec9f34ea1a37ae98514534d458915dbf1"
 dependencies = [
+ "accelerate-src",
  "byteorder",
+ "candle-metal-kernels 0.8.4",
  "gemm 0.17.1",
  "half",
+ "libc",
  "memmap2",
+ "metal 0.27.0",
  "num-traits",
  "num_cpus",
  "rand 0.9.1",
@@ -1341,6 +1345,7 @@ dependencies = [
  "safetensors",
  "thiserror 1.0.69",
  "ug 0.1.0",
+ "ug-metal 0.1.0",
  "yoke 0.7.5",
  "zip",
 ]
@@ -1354,7 +1359,7 @@ dependencies = [
  "accelerate-src",
  "byteorder",
  "candle-kernels",
- "candle-metal-kernels",
+ "candle-metal-kernels 0.9.1",
  "cudarc",
  "gemm 0.17.1",
  "half",
@@ -1371,7 +1376,7 @@ dependencies = [
  "thiserror 1.0.69",
  "ug 0.4.0",
  "ug-cuda",
- "ug-metal",
+ "ug-metal 0.4.0",
  "yoke 0.7.5",
  "zip",
 ]
@@ -1383,6 +1388,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9fcd989c2143aa754370b5bfee309e35fbd259e83d9ecf7a73d23d8508430775"
 dependencies = [
  "bindgen_cuda",
+]
+
+[[package]]
+name = "candle-metal-kernels"
+version = "0.8.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "52c85c21827c28db94e7112e364abe7e0cf8d2b022c014edf08642be6b94f21e"
+dependencies = [
+ "metal 0.27.0",
+ "once_cell",
+ "thiserror 1.0.69",
+ "tracing",
 ]
 
 [[package]]
@@ -1404,8 +1421,11 @@ version = "0.8.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "be1160c3b63f47d40d91110a3e1e1e566ae38edddbbf492a60b40ffc3bc1ff38"
 dependencies = [
+ "accelerate-src",
  "candle-core 0.8.4",
+ "candle-metal-kernels 0.8.4",
  "half",
+ "metal 0.27.0",
  "num-traits",
  "rayon",
  "safetensors",
@@ -1421,7 +1441,7 @@ checksum = "c1980d53280c8f9e2c6cbe1785855d7ff8010208b46e21252b978badf13ad69d"
 dependencies = [
  "accelerate-src",
  "candle-core 0.9.1",
- "candle-metal-kernels",
+ "candle-metal-kernels 0.9.1",
  "half",
  "intel-mkl-src",
  "metal 0.27.0",
@@ -5564,35 +5584,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "opentelemetry"
-version = "0.30.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "aaf416e4cb72756655126f7dd7bb0af49c674f4c1b9903e80c009e0c37e552e6"
-dependencies = [
- "futures-core",
- "futures-sink",
- "js-sys",
- "pin-project-lite",
- "thiserror 2.0.12",
- "tracing",
-]
-
-[[package]]
-name = "opentelemetry_sdk"
-version = "0.30.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "11f644aa9e5e31d11896e024305d7e3c98a88884d9f8919dbf37a9991bc47a4b"
-dependencies = [
- "futures-channel",
- "futures-executor",
- "futures-util",
- "opentelemetry",
- "percent-encoding",
- "rand 0.9.1",
- "thiserror 2.0.12",
-]
-
-[[package]]
 name = "option-ext"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7651,6 +7642,7 @@ name = "text-embeddings-backend-candle"
 version = "1.7.1"
 source = "git+https://github.com/huggingface/text-embeddings-inference?branch=main#bedb2e5993c5e8d4d9a9fc696a78ff5bb76c9d85"
 dependencies = [
+ "accelerate-src",
  "anyhow",
  "candle-core 0.8.4",
  "candle-nn 0.8.4",
@@ -8081,24 +8073,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "tracing-opentelemetry"
-version = "0.31.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ddcf5959f39507d0d04d6413119c04f33b623f4f951ebcbdddddfad2d0623a9c"
-dependencies = [
- "js-sys",
- "once_cell",
- "opentelemetry",
- "opentelemetry_sdk",
- "smallvec",
- "tracing",
- "tracing-core",
- "tracing-log",
- "tracing-subscriber",
- "web-time",
-]
-
-[[package]]
 name = "tracing-subscriber"
 version = "0.3.19"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -8223,6 +8197,20 @@ dependencies = [
  "serde",
  "thiserror 1.0.69",
  "ug 0.4.0",
+]
+
+[[package]]
+name = "ug-metal"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a02ddc17bf32f7dcaaf016b6735f7198082b82f122df7b3ca15d8ead5911ccef"
+dependencies = [
+ "half",
+ "metal 0.29.0",
+ "objc",
+ "serde",
+ "thiserror 1.0.69",
+ "ug 0.1.0",
 ]
 
 [[package]]

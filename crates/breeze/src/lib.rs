@@ -8,9 +8,7 @@ mod logging;
 mod models;
 mod pipeline;
 mod sinks;
-mod testing;
-mod walker;
 
 pub use app::App;
 pub use config::Config;
-pub use logging::{init as init_logging};
+pub use logging::init as init_logging;
