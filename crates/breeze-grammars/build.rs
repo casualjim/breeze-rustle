@@ -169,8 +169,16 @@ fn use_precompiled_binaries(combined_lib: &Path, metadata_file: &Path, out_path:
   let dest = out_path.join(combined_lib.file_name().unwrap());
   fs::copy(&combined_lib, &dest).unwrap();
 
+  // Extract the library name without the lib prefix and .a suffix
+  let lib_name = combined_lib.file_stem().unwrap().to_str().unwrap();
+  let lib_name = if lib_name.starts_with("lib") {
+    &lib_name[3..]
+  } else {
+    lib_name
+  };
+
   // Link the combined library
-  println!("cargo:rustc-link-lib=static=tree-sitter-all");
+  println!("cargo:rustc-link-lib=static={}", lib_name);
   println!("cargo:rustc-link-search=native={}", out_path.display());
 
   // Read metadata to check for C++ grammars
@@ -341,7 +349,7 @@ fn compile_from_source(out_path: &Path) {
   }
 
   // Compile each grammar individually but let cc use parallelism internally
-  for (grammar, parser_c, scanner_c, scanner_cc, has_scanner, _is_cpp, src_dir, grammar_dir) in
+  for (grammar, parser_c, scanner_c, scanner_cc, has_scanner, is_cpp, src_dir, grammar_dir) in
     &all_builds
   {
     println!("cargo:warning=Compiling grammar: {}", grammar.name);
