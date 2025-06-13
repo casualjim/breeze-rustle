@@ -394,6 +394,19 @@ fn compile_from_source(out_path: &Path) {
     build.flag_if_supported("-fipa-pta");
     build.flag_if_supported("-fdevirtualize-at-ltrans");
 
+    // Add grammar-specific defines to avoid symbol conflicts
+    let string_new_def = format!("ts_{}_string_new", grammar.name);
+    let scan_comment_def = format!("ts_{}_scan_comment", grammar.name);
+    let serialize_def = format!("ts_{}_serialize", grammar.name);
+    let deserialize_def = format!("ts_{}_deserialize", grammar.name);
+    let scan_def = format!("ts_{}_scan", grammar.name);
+    
+    build.define("string_new", Some(string_new_def.as_str()));
+    build.define("scan_comment", Some(scan_comment_def.as_str()));
+    build.define("serialize", Some(serialize_def.as_str()));
+    build.define("deserialize", Some(deserialize_def.as_str()));
+    build.define("scan", Some(scan_def.as_str()));
+
     // If using sccache, it handles LTO caching well
     if which::which("sccache").is_ok() {
       build.flag_if_supported("-flto");

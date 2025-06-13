@@ -283,6 +283,15 @@ def compile_grammar(
             ]
         )
 
+        # Add grammar-specific defines to avoid symbol conflicts
+        cmd.extend([
+            f"-Dstring_new=ts_{name}_string_new",
+            f"-Dscan_comment=ts_{name}_scan_comment",
+            f"-Dserialize=ts_{name}_serialize",
+            f"-Ddeserialize=ts_{name}_deserialize",
+            f"-Dscan=ts_{name}_scan",
+        ])
+
         if source_is_cpp:
             cmd.extend(["-std=c++14"])
         else:
