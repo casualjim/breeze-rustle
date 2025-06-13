@@ -4,7 +4,6 @@ use tracing_subscriber::{
   util::SubscriberInitExt,
 };
 
-
 pub fn init(app_name: &str) -> anyhow::Result<()> {
   tracing_subscriber::registry()
     .with(build_loglevel_filter_layer(format!(
@@ -15,20 +14,19 @@ pub fn init(app_name: &str) -> anyhow::Result<()> {
   Ok(())
 }
 
-
 pub fn build_logger_text<S>() -> Box<dyn Layer<S> + Send + Sync + 'static>
 where
   S: Subscriber + for<'a> LookupSpan<'a>,
 {
   // if cfg!(debug_assertions) {
-    Box::new(
-      tracing_subscriber::fmt::layer()
-        .pretty()
-        .with_line_number(true)
-        .with_thread_names(true)
-        .with_span_events(FmtSpan::NEW | FmtSpan::CLOSE)
-        .with_timer(tracing_subscriber::fmt::time::time()),
-    )
+  Box::new(
+    tracing_subscriber::fmt::layer()
+      .pretty()
+      .with_line_number(true)
+      .with_thread_names(true)
+      .with_span_events(FmtSpan::NEW | FmtSpan::CLOSE)
+      .with_timer(tracing_subscriber::fmt::time::time()),
+  )
   // } else {
   //   Box::new(
   //     tracing_subscriber::fmt::layer()

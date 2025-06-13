@@ -21,6 +21,11 @@ pub enum ChunkError {
 pub enum Chunk {
   Semantic(SemanticChunk),
   Text(SemanticChunk),
+  EndOfFile {
+    file_path: String,
+    content: String,
+    content_hash: [u8; 32], // Blake3 hash
+  },
 }
 
 #[derive(Debug, Clone)]
@@ -37,7 +42,7 @@ pub struct ChunkMetadata {
 #[derive(Debug, Clone)]
 pub struct SemanticChunk {
   pub text: String,
-  pub tokens: Option<Vec<u32>>,  // Token IDs if pre-tokenized
+  pub tokens: Option<Vec<u32>>, // Token IDs if pre-tokenized
   pub start_byte: usize,
   pub end_byte: usize,
   pub start_line: usize,
@@ -97,12 +102,12 @@ pub struct ProjectFile {
 /// File-level metadata
 #[derive(Debug, Clone)]
 pub struct FileMetadata {
-  pub primary_language: Option<String>,  // Primary language (e.g., "Python", "Rust")
-  pub size: u64,                         // File size in bytes
-  pub modified: std::time::SystemTime,   // Last modification time
-  pub content_hash: String,              // SHA-256 hash of content
-  pub line_count: usize,                 // Total number of lines
-  pub is_binary: bool,                   // Whether file was detected as binary
+  pub primary_language: Option<String>, // Primary language (e.g., "Python", "Rust")
+  pub size: u64,                        // File size in bytes
+  pub modified: std::time::SystemTime,  // Last modification time
+  pub content_hash: String,             // SHA-256 hash of content
+  pub line_count: usize,                // Total number of lines
+  pub is_binary: bool,                  // Whether file was detected as binary
 }
 
 #[cfg(test)]

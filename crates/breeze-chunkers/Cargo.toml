@@ -21,6 +21,9 @@ tree-sitter-language = { workspace = true }
 # Error handling
 thiserror = "2.0"
 
+# Logging
+tracing = { workspace = true }
+
 # Hashing
 blake3 = "1.5"
 

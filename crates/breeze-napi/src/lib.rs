@@ -21,6 +21,7 @@ pub enum TokenizerType {
 pub enum ChunkType {
   Semantic,
   Text,
+  EndOfFile,
 }
 
 #[napi(object)]
@@ -59,6 +60,8 @@ pub struct SemanticChunkJs {
   pub start_line: i32,
   pub end_line: i32,
   pub metadata: ChunkMetadataJs,
+  pub content: Option<String>,       // Only populated for EOF chunks
+  pub content_hash: Option<Vec<u8>>, // Only populated for EOF chunks
 }
 
 impl From<RustChunk> for SemanticChunkJs {
@@ -72,6 +75,8 @@ impl From<RustChunk> for SemanticChunkJs {
         start_line: sc.start_line as i32,
         end_line: sc.end_line as i32,
         metadata: sc.metadata.into(),
+        content: None,
+        content_hash: None,
       },
       RustChunk::Text(sc) => Self {
         chunk_type: ChunkType::Text,
@@ -81,6 +86,31 @@ impl From<RustChunk> for SemanticChunkJs {
         start_line: sc.start_line as i32,
         end_line: sc.end_line as i32,
         metadata: sc.metadata.into(),
+        content: None,
+        content_hash: None,
+      },
+      RustChunk::EndOfFile {
+        file_path,
+        content,
+        content_hash,
+      } => Self {
+        chunk_type: ChunkType::EndOfFile,
+        text: file_path,
+        start_byte: 0,
+        end_byte: 0,
+        start_line: 0,
+        end_line: 0,
+        metadata: ChunkMetadataJs {
+          node_type: "eof".to_string(),
+          node_name: None,
+          language: "".to_string(),
+          parent_context: None,
+          scope_path: vec![],
+          definitions: vec![],
+          references: vec![],
+        },
+        content: Some(content),
+        content_hash: Some(content_hash.to_vec()),
       },
     }
   }

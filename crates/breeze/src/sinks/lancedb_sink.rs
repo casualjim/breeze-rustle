@@ -3,7 +3,7 @@ use lancedb::arrow::RecordBatchStream;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
-use crate::pipeline::{BoxStream, Sink};
+use crate::pipeline::BoxStream;
 
 /// LanceDB sink for persisting record batches
 pub struct LanceDbSink {
@@ -17,8 +17,8 @@ impl LanceDbSink {
   }
 }
 
-impl Sink for LanceDbSink {
-  fn sink(&self, batches: std::pin::Pin<Box<dyn RecordBatchStream + Send>>) -> BoxStream<()> {
+impl LanceDbSink {
+  pub fn sink(&self, batches: std::pin::Pin<Box<dyn RecordBatchStream + Send>>) -> BoxStream<()> {
     let table = self.table.clone();
 
     let stream = async_stream::stream! {

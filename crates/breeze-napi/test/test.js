@@ -482,20 +482,24 @@ function greet(name) {
         for (const chunk of chunks) {
             assert(chunk.filePath);
             assert(chunk.chunk);
-            assert(chunk.chunk.chunkType === ChunkType.Semantic || chunk.chunk.chunkType === ChunkType.Text);
-            assert(chunk.chunk.startLine >= 1);
-            assert(chunk.chunk.endLine >= chunk.chunk.startLine);
+            assert(chunk.chunk.chunkType === ChunkType.Semantic || chunk.chunk.chunkType === ChunkType.Text || chunk.chunk.chunkType === ChunkType.EndOfFile);
+            if (chunk.chunk.chunkType !== ChunkType.EndOfFile) {
+                assert(chunk.chunk.startLine >= 1);
+                assert(chunk.chunk.endLine >= chunk.chunk.startLine);
+            }
         }
         
         // Check we got chunks from different files
-        const filePaths = new Set(chunks.map(c => c.filePath));
+        const filePaths = new Set(chunks.filter(c => c.chunk.chunkType !== ChunkType.EndOfFile).map(c => c.filePath));
         assert(filePaths.size > 1, "Should have processed multiple files");
         
         // Check we have both semantic and text chunks
         const hasSemantics = chunks.some(c => c.chunk.chunkType === ChunkType.Semantic);
         const hasText = chunks.some(c => c.chunk.chunkType === ChunkType.Text);
+        const hasEof = chunks.some(c => c.chunk.chunkType === ChunkType.EndOfFile);
         assert(hasSemantics, "Should have semantic chunks");
         assert(hasText, "Should have text chunks");
+        assert(hasEof, "Should have EOF chunks");
         
     } finally {
         // Clean up
@@ -532,7 +536,10 @@ test('should walk with different tokenizers', async (t) => {
             // Verify all chunks have valid structure
             for (const chunk of chunks) {
                 assert(chunk.chunk.text);
-                assert(chunk.chunk.metadata.language);
+                // EOF chunks have empty language field
+                if (chunk.chunk.chunkType !== ChunkType.EndOfFile) {
+                    assert(chunk.chunk.metadata.language);
+                }
             }
         }
     } finally {
@@ -616,6 +623,60 @@ test('should extract scope paths correctly', async () => {
             assert(chunk.metadata.scopePath.includes("OuterClass"));
             assert(chunk.metadata.scopePath.includes("InnerClass"));
         }
+    }
+});
+
+// Test EOF chunks contain content and hash
+test('should include content and hash in EOF chunks', async (t) => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'breeze-test-'));
+    
+    try {
+        const testContent = `def test_function():
+    return "Hello World"`;
+        const testFile = path.join(tempDir, 'test.py');
+        await fs.writeFile(testFile, testContent);
+        
+        const fileContents = {};
+        const eofChunks = [];
+        const regularChunks = [];
+        
+        for await (const chunk of walkProject(tempDir)) {
+            if (chunk.chunk.chunkType === ChunkType.EndOfFile) {
+                eofChunks.push(chunk);
+                // EOF chunks should have content and hash
+                assert(chunk.chunk.content !== null && chunk.chunk.content !== undefined, "EOF chunk should have content");
+                assert(chunk.chunk.contentHash !== null && chunk.chunk.contentHash !== undefined, "EOF chunk should have contentHash");
+                assert(typeof chunk.chunk.content === 'string', "EOF chunk content should be a string");
+                assert(Array.isArray(chunk.chunk.contentHash), "EOF chunk contentHash should be an Array");
+                assert(chunk.chunk.contentHash.length === 32, "Blake3 hash should be 32 bytes");
+                
+                // Store content for verification
+                fileContents[chunk.filePath] = chunk.chunk.content;
+            } else {
+                regularChunks.push(chunk);
+                // Non-EOF chunks should not have content/hash
+                assert(chunk.chunk.content === null || chunk.chunk.content === undefined, "Non-EOF chunks should not have content");
+                assert(chunk.chunk.contentHash === null || chunk.chunk.contentHash === undefined, "Non-EOF chunks should not have contentHash");
+            }
+        }
+        
+        // Should have EOF chunks
+        assert(eofChunks.length > 0, "Should have EOF chunks");
+        assert(eofChunks.length === Object.keys(fileContents).length, "Should have one EOF chunk per file");
+        
+        // Verify content matches actual file
+        const actualContent = await fs.readFile(testFile, 'utf8');
+        assert(fileContents[testFile] === actualContent, "EOF chunk content should match file content");
+        
+        // Verify chunks text is part of full content
+        for (const chunk of regularChunks) {
+            if (chunk.filePath === testFile) {
+                assert(fileContents[testFile].includes(chunk.chunk.text), "Chunk text should be found in full content");
+            }
+        }
+        
+    } finally {
+        await fs.rm(tempDir, { recursive: true });
     }
 });
 

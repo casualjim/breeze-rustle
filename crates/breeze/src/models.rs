@@ -257,6 +257,10 @@ impl CodeDocument {
     self.content_embedding = embedding;
     self.indexed_at = chrono::Utc::now().naive_utc();
   }
+
+  pub fn update_content_hash(&mut self, hash: [u8; 32]) {
+    self.content_hash = hash;
+  }
 }
 
 // Implement IntoArrow for CodeDocument to enable LanceDB persistence
@@ -451,4 +455,3 @@ mod tests {
     assert!(uuid::Uuid::parse_str(&doc.id).is_ok());
   }
 }
-

@@ -49,8 +49,7 @@ tokio-util = { version = "0.7", features = ["rt"] }
 tokio-stream = "0.1"
 async-stream = "0.3"
 
-tracing = "0.1.41"
-tracing-opentelemetry = "0.31.0"
+tracing.workspace = true
 tracing-subscriber = { version = "0.3.19", features = ["env-filter", "fmt"] }
 
 num_cpus = "1"
@@ -62,5 +61,5 @@ tempfile = "3.11"
 default = []
 cuda = ["candle-core/cuda", "candle-nn/cuda", "candle-transformers/cuda"]
 mkl = ["candle-core/mkl", "candle-nn/mkl", "candle-transformers/mkl"]
-accelerate = ["candle-core/accelerate", "candle-nn/accelerate", "candle-transformers/accelerate"]
-metal = ["candle-core/metal", "candle-nn/metal", "candle-transformers/metal"]
+accelerate = ["candle-core/accelerate", "candle-nn/accelerate", "candle-transformers/accelerate", "text-embeddings-backend-candle/accelerate"]
+metal = ["candle-core/metal", "candle-nn/metal", "candle-transformers/metal", "text-embeddings-backend-candle/metal"]

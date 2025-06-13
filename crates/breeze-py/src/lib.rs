@@ -28,6 +28,8 @@ pub enum ChunkType {
   Semantic,
   #[pyo3(name = "TEXT")]
   Text,
+  #[pyo3(name = "EOF")]
+  EndOfFile,
 }
 
 #[pymethods]
@@ -57,6 +59,7 @@ impl ChunkType {
     match self {
       ChunkType::Semantic => "ChunkType.SEMANTIC",
       ChunkType::Text => "ChunkType.TEXT",
+      ChunkType::EndOfFile => "ChunkType.EOF",
     }
     .to_string()
   }
@@ -114,6 +117,10 @@ pub struct PySemanticChunk {
   pub end_line: usize,
   #[pyo3(get)]
   pub metadata: PyChunkMetadata,
+  #[pyo3(get)]
+  pub content: Option<String>, // Only populated for EOF chunks
+  #[pyo3(get)]
+  pub content_hash: Option<Vec<u8>>, // Only populated for EOF chunks
 }
 
 impl From<Chunk> for PySemanticChunk {
@@ -127,6 +134,8 @@ impl From<Chunk> for PySemanticChunk {
         start_line: sc.start_line,
         end_line: sc.end_line,
         metadata: sc.metadata.into(),
+        content: None,
+        content_hash: None,
       },
       Chunk::Text(sc) => Self {
         chunk_type: ChunkType::Text,
@@ -136,6 +145,31 @@ impl From<Chunk> for PySemanticChunk {
         start_line: sc.start_line,
         end_line: sc.end_line,
         metadata: sc.metadata.into(),
+        content: None,
+        content_hash: None,
+      },
+      Chunk::EndOfFile {
+        file_path,
+        content,
+        content_hash,
+      } => Self {
+        chunk_type: ChunkType::EndOfFile,
+        text: file_path,
+        start_byte: 0,
+        end_byte: 0,
+        start_line: 0,
+        end_line: 0,
+        metadata: PyChunkMetadata {
+          node_type: "eof".to_string(),
+          node_name: None,
+          language: "".to_string(),
+          parent_context: None,
+          scope_path: vec![],
+          definitions: vec![],
+          references: vec![],
+        },
+        content: Some(content),
+        content_hash: Some(content_hash.to_vec()),
       },
     }
   }

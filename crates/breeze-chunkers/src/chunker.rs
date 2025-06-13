@@ -86,7 +86,8 @@ impl InnerChunker {
                     }
                     meta
                 }
-                Err(_) => {
+                Err(e) => {
+                    tracing::warn!("Failed to extract metadata: {}", e);
                     // Fallback metadata if extraction fails
                     ChunkMetadata {
                         node_type: "code_chunk".to_string(),

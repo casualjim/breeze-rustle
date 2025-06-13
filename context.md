@@ -53,6 +53,7 @@ PathWalker ────>─├─> Voyage Embedder (remote) ├─> DocumentBuil
 4. **Token Optimization**: Store tokens in chunks to avoid double tokenization
 5. **Multiple Providers**: Support local (TEI), Voyage, and OpenAI embedders
 6. **Aggregation Strategy**: Weighted average by token count (pluggable for future strategies)
+7. **Single File Read**: EOF chunks include file content and hash to avoid multiple file reads
 
 ### Key Pipeline Traits
 
@@ -170,25 +171,45 @@ progress_report_interval = 100
   - Merge insert for upsert behavior
   - Streaming batch processing
   - Full test coverage
+- **EOF chunks with content and hash** ✨
+  - Single file read optimization
+  - Content and Blake3 hash in EOF chunks
+  - Updated Python and Node.js bindings
+  - Full test coverage
+- **Comprehensive Indexer Testing** ✨
+  - Mock implementations for TEIEmbedder, Table, and walk_project
+  - Pipeline error propagation and cancellation
+  - Channel backpressure and bounded capacity
+  - Batch processing logic (accumulation, flushing, EOF handling)
+  - Pipeline resilience (stage panics, receiver drops)
+  - Stats tracking accuracy
+  - Edge cases (empty input, EOF-only files)
+  - Real embedding model integration (sentence-transformers/all-MiniLM-L6-v2)
+  - Performance profiling (identified chunking as bottleneck, not parsing)
+- **Token Storage in Chunks** ✨
+  - Added `tokens: Option<Vec<u32>>` to SemanticChunk
+  - Chunker populates tokens during chunking when using tokenizers
+  - Supports character, tiktoken, and HuggingFace tokenizers
+- **TEI Embedder Implementation** ✨
+  - Full text-embeddings-inference backend integration
+  - Supports pre-tokenized input for performance
+  - Hardware acceleration (CUDA/Metal/CPU auto-detection)
+  - Batch processing with configurable limits
+  - Proper error handling and type safety
 
 ### 🚧 In Progress
 
-- Token storage in SemanticChunk
-- TEI integration for local embedder
-- Voyage and OpenAI embedder implementations
-- Chunker updates to store tokens
+- **Remote embedders** - Implement Voyage and OpenAI providers with rate limiting
+- **CLI application** - Create the main breeze executable with commands for indexing
+- **Configuration loading** - Wire up TOML config to select providers and models
 
 ### 📋 TODO
 
-- Complete TEI backend integration
-- Remote provider implementations
-- Configuration system for all providers
-- Rate limiting implementation
-- Tokenizer compatibility validation
-- Progress tracking and resumability
-- Error recovery and retry logic
-- CLI application
-- Integration tests
+- **Documentation** - User guide, API docs, and examples
+- **Python package publishing** - PyPI release workflow
+- **Node.js package publishing** - npm release workflow
+- **Integration tests** - End-to-end tests with real models and databases
+- **Error recovery** - Retry logic and circuit breakers for remote providers
 
 ## Performance Benchmarks
 
