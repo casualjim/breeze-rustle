@@ -325,7 +325,7 @@ fn compile_from_source(out_path: &Path) {
     let scanner_c = src_dir.join("scanner.c");
     let scanner_cc = src_dir.join("scanner.cc");
     let has_scanner = scanner_c.exists() || scanner_cc.exists();
-    let _is_cpp = scanner_cc.exists();
+    let is_cpp = scanner_cc.exists();
 
     // Store build info for this grammar
     all_builds.push((
@@ -334,7 +334,7 @@ fn compile_from_source(out_path: &Path) {
       scanner_c,
       scanner_cc,
       has_scanner,
-      _is_cpp,
+      is_cpp,
       src_dir,
       grammar_dir,
     ));
@@ -361,6 +361,11 @@ fn compile_from_source(out_path: &Path) {
         build.cpp(true);
         build.flag_if_supported("-std=c++14");
       }
+    }
+
+    // Set C standard to C11 for static_assert support
+    if !*is_cpp {
+      build.std("c11");
     }
 
     // Enable optimizations
