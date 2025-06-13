@@ -11,3 +11,9 @@ Keeping some bullet points so I don't forget
 * avoid re-indexing files with the same path and content hash
 * add exclusions for pure data files
 * add final override file support with .breezeignore
+
+## building
+
+* needs to install zig
+* needs to install nextest
+* needs to install tree-sitter-cli (ideall, same version as our lib)
