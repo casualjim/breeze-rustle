@@ -21,7 +21,7 @@ PLATFORMS = {
         'rust_target': 'x86_64-unknown-linux-gnu',
     },
     'linux-x86_64-musl': {
-        'zig_target': 'x86_64-linux-musl', 
+        'zig_target': 'x86_64-linux-musl',
         'rust_target': 'x86_64-unknown-linux-musl',
     },
     'linux-aarch64-glibc': {
@@ -54,19 +54,19 @@ def get_current_platform():
     """Detect the current platform."""
     system = platform.system().lower()
     machine = platform.machine().lower()
-    
+
     if system == 'darwin':
         system = 'macos'
     elif system == 'windows':
         system = 'windows'
-    
+
     if machine in ['x86_64', 'amd64']:
         arch = 'x86_64'
     elif machine in ['aarch64', 'arm64']:
         arch = 'aarch64'
     else:
         return None
-    
+
     # Check for musl on Linux
     if system == 'linux':
         try:
@@ -77,7 +77,7 @@ def get_current_platform():
                 return f'{system}-{arch}-glibc'
         except Exception:
             return f'{system}-{arch}-glibc'
-    
+
     return f'{system}-{arch}'
 
 def check_zig():
@@ -96,7 +96,7 @@ def fetch_grammar(grammar, cache_dir):
     name = grammar['name']
     repo = grammar['repo']
     grammar_dir = cache_dir / name
-    
+
     # Check if directory exists and has content
     if grammar_dir.exists():
         # Verify it's a valid git repo with actual content
@@ -107,13 +107,13 @@ def fetch_grammar(grammar, cache_dir):
             # Directory exists but is empty or corrupted, remove it
             shutil.rmtree(grammar_dir)
             print(f"  Removing corrupted cache for {name}")
-    
+
     if not repo.startswith('http'):
         repo = f'https://github.com/{repo}'
-    
+
     # Log what we're about to fetch
     print(f"  Starting fetch: {name} from {repo}")
-    
+
     try:
         # If we need a specific revision, we can't use --depth 1
         if 'rev' in grammar:
@@ -122,9 +122,9 @@ def fetch_grammar(grammar, cache_dir):
             result = subprocess.run(cmd, capture_output=True, timeout=300)  # 5 minute timeout
             if result.returncode != 0:
                 raise subprocess.CalledProcessError(result.returncode, cmd, result.stdout, result.stderr)
-            
+
             # Checkout specific revision
-            checkout_result = subprocess.run(['git', 'checkout', grammar['rev']], 
+            checkout_result = subprocess.run(['git', 'checkout', grammar['rev']],
                          cwd=grammar_dir, capture_output=True, timeout=60)
             if checkout_result.returncode != 0:
                 # Clean up the clone if checkout fails
@@ -134,13 +134,13 @@ def fetch_grammar(grammar, cache_dir):
         else:
             # Use shallow clone for branch or default
             cmd = ['git', 'clone', '--depth', '1']
-            
+
             if 'branch' in grammar:
                 cmd.extend(['-b', grammar['branch']])
-            
+
             cmd.extend([repo, str(grammar_dir)])
             subprocess.run(cmd, check=True, capture_output=True, timeout=300)  # 5 minute timeout
-        
+
         return True, f"{name} - cloned successfully"
     except subprocess.TimeoutExpired:
         # Clean up partial clone
@@ -158,16 +158,16 @@ def compile_grammar(grammar, cache_dir, platform_dir, platform_config=None, use_
     """Compile a single grammar."""
     name = grammar['name']
     grammar_dir = cache_dir / name
-    
+
     # Determine source directory
     if 'path' in grammar:
         src_dir = grammar_dir / grammar['path'] / 'src'
     else:
         src_dir = grammar_dir / 'src'
-    
+
     if not src_dir.exists():
         return False, f"{name} - no src directory"
-    
+
     parser_c = src_dir / 'parser.c'
     if not parser_c.exists():
         # Try to generate parser.c from grammar.js
@@ -175,7 +175,7 @@ def compile_grammar(grammar, cache_dir, platform_dir, platform_config=None, use_
         if grammar_js.exists():
             try:
                 # Run tree-sitter generate
-                subprocess.run(['npx', 'tree-sitter', 'generate'], 
+                subprocess.run(['npx', 'tree-sitter', 'generate'],
                              cwd=grammar_dir, check=True, capture_output=True)
                 # Check again
                 if not parser_c.exists():
@@ -183,7 +183,7 @@ def compile_grammar(grammar, cache_dir, platform_dir, platform_config=None, use_
             except subprocess.CalledProcessError:
                 # Try without npx
                 try:
-                    subprocess.run(['tree-sitter', 'generate'], 
+                    subprocess.run(['tree-sitter', 'generate'],
                                  cwd=grammar_dir, check=True, capture_output=True)
                     if not parser_c.exists():
                         return False, f"{name} - failed to generate parser.c"
@@ -191,15 +191,15 @@ def compile_grammar(grammar, cache_dir, platform_dir, platform_config=None, use_
                     return False, f"{name} - no parser.c and can't generate (install tree-sitter-cli)"
         else:
             return False, f"{name} - no parser.c"
-    
+
     # Check for scanner files
     scanner_c = src_dir / 'scanner.c'
     scanner_cc = src_dir / 'scanner.cc'
     scanner_cpp = src_dir / 'scanner.cpp'
-    
+
     sources = [str(parser_c)]
     is_cpp = False
-    
+
     if scanner_cc.exists():
         sources.append(str(scanner_cc))
         is_cpp = True
@@ -208,11 +208,11 @@ def compile_grammar(grammar, cache_dir, platform_dir, platform_config=None, use_
         is_cpp = True
     elif scanner_c.exists():
         sources.append(str(scanner_c))
-    
+
     # Output file
     lib_name = f'libtree-sitter-{name}.a'
     output_file = platform_dir / lib_name
-    
+
     # Build command
     if use_zig and platform_config:
         compiler = 'zig c++' if is_cpp else 'zig cc'
@@ -224,7 +224,7 @@ def compile_grammar(grammar, cache_dir, platform_dir, platform_config=None, use_
     else:
         compiler = 'c++' if is_cpp else 'cc'
         cmd = [compiler, '-O3', '-c']
-    
+
     # Common flags
     cmd.extend([
         '-I', str(src_dir),
@@ -237,19 +237,20 @@ def compile_grammar(grammar, cache_dir, platform_dir, platform_config=None, use_
         '-finline-functions',
         '-ffunction-sections',
         '-fdata-sections',
+        '-fvisibility=hidden',
     ])
-    
+
     if is_cpp:
         cmd.extend(['-std=c++14'])
     else:
-        cmd.extend(['-std=c11'])
-    
+        cmd.extend(['-std=c99'])
+
     # Compile object files - use grammar name as prefix to avoid conflicts
     obj_files = []
     for source in sources:
         obj_file = platform_dir / f"{name}_{Path(source).stem}.o"
         compile_cmd = cmd + [source, '-o', str(obj_file)]
-        
+
         try:
             subprocess.run(compile_cmd, check=True, capture_output=True)
             obj_files.append(str(obj_file))
@@ -258,31 +259,31 @@ def compile_grammar(grammar, cache_dir, platform_dir, platform_config=None, use_
             for obj in obj_files:
                 Path(obj).unlink(missing_ok=True)
             return False, f"{name} - compile error: {e.stderr.decode()}"
-    
+
     # Create static library
     if use_zig and platform_config:
         ar_cmd = ['zig', 'ar', 'rcs', str(output_file)] + obj_files
     else:
         ar_cmd = ['ar', 'rcs', str(output_file)] + obj_files
-    
+
     try:
         subprocess.run(ar_cmd, check=True, capture_output=True)
-        
+
         # Clean up object files
         for obj in obj_files:
             Path(obj).unlink(missing_ok=True)
-        
-        # Special handling for C# 
+
+        # Special handling for C#
         if name == 'csharp':
             # The compiled library exports tree_sitter_c_sharp, but we need tree_sitter_csharp
             # This is handled in the Rust bindings generation
             pass
-        
+
         # Note if this grammar uses C++ (for build.rs metadata)
         if is_cpp:
             cpp_marker = platform_dir / f"{name}.cpp"
             cpp_marker.touch()
-        
+
         return True, f"{name} - compiled successfully"
     except subprocess.CalledProcessError as e:
         # Clean up
@@ -306,66 +307,66 @@ def main():
     parser.add_argument('--platform', help='Target platform (default: current platform)')
     parser.add_argument('--all-platforms', action='store_true', help='Build for all platforms (requires zig)')
     parser.add_argument('-j', '--jobs', type=int, default=os.cpu_count(), help='Number of parallel jobs')
-    
+
     args = parser.parse_args()
-    
+
     # Find project root
     script_dir = Path(__file__).parent
     project_root = script_dir.parent
-    
+
     grammars_json = project_root / "crates" / "breeze-grammars" / "grammars.json"
     cache_dir = project_root / "grammar-cache"
     precompiled_dir = project_root / "crates" / "breeze-grammars" / "precompiled"
-    
+
     if not grammars_json.exists():
         print(f"Error: {grammars_json} not found")
         sys.exit(1)
-    
+
     # Load grammars configuration
     with open(grammars_json, 'r') as f:
         config = json.load(f)
-    
+
     grammars = config['grammars']
     print(f"Found {len(grammars)} grammars")
-    
+
     # Fetch grammars if needed
     if not args.compile_only:
         print("\n=== Fetching grammars ===")
         cache_dir.mkdir(exist_ok=True)
-        
+
         # Check which grammars need fetching
         need_fetch = []
         for grammar in grammars:
             grammar_dir = cache_dir / grammar['name']
             if not grammar_dir.exists() or not (grammar_dir / '.git').exists():
                 need_fetch.append(grammar['name'])
-        
+
         if need_fetch:
             print(f"  Need to fetch: {', '.join(need_fetch)}")
-        
+
         print(f"  Processing {len(grammars)} grammars with {args.jobs} parallel jobs...")
-        
+
         with ThreadPoolExecutor(max_workers=args.jobs) as executor:
-            futures = {executor.submit(fetch_grammar, grammar, cache_dir): grammar 
+            futures = {executor.submit(fetch_grammar, grammar, cache_dir): grammar
                       for grammar in grammars}
-            
+
             completed = 0
             total = len(futures)
-            
+
             for future in as_completed(futures):
                 completed += 1
                 success, message = future.result()
                 print(f"  [{completed}/{total}] {message}")
                 if not success:
                     sys.exit(1)
-    
+
     if args.fetch_only:
         print("\nFetch complete!")
         return
-    
+
     # Determine platforms to build
     use_zig = check_zig()
-    
+
     if args.all_platforms:
         if not use_zig:
             print("Error: --all-platforms requires zig to be installed")
@@ -386,51 +387,51 @@ def main():
             print("Warning: Could not detect current platform or it's not in the supported list")
             print("Building for generic host platform")
             platforms_to_build = ['host']
-    
+
     # Compile for each platform
     for platform_name in platforms_to_build:
         print(f"\n=== Building for {platform_name} ===")
-        
+
         platform_dir = precompiled_dir / platform_name
         platform_dir.mkdir(parents=True, exist_ok=True)
-        
+
         platform_config = PLATFORMS.get(platform_name)
         use_zig_for_platform = use_zig and platform_config and platform_name != get_current_platform()
-        
+
         compiled_grammars = []
         failed_grammars = []
-        
+
         print(f"  Compiling {len(grammars)} grammars with {args.jobs} parallel jobs...")
-        
+
         with ThreadPoolExecutor(max_workers=args.jobs) as executor:
-            futures = {executor.submit(compile_grammar, grammar, cache_dir, platform_dir, 
-                                     platform_config, use_zig_for_platform): grammar 
+            futures = {executor.submit(compile_grammar, grammar, cache_dir, platform_dir,
+                                     platform_config, use_zig_for_platform): grammar
                       for grammar in grammars}
-            
+
             completed = 0
             total = len(futures)
-            
+
             for future in as_completed(futures):
                 completed += 1
                 success, message = future.result()
                 print(f"  [{completed}/{total}] {message}")
-                
+
                 grammar = futures[future]
                 if success:
                     compiled_grammars.append(grammar['name'])
                 else:
                     failed_grammars.append(grammar['name'])
-        
+
         # Generate metadata
         generate_metadata(compiled_grammars, grammars, platform_dir)
-        
+
         print(f"\nPlatform {platform_name} summary:")
         print(f"  Compiled: {len(compiled_grammars)} grammars")
         if failed_grammars:
             print(f"  Failed: {len(failed_grammars)} grammars")
             print(f"    {', '.join(failed_grammars)}")
         print(f"  Output: {platform_dir}")
-    
+
     print("\nBuild complete!")
     print("\nTo use the precompiled grammars:")
     print("1. Make sure your Cargo.toml uses: build = \"build.rs\"")
