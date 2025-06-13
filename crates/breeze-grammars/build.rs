@@ -206,6 +206,9 @@ fn use_precompiled_binaries(precompiled_dir: &Path, out_path: &Path) {
       println!("cargo:rustc-link-lib=c++");
     } else if cfg!(target_os = "linux") {
       println!("cargo:rustc-link-lib=stdc++");
+    } else if cfg!(target_os = "windows") {
+      // Windows doesn't need explicit C++ runtime linking with MSVC
+      // The C++ runtime is automatically linked
     }
   }
 
@@ -375,8 +378,8 @@ fn compile_from_source(out_path: &Path) {
     build.include(src_dir);
     build.include(grammar_dir);
 
-    // Set C standard
-    build.flag_if_supported("-std=c11");
+    // Set C standard to C99 for better compatibility in CI environments
+    build.flag_if_supported("-std=c99");
 
     // Add parser.c
     build.file(parser_c);
