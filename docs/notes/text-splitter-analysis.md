@@ -1,6 +1,7 @@
 # Text-Splitter Analysis for breeze-rustle
 
 ## Overview
+
 The text-splitter crate provides a robust, production-ready implementation for semantic text chunking, including dedicated support for code via tree-sitter. It's actively maintained and used in production.
 
 ## Key Features
@@ -8,11 +9,13 @@ The text-splitter crate provides a robust, production-ready implementation for s
 ### 1. Core Architecture
 
 #### ChunkSizer Trait
+
 ```rust
 pub trait ChunkSizer {
     fn size(&self, chunk: &str) -> usize;
 }
 ```
+
 - Simple interface for measuring chunk size
 - Implementations for:
   - `Characters` (default)
@@ -20,6 +23,7 @@ pub trait ChunkSizer {
   - `tokenizers::Tokenizer` (HuggingFace tokenizers)
 
 #### ChunkCapacity and ChunkConfig
+
 - **ChunkCapacity**: Supports both fixed size and ranges (desired vs max)
 - **ChunkConfig**: Complete configuration including overlap, trimming, and sizer
 - Overlap support built-in (configurable via `with_overlap()`)
@@ -27,12 +31,14 @@ pub trait ChunkSizer {
 ### 2. CodeSplitter Implementation
 
 The `CodeSplitter` uses tree-sitter for parsing:
+
 - Takes a tree-sitter `Language` and `ChunkConfig`
 - Automatically handles invalid/unparseable code gracefully
 - Uses syntax tree depth as semantic levels
 - Smart merging of sibling nodes to maximize chunk size
 
 #### Algorithm
+
 1. Parse text into syntax tree using tree-sitter
 2. Traverse tree depth-first, collecting nodes with their depths
 3. Use depths as semantic levels (lower depth = higher priority)
@@ -51,6 +57,7 @@ The `CodeSplitter` uses tree-sitter for parsing:
 ### 4. API Examples
 
 Basic usage:
+
 ```rust
 use text_splitter::{ChunkConfig, CodeSplitter};
 
@@ -59,6 +66,7 @@ let chunks = splitter.chunks(text).collect::<Vec<_>>();
 ```
 
 With tokenizer:
+
 ```rust
 use tiktoken_rs::cl100k_base;
 
@@ -68,6 +76,7 @@ let splitter = CodeSplitter::new(tree_sitter_rust::LANGUAGE, config)?;
 ```
 
 With overlap:
+
 ```rust
 let config = ChunkConfig::new(1000)
     .with_overlap(100)?
@@ -80,7 +89,7 @@ let config = ChunkConfig::new(1000)
 2. **ChunkSizer trait** for pluggable tokenization
 3. **Overlap functionality** for RAG applications
 4. **Smart merging** of semantic units
-5. **Multiple output formats**: 
+5. **Multiple output formats**:
    - `chunks()` - just text
    - `chunk_indices()` - with byte offsets
    - `chunk_char_indices()` - with char offsets
@@ -99,6 +108,7 @@ let config = ChunkConfig::new(1000)
 **Coverage: ~60% of our requirements**
 
 ✅ Already provides:
+
 - Semantic code chunking
 - Tree-sitter integration
 - Flexible sizing (tokens/chars)
@@ -106,6 +116,7 @@ let config = ChunkConfig::new(1000)
 - Production-quality implementation
 
 ❌ Still need:
+
 - Multi-language parser management
 - Metadata extraction
 - Query-based semantic analysis
@@ -115,6 +126,7 @@ let config = ChunkConfig::new(1000)
 ## Implementation Strategy for breeze-rustle
 
 ### Layer 1: Language Management
+
 ```rust
 pub struct LanguageRegistry {
     parsers: HashMap<String, Language>,
@@ -122,6 +134,7 @@ pub struct LanguageRegistry {
 ```
 
 ### Layer 2: Enhanced Chunker
+
 ```rust
 pub struct BreezeChunker {
     registry: LanguageRegistry,
@@ -147,6 +160,7 @@ impl BreezeChunker {
 ```
 
 ### Layer 3: Metadata Extraction
+
 ```rust
 pub struct ChunkMetadata {
     pub semantic_type: String,    // function, class, method
@@ -157,6 +171,7 @@ pub struct ChunkMetadata {
 ```
 
 ### Layer 4: Python API
+
 ```rust
 #[pyclass]
 pub struct SemanticChunker {

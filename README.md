@@ -6,6 +6,8 @@ High-performance semantic code chunking for [Breeze](https://github.com/casualji
 
 `breeze-rustle` is a Rust library with Python bindings that provides intelligent code chunking using tree-sitter parsers and nvim-treesitter's battle-tested query files. It splits code into semantic units (functions, classes, methods) while preserving context and extracting rich metadata.
 
+**Key insight**: While we chunk code to fit within embedding model constraints, we store embeddings at the file level. The chunking ensures we respect semantic boundaries (never splitting functions/classes arbitrarily) while staying within token limits. File embeddings are created by aggregating chunk embeddings.
+
 ### Key Features
 
 - **🚀 Fast**: Written in Rust with async/concurrent processing
@@ -55,12 +57,13 @@ asyncio.run(main())
 
 ### Semantic Chunking
 
-Instead of splitting code arbitrarily, breeze-rustle understands code structure:
+breeze-rustle chunks code to fit within embedding model constraints while respecting code structure:
 
-- Keeps functions, classes, and methods intact
-- Splits large functions intelligently at scope boundaries
-- Preserves context with parent information
-- Tracks symbol definitions and usage
+- **Purpose**: Fit within embedder token limits (e.g., 8k tokens)
+- **Boundaries**: Only splits at semantic boundaries (functions, classes)
+- **Largest units**: Creates the largest possible chunks that fit constraints
+- **File handling**: Small files = one chunk, large files = multiple chunks
+- **Aggregation**: Multiple chunks from one file are aggregated back to a single file embedding
 
 ### Rich Metadata
 

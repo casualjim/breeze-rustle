@@ -1,22 +1,27 @@
 # Code-Splitter Analysis and Lessons Learned
 
 ## Overview
+
 The code-splitter crate by wangxj03 provides a clean implementation for splitting code into semantic chunks using tree-sitter. This analysis documents key insights we can apply to breeze-rustle.
 
 ## Core Architecture
 
 ### 1. Trait-Based Design
+
 ```rust
 pub trait Sizer {
     fn size(&self, text: &str) -> Result<usize>;
 }
 ```
+
 - Simple, elegant interface for measuring chunk size
 - Allows pluggable implementations (characters, words, tokens)
 - Zero-cost abstraction
 
 ### 2. Recursive Tree Traversal with Sibling Merging
+
 The core algorithm in `split_node()`:
+
 1. Check if current node fits within max_size
 2. If yes, return as single chunk
 3. If no, recursively split children
@@ -45,6 +50,7 @@ The core algorithm in `split_node()`:
 ```
 
 ### 3. Simple Error Handling
+
 - Uses `Box<dyn Error>` for maximum flexibility
 - Trade-off: Less specific error types
 
@@ -66,11 +72,13 @@ The core algorithm in `split_node()`:
 ## Integration with text-splitter
 
 Since text-splitter already has:
+
 - `ChunkSizer` trait (similar to code-splitter's `Sizer`)
 - `CodeSplitter` with tree-sitter support
 - Built-in support for tiktoken and tokenizers
 
 We should:
+
 1. Use text-splitter's `ChunkSizer` trait directly
 2. Leverage its `CodeSplitter` implementation
 3. Add our semantic enhancements on top
@@ -78,16 +86,19 @@ We should:
 ## Recommendations for breeze-rustle
 
 ### 1. Build on text-splitter's Foundation
+
 - Use `text_splitter::ChunkSizer` instead of creating our own trait
 - Use `text_splitter::CodeSplitter` as the base implementation
 - Add our metadata extraction as a layer on top
 
 ### 2. Add Query-Based Semantic Understanding
+
 - Use nvim-treesitter queries to identify semantic boundaries
 - Extract richer metadata (function names, class context, etc.)
 - Provide semantic scoring for chunks
 
 ### 3. Implement Configurable Overlap
+
 ```rust
 pub struct ChunkConfig {
     pub overlap_ratio: f32,  // 0.0 to 1.0
@@ -96,11 +107,13 @@ pub struct ChunkConfig {
 ```
 
 ### 4. Add Async/Parallel Processing
+
 - Use our existing async infrastructure
 - Process multiple files concurrently
 - Stream results for large codebases
 
 ### 5. Enrich Metadata
+
 ```rust
 pub struct EnrichedChunk {
     pub base_chunk: text_splitter::Chunk,
@@ -121,6 +134,7 @@ pub struct EnrichedChunk {
 4. **Layer 4**: Add async/parallel processing wrapper
 
 This approach gives us:
+
 - Battle-tested chunking from text-splitter
 - Semantic understanding from nvim-treesitter
 - Performance from async processing

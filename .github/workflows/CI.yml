@@ -18,52 +18,15 @@ permissions:
   contents: read
 
 jobs:
-  build-grammars:
-    name: Build Grammars
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      
-      - name: Cache precompiled grammars
-        id: cache-grammars
-        uses: actions/cache@v4
-        with:
-          path: crates/breeze-grammars/precompiled
-          key: grammars-${{ hashFiles('crates/breeze-grammars/grammars.json') }}-v1
-      
-      - name: Install Zig
-        if: steps.cache-grammars.outputs.cache-hit != 'true'
-        uses: goto-bus-stop/setup-zig@v2
-        with:
-          version: 0.14.1
-      
-      - name: Build grammars for all platforms
-        if: steps.cache-grammars.outputs.cache-hit != 'true'
-        run: |
-          ./tools/build-grammars --all-platforms
-      
-      - name: Upload grammars artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: precompiled-grammars
-          path: crates/breeze-grammars/precompiled
-          retention-days: 7
-
   test:
     runs-on: ${{ matrix.os }}
-    needs: build-grammars
     strategy:
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
-        python-version: ["3.9", "3.10", "3.11", "3.12"]
+        python-version: ["3.10", "3.11", "3.12"]
     steps:
       - uses: actions/checkout@v4
-      
-      - name: Download precompiled grammars
-        uses: actions/download-artifact@v4
-        with:
-          name: precompiled-grammars
-          path: crates/breeze-grammars/precompiled
+
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
@@ -92,6 +55,12 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 20
+      - name: Install npm dependencies
+        run: npm install
+      - name: Install protoc
+        uses: arduino/setup-protoc@v3
+        with:
+          version: "25.x"
       - name: Run Rust tests
         run: |
           cargo nextest run
@@ -117,14 +86,19 @@ jobs:
             target: aarch64
     steps:
       - uses: actions/checkout@v4
-      - name: Download precompiled grammars
-        uses: actions/download-artifact@v4
-        with:
-          name: precompiled-grammars
-          path: crates/breeze-grammars/precompiled
       - uses: actions/setup-python@v5
         with:
           python-version: 3.x
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Install npm dependencies
+        run: npm install
+      - name: Install protoc
+        uses: arduino/setup-protoc@v3
+        with:
+          version: "25.x"
       - name: Build wheels
         uses: PyO3/maturin-action@v1
         with:
@@ -133,6 +107,11 @@ jobs:
           sccache: ${{ !startsWith(github.ref, 'refs/tags/') }}
           manylinux: auto
           working-directory: crates/breeze-py
+          before-script-linux: |
+            # Install protoc
+            curl -LO https://github.com/protocolbuffers/protobuf/releases/download/v25.1/protoc-25.1-linux-x86_64.zip
+            unzip protoc-25.1-linux-x86_64.zip -d /usr/local
+            rm protoc-25.1-linux-x86_64.zip
       - name: Upload wheels
         uses: actions/upload-artifact@v4
         with:
@@ -151,14 +130,19 @@ jobs:
             target: aarch64
     steps:
       - uses: actions/checkout@v4
-      - name: Download precompiled grammars
-        uses: actions/download-artifact@v4
-        with:
-          name: precompiled-grammars
-          path: crates/breeze-grammars/precompiled
       - uses: actions/setup-python@v5
         with:
           python-version: 3.x
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Install npm dependencies
+        run: npm install
+      - name: Install protoc
+        uses: arduino/setup-protoc@v3
+        with:
+          version: "25.x"
       - name: Build wheels
         uses: PyO3/maturin-action@v1
         with:
@@ -167,6 +151,9 @@ jobs:
           sccache: ${{ !startsWith(github.ref, 'refs/tags/') }}
           manylinux: musllinux_1_2
           working-directory: crates/breeze-py
+          before-script-linux: |
+            # Install protoc
+            apk add --no-cache protobuf-dev
       - name: Upload wheels
         uses: actions/upload-artifact@v4
         with:
@@ -185,15 +172,31 @@ jobs:
             target: x86
     steps:
       - uses: actions/checkout@v4
-      - name: Download precompiled grammars
-        uses: actions/download-artifact@v4
-        with:
-          name: precompiled-grammars
-          path: crates/breeze-grammars/precompiled
       - uses: actions/setup-python@v5
         with:
           python-version: 3.x
           architecture: ${{ matrix.platform.target }}
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Install npm dependencies
+        run: npm install
+      - name: Install all platform parsers for cross-compilation
+        run: |
+          npm install --no-save \
+            @kumos/tree-sitter-parsers-darwin-arm64 \
+            @kumos/tree-sitter-parsers-darwin-x64 \
+            @kumos/tree-sitter-parsers-linux-arm64 \
+            @kumos/tree-sitter-parsers-linux-arm64-musl \
+            @kumos/tree-sitter-parsers-linux-x64 \
+            @kumos/tree-sitter-parsers-linux-x64-musl \
+            @kumos/tree-sitter-parsers-win32-arm64 \
+            @kumos/tree-sitter-parsers-win32-x64
+      - name: Install protoc
+        uses: arduino/setup-protoc@v3
+        with:
+          version: "25.x"
       - name: Build wheels
         uses: PyO3/maturin-action@v1
         with:
@@ -219,14 +222,19 @@ jobs:
             target: aarch64
     steps:
       - uses: actions/checkout@v4
-      - name: Download precompiled grammars
-        uses: actions/download-artifact@v4
-        with:
-          name: precompiled-grammars
-          path: crates/breeze-grammars/precompiled
       - uses: actions/setup-python@v5
         with:
           python-version: 3.x
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Install npm dependencies
+        run: npm install
+      - name: Install protoc
+        uses: arduino/setup-protoc@v3
+        with:
+          version: "25.x"
       - name: Build wheels
         uses: PyO3/maturin-action@v1
         with:
@@ -245,11 +253,12 @@ jobs:
     needs: test
     steps:
       - uses: actions/checkout@v4
-      - name: Download precompiled grammars
-        uses: actions/download-artifact@v4
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
         with:
-          name: precompiled-grammars
-          path: crates/breeze-grammars/precompiled
+          node-version: 20
+      - name: Install npm dependencies
+        run: npm install
       - name: Build sdist
         uses: PyO3/maturin-action@v1
         with:
@@ -295,38 +304,41 @@ jobs:
     name: Build Node.js ${{ matrix.settings.target }}
     steps:
       - uses: actions/checkout@v4
-      
-      - name: Download precompiled grammars
-        uses: actions/download-artifact@v4
-        with:
-          name: precompiled-grammars
-          path: crates/breeze-grammars/precompiled
-        
+
+
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: 20
-          
+
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: stable
           targets: ${{ matrix.settings.target }}
-          
+
       - name: Setup cross compilation (Linux ARM64)
         if: matrix.settings.target == 'aarch64-unknown-linux-gnu'
         run: |
           sudo apt-get update
           sudo apt-get install -y gcc-aarch64-linux-gnu
-          
+
+      - name: Install root npm dependencies
+        run: npm install
+
+      - name: Install protoc
+        uses: arduino/setup-protoc@v3
+        with:
+          version: "25.x"
+
       - name: Install dependencies
         run: cd crates/breeze-napi && npm install
-        
+
       - name: Build
         run: cd crates/breeze-napi && ${{ matrix.settings.build }}
         env:
           CARGO_BUILD_TARGET: ${{ matrix.settings.target }}
-          
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:

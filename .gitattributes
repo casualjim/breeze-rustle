@@ -1,0 +1,34 @@
+# Ensure consistent line endings across platforms
+* text=auto eol=lf
+
+# Binary files
+*.a binary
+*.so binary
+*.dylib binary
+*.dll binary
+*.lib binary
+*.exe binary
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.pdf binary
+
+# Specific text files to ensure LF
+*.json text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+*.toml text eol=lf
+*.rs text eol=lf
+*.py text eol=lf
+*.js text eol=lf
+*.ts text eol=lf
+*.md text eol=lf
+*.txt text eol=lf
+*.sh text eol=lf
+*.c text eol=lf
+*.h text eol=lf
+*.cc text eol=lf
+*.cpp text eol=lf
+*.hpp text eol=lf

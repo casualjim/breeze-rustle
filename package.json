@@ -1,0 +1,12 @@
+{
+  "name": "breeze-rustle",
+  "version": "0.1.0",
+  "description": "High-performance semantic code chunking with tree-sitter",
+  "private": true,
+  "dependencies": {
+    "@kumos/tree-sitter-parsers": "*"
+  },
+  "scripts": {
+    "postinstall": "echo 'Tree-sitter parsers installed at:' && npx @kumos/tree-sitter-parsers"
+  }
+}

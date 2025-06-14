@@ -76,3 +76,5 @@ benchmarks/
 /test_*.py
 /notused
 node_modules/
+
+*.db
