@@ -31,6 +31,10 @@ pub struct Config {
   /// Number of files to process in parallel
   #[serde(default = "default_max_parallel_files")]
   pub max_parallel_files: usize,
+
+  /// Batch size for embedding operations
+  #[serde(default = "default_batch_size")]
+  pub batch_size: usize,
 }
 
 fn default_database_path() -> PathBuf {
@@ -68,6 +72,10 @@ fn default_max_parallel_files() -> usize {
   num_cpus::get() // Use number of available CPU cores
 }
 
+fn default_batch_size() -> usize {
+  50  // Default batch size for embedding operations
+}
+
 impl Default for Config {
   fn default() -> Self {
     let mut config = Self {
@@ -78,6 +86,7 @@ impl Default for Config {
       max_chunk_size: default_max_chunk_size(),
       max_file_size: default_max_file_size(),
       max_parallel_files: default_max_parallel_files(),
+      batch_size: default_batch_size(),
     };
     config.apply_env_overrides();
     config
@@ -101,6 +110,7 @@ impl Config {
   /// - BREEZE_MAX_CHUNK_SIZE: Override max chunk size
   /// - BREEZE_MAX_FILE_SIZE: Override max file size in bytes
   /// - BREEZE_MAX_PARALLEL_FILES: Override max parallel files
+  /// - BREEZE_BATCH_SIZE: Override batch size for embeddings
   pub fn apply_env_overrides(&mut self) {
     if let Ok(path) = std::env::var("BREEZE_DATABASE_PATH") {
       self.database_path = PathBuf::from(path);
@@ -129,6 +139,12 @@ impl Config {
     if let Ok(parallel) = std::env::var("BREEZE_MAX_PARALLEL_FILES") {
       if let Ok(parsed) = parallel.parse::<usize>() {
         self.max_parallel_files = parsed;
+      }
+    }
+    
+    if let Ok(batch) = std::env::var("BREEZE_BATCH_SIZE") {
+      if let Ok(parsed) = batch.parse::<usize>() {
+        self.batch_size = parsed;
       }
     }
   }
@@ -163,6 +179,7 @@ impl Config {
       max_chunk_size: 512,
       max_file_size: Some(1024 * 1024), // 1MB
       max_parallel_files: 2,
+      batch_size: 2,  // Small batch size for tests
     }
   }
 }

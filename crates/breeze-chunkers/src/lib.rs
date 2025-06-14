@@ -9,6 +9,7 @@ mod chunker;
 mod grammar_loader;
 mod languages;
 mod metadata_extractor;
+pub mod performance;
 mod types;
 mod walker;
 
@@ -22,9 +23,9 @@ pub use crate::chunker::InnerChunker;
 
 // Re-export main types
 pub use crate::types::{
-  Chunk, ChunkError, ChunkMetadata, FileMetadata, ProjectChunk, ProjectFile, SemanticChunk,
+  Chunk, ChunkError, ChunkMetadata, FileMetadata, ProjectChunk, SemanticChunk,
 };
-pub use crate::walker::{WalkOptions, walk_project, walk_project_streaming};
+pub use crate::walker::{WalkOptions, walk_project};
 
 /// Tokenizer type for chunk size calculation
 #[derive(Clone, Debug)]

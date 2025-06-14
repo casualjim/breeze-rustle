@@ -104,6 +104,10 @@ impl InnerChunker {
             // Extract tokens if using HuggingFace tokenizer
             let tokens = match &chunker.chunk_sizer {
                 ConcreteSizer::HuggingFace(tokenizer) => {
+                    let _timer = crate::performance::TokenizerTimer::new(
+                        language.clone(),
+                        chunk_text.len() as u64
+                    );
                     tokenizer.encode(chunk_text, false)
                         .map(|encoding| encoding.get_ids().to_vec())
                         .ok()
@@ -134,7 +138,11 @@ impl InnerChunker {
       .ok_or_else(|| ChunkError::UnsupportedLanguage(language.to_string()))?;
     let ts_language: tree_sitter::Language = language_fn.into();
 
-    // Parse the content once upfront
+    // Parse the content once upfront with timing
+    let file_size = content.len() as u64;
+    
+    // Time just the tree-sitter parsing
+    let parse_start = std::time::Instant::now();
     let mut parser = tree_sitter::Parser::new();
     parser
       .set_language(&ts_language)
@@ -143,7 +151,18 @@ impl InnerChunker {
     let tree = parser
       .parse(content, None)
       .ok_or_else(|| ChunkError::ParseError("Failed to parse content".to_string()))?;
+    let parse_duration = parse_start.elapsed();
+    
+    // Record parser timing
+    crate::performance::get_tracker().record(
+        language.to_string(),
+        file_size,
+        parse_duration,
+        "parser"
+    );
 
+    // Time the chunking/querying phase
+    let chunk_start = std::time::Instant::now();
     // Create config and splitter with our chunk sizer
     let config = ChunkConfig::new(self.max_chunk_size).with_sizer(&self.chunk_sizer);
     let splitter = CodeSplitter::new(ts_language.clone(), config)
@@ -151,6 +170,15 @@ impl InnerChunker {
 
     // Get base chunks with indices
     let chunks: Vec<_> = splitter.chunk_indices(content).collect();
+    let chunk_duration = chunk_start.elapsed();
+    
+    // Record chunking timing
+    crate::performance::get_tracker().record(
+        language.to_string(),
+        file_size,
+        chunk_duration,
+        "chunking"
+    );
 
     // Pre-calculate line offsets for efficient line number computation
     let line_offsets: Vec<usize> = std::iter::once(0)

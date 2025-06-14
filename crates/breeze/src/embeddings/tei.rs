@@ -5,7 +5,7 @@ use text_embeddings_backend_candle::CandleBackend;
 use text_embeddings_backend_core::{Backend, Batch, Embedding, ModelType};
 use tokenizers::Tokenizer;
 use tokio::sync::Mutex;
-use tracing::info;
+use tracing::{debug, info};
 
 use breeze_chunkers::Chunk;
 
@@ -150,12 +150,28 @@ impl TEIEmbedder {
 
   /// Embed a single batch of chunks
   async fn embed_batch(&self, chunks: &[Chunk]) -> Result<Vec<EmbeddedChunk>, EmbeddingError> {
+    let start = std::time::Instant::now();
     let batch = self.prepare_batch(chunks)?;
+    let prep_time = start.elapsed();
 
+    let backend_start = std::time::Instant::now();
     let backend = self.backend.lock().await;
+    let lock_time = backend_start.elapsed();
+    
+    let embed_start = std::time::Instant::now();
     let embeddings = backend
       .embed(batch)
       .map_err(|e| EmbeddingError::InferenceError(format!("TEI embedding failed: {}", e)))?;
+    let embed_time = embed_start.elapsed();
+    
+    debug!(
+      "TEI timing - prep: {:.3}s, lock: {:.3}s, embed: {:.3}s, total: {:.3}s for {} chunks",
+      prep_time.as_secs_f64(),
+      lock_time.as_secs_f64(), 
+      embed_time.as_secs_f64(),
+      start.elapsed().as_secs_f64(),
+      chunks.len()
+    );
 
     // Convert results back to EmbeddedChunk
     let mut results = Vec::new();

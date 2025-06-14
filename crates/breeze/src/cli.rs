@@ -44,6 +44,10 @@ pub enum Commands {
         /// Number of files to process in parallel (overrides config)
         #[arg(long)]
         max_parallel_files: Option<usize>,
+
+        /// Batch size for embedding operations (overrides config)
+        #[arg(long)]
+        batch_size: Option<usize>,
     },
 
     /// Search indexed codebase
