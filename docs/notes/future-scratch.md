@@ -17,6 +17,7 @@ Keeping some bullet points so I don't forget
 * needs to install zig
 * needs to install nextest
 * needs to install tree-sitter-cli (ideall, same version as our lib)
+* needs to install protobuf-compiler
 
 ### Ubuntu
 
