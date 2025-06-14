@@ -10,6 +10,7 @@ pub fn init(app_name: &str) -> anyhow::Result<()> {
       "info,{app_name}=debug"
     )))
     .with(build_logger_text())
+    .with(console_subscriber::spawn())
     .init();
   Ok(())
 }

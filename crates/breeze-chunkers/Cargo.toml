@@ -27,6 +27,9 @@ tracing = { workspace = true }
 # Hashing
 blake3 = "1.5"
 
+# Performance tracking
+dashmap = "6.1"
+
 # Project walker
 ignore = "0.4"              # Gitignore-aware traversal
 futures = "0.3"             # Async streams

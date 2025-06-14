@@ -4,6 +4,7 @@ use text_embeddings_backend_core::{ModelType, Pool};
 use tracing::info;
 
 use super::EmbeddingError;
+use super::sentence_transformers::SentenceTransformersEmbedder;
 use super::tei::TEIEmbedder;
 
 /// Load a TEI embedder from a model path or HuggingFace model ID
@@ -23,6 +24,19 @@ pub async fn load_tei_embedder(
     model_path, dtype
   );
   TEIEmbedder::new(model_path, dtype, model_type).await
+}
+
+/// Load a Sentence Transformers embedder
+pub async fn load_sentence_transformers_embedder(
+  model_id: &str,
+  device: Option<candle_core::Device>,
+  normalize: bool,
+) -> Result<SentenceTransformersEmbedder, EmbeddingError> {
+  info!(
+    "Loading Sentence Transformers embedder with model: {}",
+    model_id
+  );
+  SentenceTransformersEmbedder::new(model_id, device, normalize).await
 }
 
 /// Resolve a model ID or path to a local directory

@@ -1,4 +1,5 @@
 pub mod loader;
+pub mod sentence_transformers;
 pub mod tei;
 
 use thiserror::Error;

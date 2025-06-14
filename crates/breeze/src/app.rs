@@ -5,15 +5,15 @@ use tracing::{debug, info, instrument};
 
 use crate::config::Config;
 use crate::embeddings::{
-  loader::{dtype_for_device, load_tei_embedder},
-  tei::TEIEmbedder,
+  loader::load_sentence_transformers_embedder,
+  sentence_transformers::SentenceTransformersEmbedder,
 };
 use crate::indexer::Indexer;
 use crate::models::CodeDocument;
 
 pub struct App {
   config: Config,
-  embedder: TEIEmbedder,
+  embedder: SentenceTransformersEmbedder,
   table: Arc<RwLock<lancedb::Table>>,
 }
 
@@ -38,14 +38,19 @@ impl App {
     .await?;
     info!("Set up LanceDB connection");
 
-    // Load TEI embedder
-    let dtype = dtype_for_device(&config.device);
+    // Load Sentence Transformers embedder
+    let device = match config.device.as_str() {
+      "cuda" => Some(candle_core::Device::cuda_if_available(0)?),
+      "metal" | "mps" => Some(candle_core::Device::new_metal(0)?),
+      _ => None, // CPU
+    };
+    
     info!(
-      "Loading TEI embedder: {} with dtype: {}",
-      config.model, dtype
+      "Loading Sentence Transformers embedder: {} on device: {}",
+      config.model, config.device
     );
 
-    let embedder = load_tei_embedder(&config.model, dtype, None).await?;
+    let embedder = load_sentence_transformers_embedder(&config.model, device, true).await?;
     let embedding_dim = embedder.embedding_dim();
 
     info!("Embedder loaded successfully, dimension: {}", embedding_dim);
