@@ -13,12 +13,6 @@ on:
       - "*"
   pull_request:
   workflow_dispatch:
-  workflow_run:
-    workflows: ["Update Grammar Cache"]
-    types:
-      - completed
-    branches:
-      - main
 
 permissions:
   contents: read
@@ -33,13 +27,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Cache precompiled grammars
-        uses: actions/cache@v4
-        with:
-          path: crates/breeze-grammars/precompiled
-          key: grammars-${{ hashFiles('crates/breeze-grammars/grammars.json') }}-v1
-          enableCrossOsArchive: true
-          fail-on-cache-miss: true
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
@@ -68,6 +55,8 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 20
+      - name: Install npm dependencies
+        run: npm install
       - name: Run Rust tests
         run: |
           cargo nextest run
@@ -93,16 +82,15 @@ jobs:
             target: aarch64
     steps:
       - uses: actions/checkout@v4
-      - name: Cache precompiled grammars
-        uses: actions/cache@v4
-        with:
-          path: crates/breeze-grammars/precompiled
-          key: grammars-${{ hashFiles('crates/breeze-grammars/grammars.json') }}-v1
-          enableCrossOsArchive: true
-          fail-on-cache-miss: true
       - uses: actions/setup-python@v5
         with:
           python-version: 3.x
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Install npm dependencies
+        run: npm install
       - name: Build wheels
         uses: PyO3/maturin-action@v1
         with:
@@ -129,16 +117,15 @@ jobs:
             target: aarch64
     steps:
       - uses: actions/checkout@v4
-      - name: Cache precompiled grammars
-        uses: actions/cache@v4
-        with:
-          path: crates/breeze-grammars/precompiled
-          key: grammars-${{ hashFiles('crates/breeze-grammars/grammars.json') }}-v1
-          enableCrossOsArchive: true
-          fail-on-cache-miss: true
       - uses: actions/setup-python@v5
         with:
           python-version: 3.x
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Install npm dependencies
+        run: npm install
       - name: Build wheels
         uses: PyO3/maturin-action@v1
         with:
@@ -165,17 +152,16 @@ jobs:
             target: x86
     steps:
       - uses: actions/checkout@v4
-      - name: Cache precompiled grammars
-        uses: actions/cache@v4
-        with:
-          path: crates/breeze-grammars/precompiled
-          key: grammars-${{ hashFiles('crates/breeze-grammars/grammars.json') }}-v1
-          enableCrossOsArchive: true
-          fail-on-cache-miss: true
       - uses: actions/setup-python@v5
         with:
           python-version: 3.x
           architecture: ${{ matrix.platform.target }}
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Install npm dependencies
+        run: npm install
       - name: Build wheels
         uses: PyO3/maturin-action@v1
         with:
@@ -201,16 +187,15 @@ jobs:
             target: aarch64
     steps:
       - uses: actions/checkout@v4
-      - name: Cache precompiled grammars
-        uses: actions/cache@v4
-        with:
-          path: crates/breeze-grammars/precompiled
-          key: grammars-${{ hashFiles('crates/breeze-grammars/grammars.json') }}-v1
-          enableCrossOsArchive: true
-          fail-on-cache-miss: true
       - uses: actions/setup-python@v5
         with:
           python-version: 3.x
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Install npm dependencies
+        run: npm install
       - name: Build wheels
         uses: PyO3/maturin-action@v1
         with:
@@ -229,13 +214,12 @@ jobs:
     needs: test
     steps:
       - uses: actions/checkout@v4
-      - name: Cache precompiled grammars
-        uses: actions/cache@v4
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
         with:
-          path: crates/breeze-grammars/precompiled
-          key: grammars-${{ hashFiles('crates/breeze-grammars/grammars.json') }}-v1
-          enableCrossOsArchive: true
-          fail-on-cache-miss: true
+          node-version: 20
+      - name: Install npm dependencies
+        run: npm install
       - name: Build sdist
         uses: PyO3/maturin-action@v1
         with:
@@ -282,13 +266,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Cache precompiled grammars
-        uses: actions/cache@v4
-        with:
-          path: crates/breeze-grammars/precompiled
-          key: grammars-${{ hashFiles('crates/breeze-grammars/grammars.json') }}-v1
-          enableCrossOsArchive: true
-          fail-on-cache-miss: true
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -306,6 +283,9 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y gcc-aarch64-linux-gnu
+
+      - name: Install root npm dependencies
+        run: npm install
 
       - name: Install dependencies
         run: cd crates/breeze-napi && npm install
