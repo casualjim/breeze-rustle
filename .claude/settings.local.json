@@ -34,7 +34,8 @@
       "Bash(rg:*)",
       "Bash(RUST_LOG=breeze=debug cargo test:*)",
       "mcp__github__list_commits",
-      "Bash(gh api:*)"
+      "Bash(gh api:*)",
+      "mcp__zep__search_memory_facts"
     ],
     "deny": []
   }
