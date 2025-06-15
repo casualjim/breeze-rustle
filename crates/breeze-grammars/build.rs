@@ -14,10 +14,7 @@ struct Grammar {
 fn get_target_parser_path() -> Result<PathBuf, String> {
   // First check if PARSER_LIB environment variable is set
   if let Ok(parser_lib) = env::var("PARSER_LIB") {
-    println!(
-      "cargo:warning=Using PARSER_LIB from environment: {}",
-      parser_lib
-    );
+    eprintln!("Using PARSER_LIB from environment: {}", parser_lib);
     return Ok(PathBuf::from(parser_lib));
   }
 
@@ -27,7 +24,7 @@ fn get_target_parser_path() -> Result<PathBuf, String> {
     env::var("HOST").unwrap_or_else(|_| "unknown".to_string())
   });
 
-  println!("cargo:warning=Building for target: {}", target);
+  eprintln!("Building for target: {}", target);
 
   // Map Rust target triple to npm package name
   let npm_package = match target.as_str() {
@@ -41,10 +38,7 @@ fn get_target_parser_path() -> Result<PathBuf, String> {
     "x86_64-pc-windows-msvc" | "x86_64-pc-windows-gnu" => "@kumos/tree-sitter-parsers-win32-x64",
     _ => {
       // For unknown targets, try to use npx which will auto-install if needed
-      println!(
-        "cargo:warning=Unknown target '{}', trying npx fallback",
-        target
-      );
+      eprintln!("Unknown target '{}', trying npx fallback", target);
       return get_npm_parser_path();
     }
   };
@@ -54,10 +48,7 @@ fn get_target_parser_path() -> Result<PathBuf, String> {
   let package_dir = node_modules.join(npm_package);
 
   if package_dir.exists() {
-    println!(
-      "cargo:warning=Found platform package at: {}",
-      package_dir.display()
-    );
+    eprintln!("Found platform package at: {}", package_dir.display());
 
     // Construct expected filename based on target
     let expected_filename = match target.as_str() {
@@ -81,7 +72,7 @@ fn get_target_parser_path() -> Result<PathBuf, String> {
 
     let lib_path = package_dir.join(expected_filename);
     if lib_path.exists() {
-      println!("cargo:warning=Found parser library: {}", lib_path.display());
+      eprintln!("Found parser library: {}", lib_path.display());
       return Ok(lib_path);
     } else {
       return Err(format!(
@@ -92,8 +83,8 @@ fn get_target_parser_path() -> Result<PathBuf, String> {
   }
 
   // Fall back to npx
-  println!(
-    "cargo:warning=Platform package {} not found, falling back to npx",
+  eprintln!(
+    "Platform package {} not found, falling back to npx",
     npm_package
   );
   get_npm_parser_path()
@@ -117,9 +108,7 @@ fn find_node_modules() -> Result<PathBuf, String> {
 
 fn get_npm_parser_path() -> Result<PathBuf, String> {
   // Use npx which will auto-install if needed
-  println!(
-    "cargo:warning=Getting tree-sitter parsers path via npx (will auto-install if needed)..."
-  );
+  eprintln!("Getting tree-sitter parsers path via npx (will auto-install if needed)...");
   let output = Command::new("npx")
     .arg("--yes") // Automatically install if not present
     .arg("@kumos/tree-sitter-parsers")
@@ -157,8 +146,8 @@ fn main() {
   let parser_lib_path = get_target_parser_path()
     .expect("Failed to get npm parsers. Make sure Node.js and npm are installed.");
 
-  println!(
-    "cargo:warning=Using tree-sitter parsers from {}",
+  eprintln!(
+    "Using tree-sitter parsers from {}",
     parser_lib_path.display()
   );
 
@@ -168,11 +157,7 @@ fn main() {
 fn use_npm_parsers(parser_lib_path: &Path, out_path: &Path) {
   // Link the npm parser library
   let lib_name = parser_lib_path.file_stem().unwrap().to_str().unwrap();
-  let lib_name = if lib_name.starts_with("lib") {
-    &lib_name[3..]
-  } else {
-    lib_name
-  };
+  let lib_name = lib_name.strip_prefix("lib").unwrap_or(lib_name);
 
   println!("cargo:rustc-link-lib=static={}", lib_name);
   println!(
@@ -201,10 +186,7 @@ fn use_npm_parsers(parser_lib_path: &Path, out_path: &Path) {
   );
 
   if metadata_path.exists() {
-    println!(
-      "cargo:warning=Found grammar metadata at: {}",
-      metadata_path.display()
-    );
+    eprintln!("Found grammar metadata at: {}", metadata_path.display());
     let metadata_str = fs::read_to_string(&metadata_path).expect("Failed to read grammar metadata");
     let grammars: Vec<Grammar> =
       serde_json::from_str(&metadata_str).expect("Failed to parse grammar metadata");
@@ -237,7 +219,7 @@ fn generate_bindings(out_path: &Path, compiled_grammars: &[Grammar]) {
     ));
   }
 
-  bindings.push_str("\n");
+  bindings.push('\n');
 
   // Generate LanguageFn constants
   for grammar in compiled_grammars {
@@ -255,7 +237,7 @@ fn generate_bindings(out_path: &Path, compiled_grammars: &[Grammar]) {
     ));
   }
 
-  bindings.push_str("\n");
+  bindings.push('\n');
   bindings.push_str("pub fn load_grammar(name: &str) -> Option<Language> {\n");
   bindings.push_str("    match name {\n");
 

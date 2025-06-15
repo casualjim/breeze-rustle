@@ -19,7 +19,7 @@ batch_size = 50
 # ----------------------------
 # embedding_provider = "voyage"
 # max_chunk_size = 30000  # Automatically adjusted based on model
-# 
+#
 # [voyage]
 # api_key = "your-api-key-here"
 # tier = "tier1"  # Options: free, tier1, tier2, tier3

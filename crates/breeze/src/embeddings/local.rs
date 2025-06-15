@@ -58,7 +58,7 @@ impl EmbeddingProvider for LocalEmbeddingProvider {
   ) -> Result<Vec<Vec<f32>>, Box<dyn std::error::Error + Send + Sync>> {
     // Extract texts from inputs (local embedder doesn't use tokens)
     let texts: Vec<&str> = inputs.iter().map(|input| input.text).collect();
-    
+
     let embeddings = self
       .embedder
       .embed(&texts, None, None)

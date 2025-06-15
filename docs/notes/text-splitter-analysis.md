@@ -142,17 +142,17 @@ pub struct BreezeChunker {
 }
 
 impl BreezeChunker {
-    pub fn chunk_with_metadata(&self, text: &str, lang: &str) 
+    pub fn chunk_with_metadata(&self, text: &str, lang: &str)
         -> Result<Vec<EnrichedChunk>> {
         // 1. Get language parser
         let language = self.registry.get(lang)?;
-        
+
         // 2. Create CodeSplitter
         let splitter = CodeSplitter::new(language, &self.base_config)?;
-        
+
         // 3. Get base chunks
         let chunks = splitter.chunk_indices(text);
-        
+
         // 4. Enrich with metadata
         self.enrich_chunks(chunks, text, language)
     }

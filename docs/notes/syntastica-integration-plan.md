@@ -48,13 +48,13 @@ use thiserror::Error;
 pub enum ChunkError {
     #[error("Unsupported language: {0}")]
     UnsupportedLanguage(String),
-    
+
     #[error("Failed to parse content: {0}")]
     ParseError(String),
-    
+
     #[error("IO error: {0}")]
     IoError(#[from] std::io::Error),
-    
+
     #[error("Query error: {0}")]
     QueryError(String),
 }
@@ -101,11 +101,11 @@ impl SemanticChunk {
         let start_byte = node.start_byte();
         let end_byte = node.end_byte();
         let text = source[start_byte..end_byte].to_string();
-        
+
         // Calculate line numbers
         let start_line = source[..start_byte].matches('\n').count() + 1;
         let end_line = source[..end_byte].matches('\n').count() + 1;
-        
+
         Self {
             text,
             start_byte,
@@ -139,9 +139,9 @@ pub struct LanguageConfig {
 // Build a complete language registry for all supported languages
 static LANGUAGE_CONFIGS: Lazy<HashMap<Lang, LanguageConfig>> = Lazy::new(|| {
     use Lang::*;
-    
+
     let mut configs = HashMap::new();
-    
+
     // Syntastica provides all these with the "all" feature
     configs.insert(Rust, LanguageConfig {
         language: syntastica_parsers::rust(),
@@ -149,24 +149,24 @@ static LANGUAGE_CONFIGS: Lazy<HashMap<Lang, LanguageConfig>> = Lazy::new(|| {
         highlights_query: RUST_HIGHLIGHTS,
         injections_query: RUST_INJECTIONS,
     });
-    
+
     configs.insert(Python, LanguageConfig {
         language: syntastica_parsers::python(),
         locals_query: PYTHON_LOCALS,
         highlights_query: PYTHON_HIGHLIGHTS,
         injections_query: PYTHON_INJECTIONS,
     });
-    
+
     configs.insert(Javascript, LanguageConfig {
         language: syntastica_parsers::javascript(),
         locals_query: JAVASCRIPT_LOCALS,
         highlights_query: JAVASCRIPT_HIGHLIGHTS,
         injections_query: JAVASCRIPT_INJECTIONS,
     });
-    
+
     // ... Continue for all languages in LANGUAGES array
     // This can be generated with a macro if needed
-    
+
     configs
 });
 
@@ -205,7 +205,7 @@ pub struct QueryProcessor {
 impl QueryProcessor {
     pub fn new(language: Language, query_str: &str) -> Result<Self> {
         let query = Query::new(&language, query_str)?;
-        
+
         Ok(Self {
             scope_capture_index: query.capture_index_for_name("local.scope"),
             definition_capture_index: query.capture_index_for_name("local.definition"),
@@ -213,11 +213,11 @@ impl QueryProcessor {
             query,
         })
     }
-    
+
     pub fn find_scopes<'a>(&self, tree: &'a Tree, source: &'a [u8]) -> Vec<Node<'a>> {
         let mut cursor = QueryCursor::new();
         let mut scopes = Vec::new();
-        
+
         if let Some(scope_idx) = self.scope_capture_index {
             for match_ in cursor.matches(&self.query, tree.root_node(), source) {
                 for capture in match_.captures {
@@ -227,7 +227,7 @@ impl QueryProcessor {
                 }
             }
         }
-        
+
         scopes
     }
 }
@@ -260,18 +260,18 @@ impl InnerChunker {
     }
 
     pub async fn chunk_file(
-        &self, 
-        content: &str, 
-        language: &str, 
+        &self,
+        content: &str,
+        language: &str,
         file_path: Option<&str>
     ) -> Result<Vec<SemanticChunk>, ChunkError> {
         // Map language string to syntastica Lang enum internally
         let lang = language_from_string(language)
             .ok_or_else(|| ChunkError::UnsupportedLanguage(language.to_string()))?;
-        
+
         let config = get_language_config(lang)
             .ok_or_else(|| ChunkError::UnsupportedLanguage(language.to_string()))?;
-        
+
         // Get or create parser (thread-safe with DashMap)
         let mut parser = self.parser_cache
             .entry(language.to_string())
@@ -282,11 +282,11 @@ impl InnerChunker {
                 parser
             })
             .clone();
-        
+
         // Parse the source
         let tree = parser.parse(content, None)
             .ok_or("Failed to parse content")?;
-        
+
         // Get or create query processor
         let processor = self.query_cache
             .entry(language.to_string())
@@ -295,27 +295,27 @@ impl InnerChunker {
                     .expect("Failed to create query processor")
             })
             .clone();
-        
+
         // Find semantic boundaries
         let scopes = processor.find_scopes(&tree, content.as_bytes());
-        
+
         // Convert scopes to chunks
         self.create_chunks(content, scopes, language, file_path)
     }
-    
+
     fn create_chunks(
-        &self, 
-        source: &str, 
-        scopes: Vec<Node>, 
+        &self,
+        source: &str,
+        scopes: Vec<Node>,
         language: &str,
         file_path: Option<&str>
     ) -> Result<Vec<SemanticChunk>, Box<dyn std::error::Error + Send + Sync>> {
         let mut chunks = Vec::new();
-        
+
         for scope in scopes {
             let metadata = self.extract_metadata(&scope, source, language)?;
             let chunk = SemanticChunk::from_node(&scope, source, metadata);
-            
+
             // Check if chunk needs splitting
             if chunk.text.len() > self.max_chunk_size {
                 // TODO: Implement intelligent splitting
@@ -324,10 +324,10 @@ impl InnerChunker {
                 chunks.push(chunk);
             }
         }
-        
+
         Ok(chunks)
     }
-    
+
     fn extract_metadata(
         &self,
         node: &Node,
@@ -336,13 +336,13 @@ impl InnerChunker {
     ) -> Result<ChunkMetadata, Box<dyn std::error::Error + Send + Sync>> {
         // Extract node name
         let node_name = self.extract_node_name(node, source);
-        
+
         // Extract parent context
         let parent_context = self.extract_parent_context(node, source);
-        
+
         // Build scope path
         let scope_path = self.build_scope_path(node, source);
-        
+
         Ok(ChunkMetadata {
             node_type: node.kind().to_string(),
             node_name,
@@ -353,7 +353,7 @@ impl InnerChunker {
             references: vec![],  // TODO: Extract from query captures
         })
     }
-    
+
     fn extract_node_name(&self, node: &Node, source: &str) -> Option<String> {
         // Look for identifier child nodes
         for child in node.children(&mut node.walk()) {
@@ -363,7 +363,7 @@ impl InnerChunker {
         }
         None
     }
-    
+
     fn extract_parent_context(&self, node: &Node, source: &str) -> Option<String> {
         let parent = node.parent()?;
         match parent.kind() {
@@ -381,18 +381,18 @@ impl InnerChunker {
             _ => None
         }
     }
-    
+
     fn build_scope_path(&self, node: &Node, source: &str) -> Vec<String> {
         let mut path = vec!["module".to_string()];
         let mut current = Some(*node);
-        
+
         while let Some(n) = current {
             if let Some(name) = self.extract_node_name(&n, source) {
                 path.push(name);
             }
             current = n.parent();
         }
-        
+
         path.reverse();
         path
     }
@@ -401,7 +401,7 @@ impl InnerChunker {
 // Helper function to map language strings to syntastica Lang enum
 fn language_from_string(language: &str) -> Option<syntastica_parsers::Lang> {
     use syntastica_parsers::Lang;
-    
+
     // This would be generated or use a match statement for all languages
     match language.to_lowercase().as_str() {
         "rust" => Some(Lang::Rust),
@@ -439,7 +439,7 @@ impl SemanticChunker {
             executor: Arc::new(smol::Executor::new()),
         })
     }
-    
+
     /// Chunk a single file into semantic units
     #[pyo3(signature = (content, language, file_path=None))]
     fn chunk_file<'p>(
@@ -463,7 +463,7 @@ impl SemanticChunker {
                 })
         })
     }
-    
+
     /// Chunk multiple files concurrently
     #[pyo3(signature = (files))]
     fn chunk_files<'p>(
@@ -473,24 +473,24 @@ impl SemanticChunker {
     ) -> PyResult<&'p PyAny> {
         let chunker = self.inner.clone();
         let executor = self.executor.clone();
-        
+
         pyo3_asyncio::smol::future_into_py(py, async move {
             use futures_lite::StreamExt;
-            
+
             // Create channel for work distribution
             let (tx, rx) = flume::bounded::<(usize, String, String, String)>(files.len());
-            
+
             // Send work items
             for (idx, (content, lang, path)) in files.into_iter().enumerate() {
                 tx.send_async((idx, content, lang, path)).await
                     .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
             }
             drop(tx);
-            
+
             // Process concurrently with controlled parallelism
             let mut results = vec![Vec::new(); rx.len()];
             let stream = rx.into_stream();
-            
+
             stream
                 .for_each_concurrent(num_cpus::get(), |(idx, content, lang, path)| {
                     let chunker = chunker.clone();
@@ -506,11 +506,11 @@ impl SemanticChunker {
                     }
                 })
                 .await;
-            
+
             Ok(results)
         })
     }
-    
+
     /// Get supported languages
     #[staticmethod]
     fn supported_languages() -> Vec<String> {
@@ -518,7 +518,7 @@ impl SemanticChunker {
             .map(|s| s.to_string())
             .collect()
     }
-    
+
     /// Check if a language is supported
     #[staticmethod]
     fn is_language_supported(language: &str) -> bool {
@@ -530,14 +530,14 @@ impl SemanticChunker {
 fn breeze_rustle(_py: Python<'_>, m: &PyModule) -> PyResult<()> {
     // Initialize logging bridge
     pyo3_log::init();
-    
+
     m.add_class::<SemanticChunker>()?;
     m.add_class::<SemanticChunk>()?;
     m.add_class::<ChunkMetadata>()?;
-    
+
     // Add version info
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;
-    
+
     Ok(())
 }
 ```
@@ -593,22 +593,22 @@ class SemanticChunk:
 
 class SemanticChunker:
     def __init__(self, max_chunk_size: int = 16384) -> None: ...
-    
+
     async def chunk_file(
         self,
         content: str,
         language: str,
         file_path: Optional[str] = None
     ) -> List[SemanticChunk]: ...
-    
+
     async def chunk_files(
         self,
         files: List[Tuple[str, str, str]]  # [(content, language, path), ...]
     ) -> List[List[SemanticChunk]]: ...
-    
+
     @staticmethod
     def supported_languages() -> List[str]: ...
-    
+
     @staticmethod
     def is_language_supported(language: str) -> bool: ...
 

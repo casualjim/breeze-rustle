@@ -1,7 +1,6 @@
-use std::path::{Path, PathBuf};
-
 use blake3::Hasher;
-use tokio::io::AsyncReadExt as _;
+#[cfg(test)]
+use std::path::{Path, PathBuf};
 use uuid::Uuid;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -88,7 +87,7 @@ impl CodeDocument {
     let content_array = StringArray::from(vec!["dummy"]);
 
     let mut content_hash_builder = FixedSizeBinaryBuilder::with_capacity(1, 32);
-    content_hash_builder.append_value(&[0u8; 32]).unwrap();
+    content_hash_builder.append_value([0u8; 32]).unwrap();
     let content_hash_array = content_hash_builder.finish();
 
     // Create dummy embedding
@@ -159,7 +158,26 @@ impl CodeDocument {
     }
   }
 
+  pub fn compute_hash(content: &str) -> [u8; 32] {
+    let mut hasher = Hasher::new();
+    hasher.update(content.as_bytes());
+    let hash = hasher.finalize();
+    let mut result = [0u8; 32];
+    result.copy_from_slice(hash.as_bytes());
+    result
+  }
+
+  pub fn update_content_hash(&mut self, hash: [u8; 32]) {
+    self.content_hash = hash;
+  }
+
+  pub fn update_embedding(&mut self, embedding: Vec<f32>) {
+    self.content_embedding = embedding;
+    self.indexed_at = chrono::Utc::now().naive_utc();
+  }
+
   /// Read file content and compute hash in a single pass
+  #[cfg(test)]
   pub async fn from_file(file_path: impl Into<PathBuf>) -> std::io::Result<Self> {
     let path: PathBuf = file_path.into();
     let path_str = path.to_string_lossy().to_string();
@@ -197,12 +215,16 @@ impl CodeDocument {
   }
 
   /// Read file content and compute hash in a single pass
+  #[cfg(test)]
   async fn read_and_hash(path: &Path) -> std::io::Result<(String, [u8; 32])> {
-    let mut file = tokio::fs::File::open(path).await?;
-    let mut hasher = Hasher::new();
-    let mut content = Vec::new();
-    let mut buffer = vec![0u8; 1024 * 1024]; // 1MB chunks
+    use tokio::io::AsyncReadExt;
 
+    let mut file = tokio::fs::File::open(path).await?;
+    let mut content = Vec::new();
+    let mut hasher = Hasher::new();
+
+    // Read file in chunks and update hash
+    let mut buffer = vec![0u8; 1024 * 1024]; // 1MB chunks
     loop {
       let n = file.read(&mut buffer).await?;
       if n == 0 {
@@ -219,47 +241,6 @@ impl CodeDocument {
     let content_string = String::from_utf8_lossy(&content).to_string();
 
     Ok((content_string, hash_bytes))
-  }
-
-  pub async fn compute_content_hash(path: &Path) -> std::io::Result<blake3::Hash> {
-    let mut file = tokio::fs::File::open(path).await?;
-    let mut hasher = Hasher::new();
-    let mut buffer = vec![0u8; 1024 * 1024]; // 1MB chunks
-
-    loop {
-      let n = file.read(&mut buffer).await?;
-      if n == 0 {
-        break;
-      }
-      hasher.update(&buffer[..n]);
-    }
-
-    Ok(hasher.finalize())
-  }
-
-  pub fn compute_hash(content: &str) -> [u8; 32] {
-    let mut hasher = Hasher::new();
-    hasher.update(content.as_bytes());
-    let hash = hasher.finalize();
-    let mut result = [0u8; 32];
-    result.copy_from_slice(hash.as_bytes());
-    result
-  }
-
-  pub fn update(&mut self, content: String) {
-    self.content = content;
-    self.content_hash = Self::compute_hash(self.content.as_str());
-    self.file_size = self.content.len() as u64;
-    self.last_modified = chrono::Utc::now().naive_utc();
-  }
-
-  pub fn update_embedding(&mut self, embedding: Vec<f32>) {
-    self.content_embedding = embedding;
-    self.indexed_at = chrono::Utc::now().naive_utc();
-  }
-
-  pub fn update_content_hash(&mut self, hash: [u8; 32]) {
-    self.content_hash = hash;
   }
 }
 
@@ -280,7 +261,7 @@ impl lancedb::arrow::IntoArrow for CodeDocument {
 
     let content_hash_builder = FixedSizeBinaryBuilder::with_capacity(1, 32);
     let mut content_hash_array = content_hash_builder;
-    content_hash_array.append_value(&self.content_hash).unwrap();
+    content_hash_array.append_value(self.content_hash).unwrap();
     let content_hash_array = content_hash_array.finish();
 
     // Create embedding array

@@ -90,7 +90,7 @@ pub struct SemanticChunker {
 impl SemanticChunker {
     #[new]
     pub fn new(max_chunk_size: usize) -> PyResult<Self>;
-    
+
     /// Chunk a single file into semantic units
     #[pyo3(signature = (content, language, file_path=None))]
     fn chunk_file<'p>(
@@ -105,7 +105,7 @@ impl SemanticChunker {
             chunker.chunk_file_async(&content, &language, file_path.as_deref()).await
         })
     }
-    
+
     /// Chunk multiple files concurrently
     #[pyo3(signature = (files))]
     fn chunk_files<'p>(
@@ -118,11 +118,11 @@ impl SemanticChunker {
             chunker.chunk_files_async(files).await
         })
     }
-    
+
     /// Get supported languages
     #[staticmethod]
     pub fn supported_languages() -> Vec<String>;
-    
+
     /// Check if a language is supported
     #[staticmethod]
     pub fn is_language_supported(language: &str) -> bool;
@@ -137,7 +137,7 @@ impl SemanticChunker {
         file_path: Option<&str>,
     ) -> PyResult<Vec<SemanticChunk>> {
         log::debug!("Chunking file: {:?} (language: {})", file_path, language);
-        
+
         // Spawn parsing task on executor
         let task = self.executor.spawn(async move {
             // Do CPU-intensive parsing work
@@ -146,26 +146,26 @@ impl SemanticChunker {
         });
         task.await
     }
-    
+
     async fn chunk_files_async(
         &self,
         files: Vec<(String, String, String)>,
     ) -> PyResult<Vec<Vec<SemanticChunk>>> {
         use futures_lite::StreamExt;
-        
+
         // Create channel for work distribution
         let (tx, rx) = flume::bounded::<(usize, String, String, String)>(files.len());
-        
+
         // Send work items
         for (idx, (content, lang, path)) in files.into_iter().enumerate() {
             tx.send_async((idx, content, lang, path)).await?;
         }
         drop(tx);
-        
+
         // Process concurrently with controlled parallelism
         let mut results = vec![Vec::new(); rx.len()];
         let stream = rx.into_stream();
-        
+
         stream
             .for_each_concurrent(num_cpus::get(), |(idx, content, lang, path)| async move {
                 match self.chunk_file_async(&content, &lang, Some(&path)).await {
@@ -179,7 +179,7 @@ impl SemanticChunker {
                 }
             })
             .await;
-        
+
         Ok(results)
     }
 }
@@ -189,7 +189,7 @@ impl SemanticChunker {
 fn breeze_rustle(py: Python<'_>, m: &PyModule) -> PyResult<()> {
     // Initialize logging bridge
     pyo3_log::init();
-    
+
     m.add_class::<SemanticChunker>()?;
     m.add_class::<SemanticChunk>()?;
     m.add_class::<ChunkMetadata>()?;
@@ -222,22 +222,22 @@ class SemanticChunk:
 
 class SemanticChunker:
     def __init__(self, max_chunk_size: int = 16384) -> None: ...
-    
+
     async def chunk_file(
         self,
         content: str,
         language: str,
         file_path: Optional[str] = None
     ) -> List[SemanticChunk]: ...
-    
+
     async def chunk_files(
         self,
         files: List[Tuple[str, str, str]]  # [(content, language, path), ...]
     ) -> List[List[SemanticChunk]]: ...
-    
+
     @staticmethod
     def supported_languages() -> List[str]: ...
-    
+
     @staticmethod
     def is_language_supported(language: str) -> bool: ...
 
@@ -321,7 +321,7 @@ class TestBasicFunctionality:
         assert "python" in languages
         assert "rust" in languages
         assert "javascript" in languages
-    
+
     def test_simple_python_file(self):
         """Should chunk a simple Python file correctly"""
         content = '''
@@ -332,26 +332,26 @@ def hello(name):
 class Greeter:
     def __init__(self, lang):
         self.lang = lang
-    
+
     def greet(self, name):
         return hello(name)
 '''
         chunker = SemanticChunker()
         chunks = chunker.chunk_file(content, "python")
-        
+
         # Should identify 3 semantic units: hello function, Greeter class, greet method
         assert len(chunks) >= 3
-        
+
         # Check first chunk (hello function)
         hello_chunk = next(c for c in chunks if c.metadata.node_name == "hello")
         assert hello_chunk.metadata.node_type == "function"
         assert hello_chunk.metadata.definitions == ["message"]
         assert "name" in hello_chunk.metadata.references
-        
+
         # Check class chunk
         class_chunk = next(c for c in chunks if c.metadata.node_name == "Greeter")
         assert class_chunk.metadata.node_type == "class"
-        
+
         # Check method chunk
         greet_chunk = next(c for c in chunks if c.metadata.node_name == "greet")
         assert greet_chunk.metadata.node_type == "method"
@@ -369,12 +369,12 @@ def process_data(items):
 '''
         chunker = SemanticChunker(max_chunk_size=1000)  # Small limit
         chunks = chunker.chunk_file(content, "python")
-        
+
         # Should split the large function
         assert len(chunks) > 1
         for chunk in chunks:
             assert len(chunk.text) < 5000  # Rough char estimate
-    
+
     def test_preserves_semantic_boundaries(self):
         """Should not split semantic units unnecessarily"""
         content = '''
@@ -389,7 +389,7 @@ def small_func3():
 '''
         chunker = SemanticChunker(max_chunk_size=10000)  # Large limit
         chunks = chunker.chunk_file(content, "python")
-        
+
         # Each function should be its own chunk
         assert len(chunks) == 3
         assert all(c.metadata.node_type == "function" for c in chunks)
@@ -408,12 +408,12 @@ class Outer:
 '''
         chunker = SemanticChunker()
         chunks = chunker.chunk_file(content, "python")
-        
+
         nested_chunk = next(c for c in chunks if c.metadata.node_name == "nested")
         assert nested_chunk.metadata.scope_path == ["module", "Outer", "Inner", "method", "nested"]
         assert nested_chunk.metadata.parent_context == "def method"
         assert "x" in nested_chunk.metadata.definitions
-    
+
     def test_captures_definitions_and_references(self):
         """Should extract variable definitions and references"""
         content = '''
@@ -424,7 +424,7 @@ def calculate(a, b):
 '''
         chunker = SemanticChunker()
         chunks = chunker.chunk_file(content, "python")
-        
+
         chunk = chunks[0]
         # Parameters are definitions
         assert "a" in chunk.metadata.definitions or "a" in chunk.metadata.references
@@ -445,13 +445,13 @@ class Also broken
         chunks = chunker.chunk_file(content, "python")
         # Should return something, not crash
         assert isinstance(chunks, list)
-    
+
     def test_unsupported_language(self):
         """Should handle unsupported languages gracefully"""
         chunker = SemanticChunker()
         chunks = chunker.chunk_file("some content", "unknown-language")
         assert chunks == []  # Empty list for unsupported
-    
+
     def test_empty_file(self):
         """Should handle empty files"""
         chunker = SemanticChunker()
@@ -462,7 +462,7 @@ class TestPerformance:
     def test_large_file_performance(self):
         """Should parse large files quickly"""
         import time
-        
+
         # Generate a large Python file
         lines = []
         for i in range(100):
@@ -470,34 +470,34 @@ class TestPerformance:
             lines.append(f"    result = x + y + {i}")
             lines.append(f"    return result")
             lines.append("")
-        
+
         content = "\n".join(lines)
-        
+
         chunker = SemanticChunker()
         start = time.time()
         chunks = chunker.chunk_file(content, "python")
         elapsed = time.time() - start
-        
+
         assert len(chunks) == 100  # One per function
         assert elapsed < 0.1  # Should be very fast
-    
+
     def test_parser_caching(self):
         """Should cache parsers between calls"""
         import time
-        
+
         chunker = SemanticChunker()
         content = "def test(): pass"
-        
+
         # First call - parser initialization
         start1 = time.time()
         chunker.chunk_file(content, "python")
         time1 = time.time() - start1
-        
+
         # Second call - should use cached parser
         start2 = time.time()
         chunker.chunk_file(content, "python")
         time2 = time.time() - start2
-        
+
         # Second call should be notably faster
         assert time2 < time1 * 0.5  # At least 2x faster
 
@@ -510,43 +510,43 @@ class TestConcurrentProcessing:
             ("function func3() { return 3; }", "javascript", "file3.js"),
             ("fn func4() -> i32 { 4 }", "rust", "file4.rs"),
         ]
-        
+
         chunker = SemanticChunker()
         results = chunker.chunk_files(files)
-        
+
         assert len(results) == 4
         assert all(len(chunks) > 0 for chunks in results)
-        
+
         # Check each file was processed correctly
         assert results[0][0].metadata.node_name == "func1"
         assert results[1][0].metadata.node_name == "func2"
         assert results[2][0].metadata.language == "javascript"
         assert results[3][0].metadata.language == "rust"
-    
+
     def test_concurrent_performance(self):
         """Concurrent processing should be faster than sequential"""
         import time
-        
+
         # Generate many files
         files = []
         for i in range(50):
             content = f"def function_{i}():\n    return {i}"
             files.append((content, "python", f"file_{i}.py"))
-        
+
         chunker = SemanticChunker()
-        
+
         # Time concurrent processing
         start = time.time()
         results_concurrent = chunker.chunk_files(files)
         time_concurrent = time.time() - start
-        
+
         # Time sequential processing
         start = time.time()
         results_sequential = []
         for content, lang, path in files:
             results_sequential.append(chunker.chunk_file(content, lang, path))
         time_sequential = time.time() - start
-        
+
         # Concurrent should be notably faster
         assert time_concurrent < time_sequential * 0.7  # At least 30% faster
         assert len(results_concurrent) == len(results_sequential)

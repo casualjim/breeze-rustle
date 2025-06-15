@@ -9,10 +9,13 @@ text-splitter = { version = "0.27", features = [
   "tiktoken-rs",
   "tokenizers",
 ] }
+tiktoken-rs = "0.7"
 
 # Tokenization
 tokenizers = { version = "0.21", features = ["http"] }
-tiktoken-rs = "0.7"
+
+tokio = { version = "1", features = ["rt", "macros", "fs", "sync"] }
+tracing = "0.1.41"
 
 # Tree-sitter parsers (individual crates for all languages)
 tree-sitter = "0.25"
@@ -48,6 +51,3 @@ thiserror = "2.0"
 # Utils
 log = "0.4"
 tree-sitter-language = "0.1.5"
-
-tokio = { version = "1", features = ["rt", "macros", "fs", "sync"] }
-tracing = "0.1.41"

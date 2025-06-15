@@ -17,7 +17,10 @@ impl FromStr for EmbeddingProvider {
     match s.to_lowercase().as_str() {
       "local" => Ok(EmbeddingProvider::Local),
       "voyage" => Ok(EmbeddingProvider::Voyage),
-      _ => Err(format!("Invalid embedding provider: {}. Use 'local' or 'voyage'", s)),
+      _ => Err(format!(
+        "Invalid embedding provider: {}. Use 'local' or 'voyage'",
+        s
+      )),
     }
   }
 }
@@ -137,7 +140,6 @@ impl Config {
     let config: Self = toml::from_str(&content)?;
     Ok(config)
   }
-
 
   pub fn save_to_file<P: AsRef<std::path::Path>>(&self, path: P) -> anyhow::Result<()> {
     let content = toml::to_string_pretty(self)?;

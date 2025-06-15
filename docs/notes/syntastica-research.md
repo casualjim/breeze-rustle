@@ -4,8 +4,8 @@
 
 Syntastica is a modern syntax highlighting library using tree-sitter, designed as a replacement for syntect. It provides a comprehensive solution for tree-sitter-based syntax highlighting with support for 50+ languages.
 
-**Repository**: <https://github.com/RubixDev/syntastica>  
-**License**: MPL-2.0  
+**Repository**: <https://github.com/RubixDev/syntastica>
+**License**: MPL-2.0
 **Version**: 0.6.0 (as of research date)
 
 ## Architecture

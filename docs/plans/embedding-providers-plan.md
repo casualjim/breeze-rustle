@@ -22,16 +22,16 @@ This plan details the implementation of a pluggable embedding provider system fo
 pub trait EmbeddingProvider: Send + Sync {
     /// Embed a batch of texts
     async fn embed(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>, Box<dyn Error + Send + Sync>>;
-    
+
     /// Get the embedding dimension for this provider's model
     fn embedding_dim(&self) -> usize;
-    
+
     /// Get the maximum context length in tokens
     fn context_length(&self) -> usize;
-    
+
     /// Create the appropriate batching strategy for this provider
     fn create_batching_strategy(&self) -> Box<dyn BatchingStrategy>;
-    
+
     /// Get the tokenizer for this provider (if applicable)
     fn tokenizer(&self) -> Option<Arc<dyn Tokenizer>>;
 }
@@ -47,13 +47,13 @@ pub trait BatchingStrategy: Send + Sync {
         chunks: Vec<ProjectChunk>,
         provider: &dyn EmbeddingProvider,
     ) -> Vec<EmbeddingBatch>;
-    
+
     /// Maximum items per batch
     fn max_batch_size(&self) -> usize;
-    
+
     /// Whether this strategy considers token counts
     fn is_token_aware(&self) -> bool;
-    
+
     /// Maximum concurrent requests (for API providers)
     fn max_concurrent_requests(&self) -> Option<usize>;
 }

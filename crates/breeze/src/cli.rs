@@ -1,7 +1,7 @@
-use clap::{Parser, Subcommand};
-use std::path::PathBuf;
 use crate::aiproviders::voyage::{EmbeddingModel as VoyageModel, Tier as VoyageTier};
 use crate::config::EmbeddingProvider;
+use clap::{Parser, Subcommand};
+use std::path::PathBuf;
 
 #[derive(Parser)]
 #[command(name = "breeze")]

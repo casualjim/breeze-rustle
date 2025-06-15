@@ -4,7 +4,6 @@ use crate::{
   languages::get_language,
   types::{Chunk, ChunkError, ProjectChunk},
 };
-use async_stream;
 use blake3::Hasher;
 use futures::{Stream, StreamExt};
 use ignore::{DirEntry, WalkBuilder, WalkState};
@@ -40,12 +39,12 @@ fn get_default_ignore_file() -> &'static std::path::PathBuf {
 /// Check if an entry should be traversed (for directories) or processed (for files)
 fn should_process_entry(entry: &DirEntry) -> bool {
   // Always traverse directories
-  if entry.file_type().map_or(false, |ft| ft.is_dir()) {
+  if entry.file_type().is_some_and(|ft| ft.is_dir()) {
     return true;
   }
 
   // For files, apply our filtering logic
-  if !entry.file_type().map_or(false, |ft| ft.is_file()) {
+  if !entry.file_type().is_some_and(|ft| ft.is_file()) {
     return false;
   }
 
@@ -60,11 +59,11 @@ fn should_process_entry(entry: &DirEntry) -> bool {
   }
 
   // Skip binary files
-  let is_text_file = if let Ok(Some(file_type)) = infer::get_from_path(&path) {
+  let is_text_file = if let Ok(Some(file_type)) = infer::get_from_path(path) {
     file_type.matcher_type() == infer::MatcherType::Text
   } else {
     // If infer can't determine, check with hyperpolyglot
-    hyperpolyglot::detect(&path).is_ok()
+    hyperpolyglot::detect(path).is_ok()
   };
 
   if !is_text_file {
@@ -214,7 +213,7 @@ fn process_file<P: AsRef<Path>>(
       // Now we know it's a text file, read it once
       let content = tokio::fs::read_to_string(&path)
           .await
-          .map_err(|e| ChunkError::IoError(e))?;
+          .map_err(ChunkError::IoError)?;
 
       if content.is_empty() {
           return;
@@ -485,7 +484,7 @@ python -m pytest tests/
     // Create a binary file (should be skipped)
     fs::write(
       base_path.join("test.bin"),
-      &[0u8, 1, 2, 3, 255, 254, 253, 252],
+      [0u8, 1, 2, 3, 255, 254, 253, 252],
     )
     .unwrap();
 

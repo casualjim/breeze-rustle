@@ -37,7 +37,7 @@ We've exceeded our original goals and created one of the most comprehensive lang
    ```bash
    # One-time setup
    ./tools/build-grammars --all-platforms
-   
+
    # Regular development
    cargo build  # Automatically uses precompiled binaries
    ```

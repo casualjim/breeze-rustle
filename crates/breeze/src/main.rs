@@ -46,46 +46,47 @@ async fn main() {
       if let Some(db) = database {
         config.database_path = db;
       }
-      
+
       if let Some(provider) = embedding_provider {
         config.embedding_provider = provider;
       }
-      
+
       if let Some(m) = model {
         config.model = m;
       }
-      
+
       // Ensure voyage config exists if using voyage provider
-      if config.embedding_provider == breeze::config::EmbeddingProvider::Voyage && config.voyage.is_none() {
+      if config.embedding_provider == breeze::config::EmbeddingProvider::Voyage
+        && config.voyage.is_none()
+      {
         config.voyage = Some(breeze::config::VoyageConfig {
           api_key: String::new(),
           tier: breeze::aiproviders::voyage::Tier::Free,
           model: breeze::aiproviders::voyage::EmbeddingModel::VoyageCode3,
         });
       }
-      
+
       // Handle voyage-specific overrides
-      let api_key = voyage_api_key
-        .or_else(|| std::env::var("BREEZE_VOYAGE_API_KEY").ok());
-      
+      let api_key = voyage_api_key.or_else(|| std::env::var("BREEZE_VOYAGE_API_KEY").ok());
+
       if let Some(api_key) = api_key {
         if let Some(ref mut voyage) = config.voyage {
           voyage.api_key = api_key;
         }
       }
-      
+
       if let Some(tier) = voyage_tier {
         if let Some(ref mut voyage) = config.voyage {
           voyage.tier = tier;
         }
       }
-      
+
       if let Some(model) = voyage_model {
         if let Some(ref mut voyage) = config.voyage {
           voyage.model = model;
         }
       }
-      
+
       if let Some(size) = max_chunk_size {
         config.max_chunk_size = size;
       }
@@ -293,7 +294,7 @@ async fn main() {
           final_total as f64 / elapsed.as_secs_f64()
         );
 
-        if final_counts.len() > 0 {
+        if !final_counts.is_empty() {
           let avg_chunks_per_file = final_total as f64 / final_counts.len() as f64;
           println!("Average chunks per file: {:.1}", avg_chunks_per_file);
         }

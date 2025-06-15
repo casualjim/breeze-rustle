@@ -180,12 +180,9 @@ fn extract_node_name(node: &Node, content: &str) -> Option<String> {
 /// Find a child node by its kind
 fn find_child_by_kind<'a>(node: &'a Node, kind: &str) -> Option<Node<'a>> {
   let mut cursor = node.walk();
-  for child in node.children(&mut cursor) {
-    if child.kind() == kind {
-      return Some(child);
-    }
-  }
-  None
+  node
+    .children(&mut cursor)
+    .find(|&child| child.kind() == kind)
 }
 
 /// Build a scope path by traversing parent nodes
@@ -213,34 +210,34 @@ fn is_significant_scope(kind: &str) -> bool {
     // Functions and methods
     "function_declaration" | "function_definition" | "method_definition" |
         "function_item" | "function" | "method_declaration" |
-        
+
         // Classes and similar
         "class_declaration" | "class_definition" | "class" |
-        
+
         // Interfaces and traits (conceptually equivalent block-level constructs)
         "interface_declaration" | "trait_item" | "trait_definition" |
-        
+
         // Enums (medium priority)
         "enum_declaration" | "enum_specifier" |
-        
+
         // Structs (medium priority)
         "struct_item" | "struct_declaration" | "struct_specifier" |
-        
+
         // Constructors and properties
         "constructor_declaration" | "property_declaration" |
-        
+
         // Modules (medium priority)
         "module" | "module_definition" |
-        
+
         // Rust-specific
         "impl_item" | "enum_item" | "const_item" | "static_item" | "mod_item" |
-        
+
         // Language-specific constructs
         "def" | "defn" | "defp" | "defmodule" | "defprotocol" | "defimpl" |
-        
+
         // Additional important block-level constructs
         "object_definition" | "object_declaration" |
-        
+
         // Other scopes
         "namespace" | "namespace_declaration" | "namespace_definition"
   )

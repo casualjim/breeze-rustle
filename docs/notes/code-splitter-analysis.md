@@ -160,15 +160,15 @@ impl BreezeRustleChunker {
     ) -> Result<Vec<EnrichedChunk>> {
         // Step 1: Basic chunking with text-splitter
         let base_chunks = self.base_splitter.chunks(content);
-        
+
         // Step 2: Enrich with semantic metadata
         let enriched = self.semantic_analyzer
             .analyze_chunks(base_chunks, language)
             .await?;
-        
+
         // Step 3: Apply overlap if configured
         let with_overlap = self.apply_overlap(enriched)?;
-        
+
         Ok(with_overlap)
     }
 }

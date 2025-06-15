@@ -37,10 +37,13 @@ impl App {
     info!("Set up LanceDB connection");
 
     // Create embedding provider based on configuration
-    info!("Creating embedding provider: {:?}", config.embedding_provider);
+    info!(
+      "Creating embedding provider: {:?}",
+      config.embedding_provider
+    );
     let embedding_provider = create_embedding_provider(&config).await?;
     let embedding_dim = embedding_provider.embedding_dim();
-    
+
     // Adjust max chunk size based on provider's context length if not explicitly set
     let context_length = embedding_provider.context_length();
     if config.max_chunk_size == default_max_chunk_size() {
@@ -52,9 +55,12 @@ impl App {
       );
       // Note: We can't modify config here as it's borrowed, but we can log the recommendation
     }
-    
-    info!("Embedding provider created successfully, dimension: {}", embedding_dim);
-    
+
+    info!(
+      "Embedding provider created successfully, dimension: {}",
+      embedding_dim
+    );
+
     let embedding_provider = Arc::from(embedding_provider);
 
     // Ensure table exists
