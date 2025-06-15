@@ -4,6 +4,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Instant;
 
 use breeze_chunkers::{Chunk, Tokenizer, WalkOptions, walk_project};
+use embed_anything::embeddings::embed::Embedder;
 use futures_util::StreamExt;
 use lancedb::Table;
 use tokio::sync::{RwLock, mpsc};
@@ -13,22 +14,23 @@ use tracing::{debug, error, info};
 use crate::config::Config;
 use crate::converter::BufferedRecordBatchConverter;
 use crate::document_builder::build_document_from_accumulator;
-use crate::embeddings::sentence_transformers::SentenceTransformersEmbedder;
 use crate::models::CodeDocument;
 use crate::pipeline::{ChunkBatch, EmbeddedChunk, EmbeddedChunkWithFile, FileAccumulator};
 use crate::sinks::lancedb_sink::LanceDbSink;
 
 pub struct Indexer<'a> {
   config: &'a Config,
-  embedder: &'a SentenceTransformersEmbedder,
+  embedder: Arc<Embedder>,
+  embedding_dim: usize,
   table: Arc<RwLock<Table>>,
 }
 
 impl<'a> Indexer<'a> {
-  pub fn new(config: &'a Config, embedder: &'a SentenceTransformersEmbedder, table: Arc<RwLock<Table>>) -> Self {
+  pub fn new(config: &'a Config, embedder: Arc<Embedder>, embedding_dim: usize, table: Arc<RwLock<Table>>) -> Self {
     Self {
       config,
       embedder,
+      embedding_dim,
       table,
     }
   }
@@ -41,16 +43,15 @@ impl<'a> Indexer<'a> {
     info!(path = %path.display(), "Starting channel-based indexing");
 
     // Setup
-    let tokenizer = self.embedder.tokenizer();
     let walk_options = WalkOptions {
       max_chunk_size: self.config.max_chunk_size,
-      tokenizer: Tokenizer::PreloadedHuggingFace(tokenizer),
+      tokenizer: Tokenizer::Characters,
       max_parallel: self.config.max_parallel_files,
       max_file_size: self.config.max_file_size,
     };
 
     let chunk_stream = walk_project(path.to_path_buf(), walk_options);
-    let result = self.index_stream(chunk_stream, 50).await?;
+    let result = self.index_stream(chunk_stream, 256).await?;
 
     let elapsed = start_time.elapsed();
     info!(
@@ -71,7 +72,7 @@ impl<'a> Indexer<'a> {
     + 'static,
     max_batch_size: usize,
   ) -> Result<usize, Box<dyn std::error::Error + Send + Sync>> {
-    let embedding_dim = self.embedder.embedding_dim();
+    let embedding_dim = self.embedding_dim;
 
     // Create channels with bounded capacity for backpressure
     let (batch_tx, batch_rx) = mpsc::channel::<ChunkBatch>(10);
@@ -84,7 +85,7 @@ impl<'a> Indexer<'a> {
 
     // Start pipeline stages with cancellation support
     // we start this with in the reverse order of execution
-    let sink_handle = self.spawn_sink(doc_rx, stats.clone());
+    let sink_handle = self.spawn_sink(doc_rx, stats.clone(), embedding_dim);
     let doc_handle = self.spawn_document_builder(
       embedded_rx,
       doc_tx,
@@ -165,7 +166,7 @@ impl<'a> Indexer<'a> {
     cancel_token: CancellationToken,
   ) -> tokio::task::JoinHandle<()> {
     let embedder = self.embedder.clone();
-    let batch_size = self.config.batch_size;
+    let batch_size = 128; // Max batch size for embed_anything
     tokio::spawn(embedder_task(
       embedder,
       batch_rx,
@@ -197,9 +198,9 @@ impl<'a> Indexer<'a> {
     &self,
     doc_rx: mpsc::Receiver<CodeDocument>,
     stats: IndexingStats,
+    embedding_dim: usize,
   ) -> tokio::task::JoinHandle<Result<usize, Box<dyn std::error::Error + Send + Sync>>> {
     let table = self.table.clone();
-    let embedding_dim = self.embedder.embedding_dim();
     tokio::spawn(sink_task(doc_rx, table, embedding_dim, stats))
   }
 }
@@ -320,7 +321,7 @@ async fn stream_processor_task(
 }
 
 async fn embedder_task(
-  embedder: SentenceTransformersEmbedder,
+  embedder: Arc<Embedder>,
   mut batch_rx: mpsc::Receiver<ChunkBatch>,
   embedded_tx: mpsc::Sender<EmbeddedChunkWithFile>,
   max_batch_size: usize,
@@ -417,7 +418,7 @@ async fn embedder_task(
 }
 
 async fn process_embedding_batch(
-  embedder: &SentenceTransformersEmbedder,
+  embedder: &Embedder,
   batch: Vec<breeze_chunkers::ProjectChunk>,
   embedded_tx: &mpsc::Sender<EmbeddedChunkWithFile>,
   stats: &IndexingStats,
@@ -430,26 +431,49 @@ async fn process_embedding_batch(
 
   debug!("Processing embedding batch of {} chunks (total chunks: {}, files: {})",
     batch.len(), total_chunks_processed, total_files_processed);
-  let chunks: Vec<_> = batch.iter()
-    .map(|pc| (pc.file_path.clone(), pc.chunk.clone()))
+  // Extract text from chunks
+  let texts: Vec<&str> = batch.iter()
+    .filter_map(|pc| match &pc.chunk {
+      Chunk::Semantic(sc) | Chunk::Text(sc) => Some(sc.text.as_str()),
+      Chunk::EndOfFile { .. } => None,
+    })
     .collect();
 
-  let chunk_list: Vec<_> = chunks.iter().map(|(_, c)| c.clone()).collect();
+  if texts.is_empty() {
+    return;
+  }
 
-  match embedder.embed_chunk_batch_with_stats(chunk_list, Some((total_chunks_processed, total_files_processed))).await {
+  match embedder.embed(&texts, None, None).await {
     Ok(embedded_chunks) => {
       debug!("Successfully embedded {} chunks", embedded_chunks.len());
       stats.batches.fetch_add(1, Ordering::Relaxed);
 
-      for (embedded, (file_path, _)) in embedded_chunks.into_iter().zip(chunks.iter()) {
-        let item = EmbeddedChunkWithFile {
-          file_path: file_path.clone(),
-          chunk: embedded.chunk,
-          embedding: embedded.embedding,
-        };
-        if embedded_tx.send(item).await.is_err() {
-          error!("Failed to send embedded chunk - receiver dropped");
-          return;
+      let mut embedding_iter = embedded_chunks.into_iter();
+
+      for pc in batch {
+        match &pc.chunk {
+          Chunk::Semantic(_) | Chunk::Text(_) => {
+            if let Some(embedding_result) = embedding_iter.next() {
+              let embedding_vec = match embedding_result {
+                embed_anything::embeddings::embed::EmbeddingResult::DenseVector(vec) => vec,
+                embed_anything::embeddings::embed::EmbeddingResult::MultiVector(_) => {
+                  error!("Multi-vector embeddings not supported");
+                  continue;
+                }
+              };
+
+              let item = EmbeddedChunkWithFile {
+                file_path: pc.file_path.clone(),
+                chunk: pc.chunk,
+                embedding: embedding_vec,
+              };
+              if embedded_tx.send(item).await.is_err() {
+                error!("Failed to send embedded chunk - receiver dropped");
+                return;
+              }
+            }
+          }
+          Chunk::EndOfFile { .. } => {}
         }
       }
     }
@@ -585,7 +609,6 @@ async fn sink_task(
 #[cfg(test)]
 mod tests {
   use super::*;
-  use crate::embeddings::loader::load_sentence_transformers_embedder;
   use breeze_chunkers::{ChunkError, ChunkMetadata, ProjectChunk, SemanticChunk};
   use futures_util::stream;
   use tempfile::tempdir;
@@ -665,9 +688,16 @@ mod tests {
       .try_init();
 
     let config = Config::test();
-    let embedder = load_sentence_transformers_embedder(&config.model, None, true)
-      .await
-      .unwrap();
+
+    // Create embedder for tests
+    let embedder = Arc::new(
+      embed_anything::embeddings::embed::EmbedderBuilder::new()
+        .model_architecture("bert")
+        .onnx_model_id(Some(embed_anything::embeddings::local::text_embedding::ONNXModel::AllMiniLML6V2))
+        .from_pretrained_onnx()
+        .unwrap()
+    );
+    let embedding_dim = 384; // all-MiniLM-L6-v2 has 384 dims
 
     // Create temporary LanceDB
     let temp_db = tempdir().unwrap();
@@ -675,11 +705,11 @@ mod tests {
       .execute()
       .await
       .unwrap();
-    let table = CodeDocument::ensure_table(&connection, "test", embedder.embedding_dim())
+    let table = CodeDocument::ensure_table(&connection, "test", embedding_dim)
       .await
       .unwrap();
 
-    let indexer = Indexer::new(&config, &embedder, Arc::new(RwLock::new(table)));
+    let indexer = Indexer::new(&config, embedder, embedding_dim, Arc::new(RwLock::new(table)));
 
     // Create test stream with 2 files
     let chunks = vec![
@@ -700,20 +730,26 @@ mod tests {
   #[tokio::test]
   async fn test_pipeline_error_handling() {
     let config = Config::test();
-    let embedder = load_sentence_transformers_embedder(&config.model, None, true)
-      .await
-      .unwrap();
+    // Create embedder for tests
+    let embedder = Arc::new(
+      embed_anything::embeddings::embed::EmbedderBuilder::new()
+        .model_architecture("bert")
+        .onnx_model_id(Some(embed_anything::embeddings::local::text_embedding::ONNXModel::AllMiniLML6V2))
+        .from_pretrained_onnx()
+        .unwrap()
+    );
+    let embedding_dim = 384; // all-MiniLM-L6-v2 has 384 dims
 
     let temp_db = tempdir().unwrap();
     let connection = lancedb::connect(temp_db.path().to_str().unwrap())
       .execute()
       .await
       .unwrap();
-    let table = CodeDocument::ensure_table(&connection, "test", embedder.embedding_dim())
+    let table = CodeDocument::ensure_table(&connection, "test", embedding_dim)
       .await
       .unwrap();
 
-    let indexer = Indexer::new(&config, &embedder, Arc::new(RwLock::new(table)));
+    let indexer = Indexer::new(&config, embedder, embedding_dim, Arc::new(RwLock::new(table)));
 
     // Stream with an error in the middle
     let chunks = vec![
@@ -748,20 +784,27 @@ mod tests {
     // Start indexing in a task
     let index_handle = tokio::spawn(async move {
       let config = Config::test();
-      let embedder = load_sentence_transformers_embedder(&config.model, None, true)
-        .await
-        .unwrap();
+
+      // Create embedder for tests
+      let embedder = Arc::new(
+        embed_anything::embeddings::embed::EmbedderBuilder::new()
+          .model_architecture("bert")
+          .onnx_model_id(Some(embed_anything::embeddings::local::text_embedding::ONNXModel::AllMiniLML6V2))
+          .from_pretrained_onnx()
+          .unwrap()
+      );
+      let embedding_dim = 384; // all-MiniLM-L6-v2 has 384 dims
 
       let temp_db = tempdir().unwrap();
       let connection = lancedb::connect(temp_db.path().to_str().unwrap())
         .execute()
         .await
         .unwrap();
-      let table = CodeDocument::ensure_table(&connection, "test", embedder.embedding_dim())
+      let table = CodeDocument::ensure_table(&connection, "test", embedding_dim)
         .await
         .unwrap();
 
-      let indexer = Indexer::new(&config, &embedder, Arc::new(RwLock::new(table)));
+      let indexer = Indexer::new(&config, embedder, embedding_dim, Arc::new(RwLock::new(table)));
       indexer.index_stream(chunk_stream, 5).await
     });
 
@@ -778,20 +821,26 @@ mod tests {
   #[tokio::test]
   async fn test_pipeline_batch_accumulation() {
     let config = Config::test();
-    let embedder = load_sentence_transformers_embedder(&config.model, None, true)
-      .await
-      .unwrap();
+    // Create embedder for tests
+    let embedder = Arc::new(
+      embed_anything::embeddings::embed::EmbedderBuilder::new()
+        .model_architecture("bert")
+        .onnx_model_id(Some(embed_anything::embeddings::local::text_embedding::ONNXModel::AllMiniLML6V2))
+        .from_pretrained_onnx()
+        .unwrap()
+    );
+    let embedding_dim = 384; // all-MiniLM-L6-v2 has 384 dims
 
     let temp_db = tempdir().unwrap();
     let connection = lancedb::connect(temp_db.path().to_str().unwrap())
       .execute()
       .await
       .unwrap();
-    let table = CodeDocument::ensure_table(&connection, "test", embedder.embedding_dim())
+    let table = CodeDocument::ensure_table(&connection, "test", embedding_dim)
       .await
       .unwrap();
 
-    let indexer = Indexer::new(&config, &embedder, Arc::new(RwLock::new(table)));
+    let indexer = Indexer::new(&config, embedder, embedding_dim, Arc::new(RwLock::new(table)));
 
     // Create many chunks for one file to test batching
     let mut chunks = vec![];
@@ -813,20 +862,26 @@ mod tests {
   #[tokio::test]
   async fn test_pipeline_empty_stream() {
     let config = Config::test();
-    let embedder = load_sentence_transformers_embedder(&config.model, None, true)
-      .await
-      .unwrap();
+    // Create embedder for tests
+    let embedder = Arc::new(
+      embed_anything::embeddings::embed::EmbedderBuilder::new()
+        .model_architecture("bert")
+        .onnx_model_id(Some(embed_anything::embeddings::local::text_embedding::ONNXModel::AllMiniLML6V2))
+        .from_pretrained_onnx()
+        .unwrap()
+    );
+    let embedding_dim = 384; // all-MiniLM-L6-v2 has 384 dims
 
     let temp_db = tempdir().unwrap();
     let connection = lancedb::connect(temp_db.path().to_str().unwrap())
       .execute()
       .await
       .unwrap();
-    let table = CodeDocument::ensure_table(&connection, "test", embedder.embedding_dim())
+    let table = CodeDocument::ensure_table(&connection, "test", embedding_dim)
       .await
       .unwrap();
 
-    let indexer = Indexer::new(&config, &embedder, Arc::new(RwLock::new(table)));
+    let indexer = Indexer::new(&config, embedder, embedding_dim, Arc::new(RwLock::new(table)));
 
     let chunk_stream = stream::iter(vec![] as Vec<Result<ProjectChunk, ChunkError>>);
     let count = indexer.index_stream(chunk_stream, 10).await.unwrap();
@@ -837,20 +892,26 @@ mod tests {
   #[tokio::test]
   async fn test_pipeline_eof_only_files() {
     let config = Config::test();
-    let embedder = load_sentence_transformers_embedder(&config.model, None, true)
-      .await
-      .unwrap();
+    // Create embedder for tests
+    let embedder = Arc::new(
+      embed_anything::embeddings::embed::EmbedderBuilder::new()
+        .model_architecture("bert")
+        .onnx_model_id(Some(embed_anything::embeddings::local::text_embedding::ONNXModel::AllMiniLML6V2))
+        .from_pretrained_onnx()
+        .unwrap()
+    );
+    let embedding_dim = 384; // all-MiniLM-L6-v2 has 384 dims
 
     let temp_db = tempdir().unwrap();
     let connection = lancedb::connect(temp_db.path().to_str().unwrap())
       .execute()
       .await
       .unwrap();
-    let table = CodeDocument::ensure_table(&connection, "test", embedder.embedding_dim())
+    let table = CodeDocument::ensure_table(&connection, "test", embedding_dim)
       .await
       .unwrap();
 
-    let indexer = Indexer::new(&config, &embedder, Arc::new(RwLock::new(table)));
+    let indexer = Indexer::new(&config, embedder, embedding_dim, Arc::new(RwLock::new(table)));
 
     // Files with only EOF markers (empty files)
     let chunks = vec![
@@ -868,20 +929,26 @@ mod tests {
   #[tokio::test]
   async fn test_pipeline_single_file_multiple_chunks() {
     let config = Config::test();
-    let embedder = load_sentence_transformers_embedder(&config.model, None, true)
-      .await
-      .unwrap();
+    // Create embedder for tests
+    let embedder = Arc::new(
+      embed_anything::embeddings::embed::EmbedderBuilder::new()
+        .model_architecture("bert")
+        .onnx_model_id(Some(embed_anything::embeddings::local::text_embedding::ONNXModel::AllMiniLML6V2))
+        .from_pretrained_onnx()
+        .unwrap()
+    );
+    let embedding_dim = 384; // all-MiniLM-L6-v2 has 384 dims
 
     let temp_db = tempdir().unwrap();
     let connection = lancedb::connect(temp_db.path().to_str().unwrap())
       .execute()
       .await
       .unwrap();
-    let table = CodeDocument::ensure_table(&connection, "test", embedder.embedding_dim())
+    let table = CodeDocument::ensure_table(&connection, "test", embedding_dim)
       .await
       .unwrap();
 
-    let indexer = Indexer::new(&config, &embedder, Arc::new(RwLock::new(table)));
+    let indexer = Indexer::new(&config, embedder, embedding_dim, Arc::new(RwLock::new(table)));
 
     // Single file with multiple chunks
     let chunks = vec![
@@ -904,20 +971,26 @@ mod tests {
       .try_init();
 
     let config = Config::test();
-    let embedder = load_sentence_transformers_embedder(&config.model, None, true)
-      .await
-      .unwrap();
+    // Create embedder for tests
+    let embedder = Arc::new(
+      embed_anything::embeddings::embed::EmbedderBuilder::new()
+        .model_architecture("bert")
+        .onnx_model_id(Some(embed_anything::embeddings::local::text_embedding::ONNXModel::AllMiniLML6V2))
+        .from_pretrained_onnx()
+        .unwrap()
+    );
+    let embedding_dim = 384; // all-MiniLM-L6-v2 has 384 dims
 
     let temp_db = tempdir().unwrap();
     let connection = lancedb::connect(temp_db.path().to_str().unwrap())
       .execute()
       .await
       .unwrap();
-    let table = CodeDocument::ensure_table(&connection, "test", embedder.embedding_dim())
+    let table = CodeDocument::ensure_table(&connection, "test", embedding_dim)
       .await
       .unwrap();
 
-    let indexer = Indexer::new(&config, &embedder, Arc::new(RwLock::new(table)));
+    let indexer = Indexer::new(&config, embedder, embedding_dim, Arc::new(RwLock::new(table)));
 
     // Create 101 files to test the 100 document batch limit
     let mut chunks = Vec::new();
@@ -939,7 +1012,6 @@ mod tests {
   // Integration test with real embedder (keep existing test)
   #[tokio::test]
   async fn test_indexer_integration() {
-    use crate::embeddings::loader::load_sentence_transformers_embedder;
 
     let _ = tracing_subscriber::fmt()
       .with_env_filter("breeze=debug,breeze_chunkers=debug")
@@ -948,10 +1020,15 @@ mod tests {
     let config = Config::test();
 
     info!("Loading embedder model: {}", config.model);
-    let embedder = load_sentence_transformers_embedder(&config.model, None, true)
-      .await
-      .unwrap();
-    let embedding_dim = embedder.embedding_dim();
+    // Create embedder for tests
+    let embedder = Arc::new(
+      embed_anything::embeddings::embed::EmbedderBuilder::new()
+        .model_architecture("bert")
+        .onnx_model_id(Some(embed_anything::embeddings::local::text_embedding::ONNXModel::AllMiniLML6V2))
+        .from_pretrained_onnx()
+        .unwrap()
+    );
+    let embedding_dim = 384; // all-MiniLM-L6-v2 has 384 dims
     info!("Embedder loaded, embedding dimension: {}", embedding_dim);
 
     let temp_db = tempdir().unwrap();
@@ -964,7 +1041,7 @@ mod tests {
       .await
       .unwrap();
 
-    let indexer = Indexer::new(&config, &embedder, Arc::new(RwLock::new(table)));
+    let indexer = Indexer::new(&config, embedder, embedding_dim, Arc::new(RwLock::new(table)));
 
     let test_dir = tempdir().unwrap();
     let test_file = test_dir.path().join("test.py");

@@ -37,7 +37,8 @@
       "Bash(gh api:*)",
       "mcp__zep__search_memory_facts",
       "mcp__code-index__search_code",
-      "mcp__code-index__find_files"
+      "mcp__code-index__find_files",
+      "WebFetch(domain:docs.rs)"
     ],
     "deny": []
   }

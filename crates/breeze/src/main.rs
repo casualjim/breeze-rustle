@@ -29,7 +29,6 @@ async fn main() {
       path,
       database,
       model,
-      device,
       max_chunk_size,
       max_file_size,
       max_parallel_files,
@@ -41,9 +40,6 @@ async fn main() {
       }
       if let Some(m) = model {
         config.model = m;
-      }
-      if let Some(d) = device {
-        config.device = d;
       }
       if let Some(size) = max_chunk_size {
         config.max_chunk_size = size;
@@ -63,7 +59,11 @@ async fn main() {
 
       match breeze::App::new(config).await {
         Ok(app) => match app.index(&path).await {
-          Ok(_) => info!("Indexing completed successfully!"),
+          Ok(_) => {
+            info!("Indexing completed successfully!");
+            // Force clean exit to avoid ONNX cleanup issues
+            std::process::exit(0);
+          },
           Err(e) => {
             error!("Indexing failed: {}", e);
             std::process::exit(1);
@@ -132,7 +132,7 @@ async fn main() {
 
         let start = std::time::Instant::now();
 
-        let mut chunker = walk_project(&path, WalkOptions {
+        let chunker = walk_project(&path, WalkOptions {
             max_chunk_size,
             tokenizer: tokenizer_obj,
             max_parallel,

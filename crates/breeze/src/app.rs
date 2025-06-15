@@ -2,18 +2,17 @@ use std::path::Path;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tracing::{debug, info, instrument};
+use embed_anything::embeddings::embed::{Embedder, EmbedderBuilder};
+use embed_anything::embeddings::local::text_embedding::ONNXModel;
 
 use crate::config::Config;
-use crate::embeddings::{
-  loader::load_sentence_transformers_embedder,
-  sentence_transformers::SentenceTransformersEmbedder,
-};
 use crate::indexer::Indexer;
 use crate::models::CodeDocument;
 
 pub struct App {
   config: Config,
-  embedder: SentenceTransformersEmbedder,
+  embedder: Arc<Embedder>,
+  embedding_dim: usize,
   table: Arc<RwLock<lancedb::Table>>,
 }
 
@@ -38,22 +37,31 @@ impl App {
     .await?;
     info!("Set up LanceDB connection");
 
-    // Load Sentence Transformers embedder
-    let device = match config.device.as_str() {
-      "cuda" => Some(candle_core::Device::cuda_if_available(0)?),
-      "metal" | "mps" => Some(candle_core::Device::new_metal(0)?),
-      _ => None, // CPU
-    };
-    
+    // Load embed_anything embedder
     info!(
-      "Loading Sentence Transformers embedder: {} on device: {}",
-      config.model, config.device
+      "Loading embed_anything embedder with AllMiniLML6V2 model"
     );
 
-    let embedder = load_sentence_transformers_embedder(&config.model, device, true).await?;
-    let embedding_dim = embedder.embedding_dim();
+    let embedder = EmbedderBuilder::new()
+      .model_architecture("bert")
+      .onnx_model_id(Some(ONNXModel::AllMiniLML6V2))
+      .from_pretrained_onnx()
+      .map_err(|e| format!("Failed to create embedder: {}", e))?;
+    
+    // Get embedding dimension by embedding a test string
+    let test_embeddings = embedder
+      .embed(&["test"], None, None)
+      .await
+      .map_err(|e| format!("Failed to get embedding dimension: {}", e))?;
+    
+    let embedding_dim = match test_embeddings.first() {
+      Some(embed_anything::embeddings::embed::EmbeddingResult::DenseVector(vec)) => vec.len(),
+      _ => return Err("Failed to determine embedding dimension".into()),
+    };
 
     info!("Embedder loaded successfully, dimension: {}", embedding_dim);
+    
+    let embedder = Arc::new(embedder);
 
     // Ensure table exists
     debug!(
@@ -66,6 +74,7 @@ impl App {
     Ok(Self {
       config: config.clone(),
       embedder,
+      embedding_dim,
       table: Arc::new(RwLock::new(table)),
     })
   }
@@ -76,7 +85,7 @@ impl App {
     path: &Path,
   ) -> Result<usize, Box<dyn std::error::Error + Send + Sync>> {
     // Create an indexer with our resources
-    let indexer = Indexer::new(&self.config, &self.embedder, self.table.clone());
+    let indexer = Indexer::new(&self.config, self.embedder.clone(), self.embedding_dim, self.table.clone());
 
     // Run the indexing
     indexer.index(path).await
