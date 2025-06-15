@@ -21,10 +21,11 @@ async-trait = "0.1.88"
 # Embedding providers
 async-openai = "0.28"
 reqwest = { version = "0.12", features = ["json", "stream"] }
+tokenizers = "0.21"
 
 
 # Configuration and CLI
-clap = { version = "4.5", features = ["derive"] }
+clap = { version = "4.5", features = ["derive", "env"] }
 config = "0.15"
 toml = "0.8"
 
@@ -36,13 +37,13 @@ anyhow = "1.0"
 tokio-util = { version = "0.7", features = ["rt"] }
 tokio-stream = "0.1"
 async-stream = "0.3"
-governor = "0.8"
+governor = "0.10"
 reqwest-retry = "0.7"
 reqwest-tracing = "0.5"
 http = "1.2"
-retry-policies = "0.4"
+retry-policies = "0.5"
 tower = "0.5"
-rand = "0.8"
+rand = "0.9"
 
 tracing.workspace = true
 tracing-subscriber = { version = "0.3.19", features = ["env-filter", "fmt"] }

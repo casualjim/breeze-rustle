@@ -1,0 +1,26 @@
+# Example configuration for Breeze
+
+# Database configuration
+database_path = "./embeddings.db"
+table_name = "code_files"
+
+# Local embedding provider (default)
+embedding_provider = "local"
+model = "ibm-granite/granite-embedding-125m-english"
+
+# Processing configuration
+max_chunk_size = 512
+max_file_size = 5242880  # 5MB
+max_parallel_files = 8
+batch_size = 50
+
+# ----------------------------
+# Example Voyage AI configuration (uncomment to use)
+# ----------------------------
+# embedding_provider = "voyage"
+# max_chunk_size = 30000  # Automatically adjusted based on model
+# 
+# [voyage]
+# api_key = "your-api-key-here"
+# tier = "tier1"  # Options: free, tier1, tier2, tier3
+# model = "voyage-code-3"  # Best for code embeddings
