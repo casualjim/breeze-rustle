@@ -173,7 +173,7 @@ const { SemanticChunker, TokenizerType } = require('@breeze/chunkers');
 
 async function processCode() {
     const chunker = new SemanticChunker();
-    
+
     for await (const chunk of chunker.chunkCode(code, 'javascript')) {
         console.log(chunk);
     }
@@ -200,11 +200,11 @@ const results = await Promise.all(
         const content = await fs.readFile(file, 'utf-8');
         const language = path.extname(file).slice(1);
         const chunks = [];
-        
+
         for await (const chunk of chunker.chunkCode(content, language)) {
             chunks.push(chunk);
         }
-        
+
         return { file, chunks };
     })
 );

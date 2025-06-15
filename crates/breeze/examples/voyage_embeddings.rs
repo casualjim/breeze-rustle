@@ -3,7 +3,6 @@ use breeze::aiproviders::voyage::{
   self, Config, EmbeddingModel, EmbeddingRequest, Tier, VoyageClient,
 };
 use std::env;
-use tracing_subscriber;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -29,7 +28,7 @@ async fn main() -> Result<()> {
   let client = voyage::new_client(config)?;
 
   // Example texts to embed
-  let texts = vec![
+  let texts = [
     r#"def hello_world():
     """A simple hello world function."""
     print("Hello, World!")

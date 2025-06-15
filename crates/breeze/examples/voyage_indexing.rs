@@ -1,7 +1,6 @@
 use breeze::{App, Config, EmbeddingProvider};
 use std::env;
 use std::path::Path;
-use tracing_subscriber;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -30,8 +29,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
   let path = Path::new(&args[1]);
 
   // Create config with Voyage provider
-  let mut config = Config::default();
-  config.embedding_provider = EmbeddingProvider::Voyage;
+  let config = Config {
+    embedding_provider: EmbeddingProvider::Voyage,
+    ..Default::default()
+  };
 
   // Voyage configuration will be loaded from environment variables:
   // - BREEZE_VOYAGE_API_KEY || VOYAGE_API_KEY (required)

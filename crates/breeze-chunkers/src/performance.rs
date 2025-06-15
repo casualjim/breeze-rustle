@@ -7,17 +7,6 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::time::interval;
 use tracing::{error, info};
 
-/// Size bucket boundaries
-const BUCKET_BOUNDARIES: [u64; 7] = [
-  1024,    // 1KB
-  10240,   // 10KB
-  102400,  // 100KB
-  524288,  // 512KB
-  1048576, // 1MB
-  2097152, // 2MB
-  4194304, // 4MB
-];
-
 const BUCKET_LABELS: [&str; 8] = [
   "0-1KB",
   "1-10KB",
@@ -140,11 +129,17 @@ pub struct PerformanceTracker {
   log_file: Arc<Mutex<std::fs::File>>,
 }
 
+impl Default for PerformanceTracker {
+  fn default() -> Self {
+    Self::new()
+  }
+}
+
 impl PerformanceTracker {
   pub fn new() -> Self {
     // Create metrics directory in target/perf/parsing
     let perf_dir = std::path::Path::new("target/perf/parsing");
-    if let Err(e) = std::fs::create_dir_all(&perf_dir) {
+    if let Err(e) = std::fs::create_dir_all(perf_dir) {
       error!("Failed to create performance directory: {}", e);
     }
 
@@ -179,7 +174,7 @@ impl PerformanceTracker {
 
   /// Get or create the CSV file for a language
   fn get_language_file(&self, language: &str) -> std::io::Result<std::fs::File> {
-    let safe_name = language.replace('/', "_").replace(' ', "_");
+    let safe_name = language.replace(['/', ' '], "_");
     let file_path = self.perf_dir.join(format!("{}.csv", safe_name));
 
     // Check if file exists to determine if we need to write headers

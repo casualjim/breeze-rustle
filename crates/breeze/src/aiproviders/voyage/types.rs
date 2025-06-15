@@ -58,7 +58,10 @@ impl FromStr for Tier {
       "tier1" => Ok(Tier::Tier1),
       "tier2" => Ok(Tier::Tier2),
       "tier3" => Ok(Tier::Tier3),
-      _ => Err(format!("Invalid tier: {}. Use 'free', 'tier1', 'tier2', or 'tier3'", s)),
+      _ => Err(format!(
+        "Invalid tier: {}. Use 'free', 'tier1', 'tier2', or 'tier3'",
+        s
+      )),
     }
   }
 }

@@ -22,13 +22,13 @@ class SemanticChunker {
   constructor(maxChunkSize, tokenizer, hfModel) {
     this._native = new native.SemanticChunker(maxChunkSize, tokenizer, hfModel);
   }
-  
+
   // Return async generators directly
   async *chunkCode(content, language, filePath) {
     const iterator = await this._native.chunkCode(content, language, filePath);
     yield* makeAsyncGenerator(iterator);
   }
-  
+
   async *chunkText(content, filePath) {
     const iterator = await this._native.chunkText(content, filePath);
     yield* makeAsyncGenerator(iterator);

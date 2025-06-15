@@ -56,7 +56,7 @@ impl<'a> Indexer<'a> {
       // Default to character-based tokenization for local models
       Tokenizer::Characters
     };
-    
+
     let walk_options = WalkOptions {
       max_chunk_size: self.config.max_chunk_size,
       tokenizer,
@@ -388,26 +388,26 @@ async fn embedder_task(
             pending_eofs.extend(eof_chunks);
 
             // Use batching strategy to prepare chunks
-            if pending_chunks.len() >= batching_strategy.max_batch_size() || 
+            if pending_chunks.len() >= batching_strategy.max_batch_size() ||
                (batching_strategy.is_token_aware() && should_process_token_batch(&pending_chunks)) {
               // Get chunks to process
               let chunks_to_batch = pending_chunks.clone();
               pending_chunks.clear();
-              
+
               // Let the batching strategy prepare the batches
               let embedding_batches = batching_strategy.prepare_batches(
                 chunks_to_batch
               ).await;
-              
+
               // Process each batch
               for embedding_batch in embedding_batches {
                 total_chunks_processed += embedding_batch.chunks.len();
                 process_embedding_batch(
-                  embedding_provider.as_ref(), 
-                  embedding_batch.chunks, 
-                  &embedded_tx, 
-                  &stats, 
-                  total_chunks_processed, 
+                  embedding_provider.as_ref(),
+                  embedding_batch.chunks,
+                  &embedded_tx,
+                  &stats,
+                  total_chunks_processed,
                   total_files_processed
                 ).await;
               }
@@ -419,7 +419,7 @@ async fn embedder_task(
               let embedding_batches = batching_strategy.prepare_batches(
                 pending_chunks
               ).await;
-              
+
               for embedding_batch in embedding_batches {
                 total_chunks_processed += embedding_batch.chunks.len();
                 process_embedding_batch(
@@ -707,7 +707,7 @@ mod tests {
         .lock()
         .unwrap()
         .entry(file_path.to_string())
-        .or_insert_with(String::new)
+        .or_default()
         .push_str(text);
 
       // Create fake tokens - just split by whitespace for tests
@@ -738,12 +738,14 @@ mod tests {
   // Helper function to create test embedding provider
   async fn create_test_embedding_provider() -> (Arc<dyn EmbeddingProvider>, usize) {
     use crate::embeddings::local::LocalEmbeddingProvider;
-    
+
     let provider = LocalEmbeddingProvider::new(
       "test-model".to_string(),
       2, // small batch size for tests
-    ).await.unwrap();
-    
+    )
+    .await
+    .unwrap();
+
     let dim = provider.embedding_dim();
     (Arc::new(provider), dim)
   }

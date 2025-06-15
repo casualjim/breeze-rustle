@@ -1,0 +1,57 @@
+repos:
+  - repo: https://github.com/doublify/pre-commit-rust
+    rev: v1.0
+    hooks:
+      - id: cargo-check
+        name: Rust check
+        description: Run cargo check for basic compilation errors
+        args: ["--all-targets", "--workspace"]
+      - id: clippy
+        name: Rust clippy
+        description: Run clippy for linting
+        args: ["--all-targets", "--workspace", "--", "-D", "warnings"]
+
+  - repo: local
+    hooks:
+      - id: rustfmt
+        name: Rust format
+        description: Run rustfmt to format Rust code
+        language: system
+        entry: rustfmt
+        args: ["--edition", "2024"]
+        files: '\.rs$'
+      - id: cargo-sort
+        name: Sort Cargo.toml dependencies
+        description: Check that Cargo.toml dependencies are sorted alphabetically
+        entry: cargo
+        language: system
+        args: ["sort", "--check"]
+        files: '^Cargo\.toml$'
+        pass_filenames: false
+
+  - repo: https://github.com/biomejs/pre-commit
+    rev: v1.9.4
+    hooks:
+      - id: biome-check
+        args: [ --fix ]
+
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    # Ruff version.
+    rev: v0.11.13
+    hooks:
+      # Run the linter.
+      - id: ruff-check
+        args: [ --fix ]
+      # Run the formatter.
+      - id: ruff-format
+
+
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: check-json
+      - id: check-yaml
+      - id: check-toml
+      - id: check-merge-conflict
+      - id: check-added-large-files

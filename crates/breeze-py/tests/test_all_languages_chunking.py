@@ -1,9 +1,8 @@
 """Comprehensive tests for chunking all 163 supported languages."""
 
 import pytest
-import asyncio
-from breeze import SemanticChunker, ChunkType
-from typing import Dict, List, Tuple
+from breeze import SemanticChunker
+from typing import Dict
 
 
 # Language samples organized by category
@@ -123,7 +122,7 @@ _start:
     mov ecx, msg
     mov edx, len
     int 0x80
-    
+
     mov eax, 1
     xor ebx, ebx
     int 0x80
@@ -133,7 +132,6 @@ section .data
     len equ $ - msg
 """,
     },
-
     # Web Technologies
     "web": {
         "javascript": """
@@ -203,8 +201,8 @@ $primary-color: #333;
         padding: 0;
         list-style: none;
     }
-    
-    li { 
+
+    li {
         padding: 5px;
     }
 }
@@ -228,7 +226,7 @@ export default {
         "svelte": """
 <script>
   export let name = 'World';
-  
+
   function handleClick() {
     alert(`Hello ${name}!`);
   }
@@ -250,7 +248,6 @@ const name = "World";
 </html>
 """,
     },
-
     # Functional Languages
     "functional": {
         "haskell": """
@@ -267,7 +264,7 @@ let rec factorial n =
   if n <= 1 then 1
   else n * factorial (n - 1)
 
-let () = 
+let () =
   print_endline "Hello, World!"
 """,
         "ocaml_interface": """
@@ -351,7 +348,6 @@ main :: Effect Unit
 main = log "Hello, World!"
 """,
     },
-
     # JVM Languages
     "jvm": {
         "java": """
@@ -359,7 +355,7 @@ public class Main {
     public static void main(String[] args) {
         System.out.println("Hello, World!");
     }
-    
+
     public int add(int a, int b) {
         return a + b;
     }
@@ -400,7 +396,7 @@ public class HelloWorld {
     public static void sayHello() {
         System.debug('Hello, World!');
     }
-    
+
     public Integer add(Integer a, Integer b) {
         return a + b;
     }
@@ -417,7 +413,7 @@ namespace HelloWorld
         {
             Console.WriteLine("Hello, World!");
         }
-        
+
         public int Add(int a, int b)
         {
             return a + b;
@@ -426,7 +422,6 @@ namespace HelloWorld
 }
 """,
     },
-
     # Dynamic Languages
     "dynamic": {
         "python": """
@@ -519,7 +514,6 @@ greet "World"
 (greet "World")
 """,
     },
-
     # Mobile & Modern Languages
     "modern": {
         "swift": """
@@ -575,7 +569,6 @@ func greet(name string) {
 @end
 """,
     },
-
     # Data & Scientific Languages
     "scientific": {
         "r": """
@@ -616,11 +609,11 @@ CREATE TABLE users (
     email VARCHAR(100)
 );
 
-SELECT name, email 
-FROM users 
+SELECT name, email
+FROM users
 WHERE id = 1;
 
-CREATE FUNCTION add_numbers(a INTEGER, b INTEGER) 
+CREATE FUNCTION add_numbers(a INTEGER, b INTEGER)
 RETURNS INTEGER AS $$
 BEGIN
     RETURN a + b;
@@ -654,7 +647,6 @@ WHERE {
 LIMIT 10
 """,
     },
-
     # Markup & Config Languages
     "config": {
         "json": """
@@ -786,7 +778,6 @@ executable('hello',
   install : true)
 """,
     },
-
     # Shell & Scripting
     "scripting": {
         "bash": """
@@ -856,7 +847,6 @@ endfunction
 call Greet("World")
 """,
     },
-
     # Domain-Specific Languages
     "domain": {
         "solidity": """
@@ -864,7 +854,7 @@ pragma solidity ^0.8.0;
 
 contract HelloWorld {
     string public greeting = "Hello, World!";
-    
+
     function add(uint a, uint b) public pure returns (uint) {
         return a + b;
     }
@@ -940,7 +930,6 @@ interface UserService {
   (ok (var-get counter)))
 """,
     },
-
     # Specialized Languages
     "specialized": {
         "glsl": """
@@ -1052,7 +1041,6 @@ begin
 end Behavioral;
 """,
     },
-
     # Other Languages
     "other": {
         "erlang": """
@@ -1070,7 +1058,7 @@ defmodule Hello do
   def greet(name) do
     IO.puts("Hello, #{name}!")
   end
-  
+
   def add(a, b) do
     a + b
   end
@@ -1079,14 +1067,14 @@ end
         "heex": """
 <div class="container">
   <h1><%= @title %></h1>
-  
+
   <%= for item <- @items do %>
     <div class="item">
       <h2><%= item.name %></h2>
       <p><%= item.description %></p>
     </div>
   <% end %>
-  
+
   <%= if @show_footer do %>
     <footer>
       <p>&copy; 2023 Example Corp</p>
@@ -1111,11 +1099,11 @@ class Main {
     static function main() {
         greet("World");
     }
-    
+
     static function greet(name:String):Void {
         trace("Hello, " + name + "!");
     }
-    
+
     static function add(a:Int, b:Int):Int {
         return a + b;
     }
@@ -1127,11 +1115,11 @@ package {
         public function Main() {
             greet("World");
         }
-        
+
         public function greet(name:String):void {
             trace("Hello, " + name + "!");
         }
-        
+
         public function add(a:int, b:int):int {
             return a + b;
         }
@@ -1262,10 +1250,10 @@ entry:
 actor Main
   new create(env: Env) =>
     greet("World", env)
-  
+
   fun greet(name: String, env: Env) =>
     env.out.print("Hello, " + name + "!")
-  
+
   fun add(a: U32, b: U32): U32 =>
     a + b
 """,
@@ -1298,13 +1286,13 @@ import QtQuick 2.15
 Rectangle {
     width: 640
     height: 480
-    
+
     Text {
         anchors.centerIn: parent
         text: "Hello, World!"
         font.pixelSize: 24
     }
-    
+
     function add(a, b) {
         return a + b
     }
@@ -1329,7 +1317,6 @@ Jane Smith	25	jane@example.com
 Bob Johnson	35	bob@example.com
 """,
     },
-
     # Documentation & Comments
     "docs": {
         "markdown": """
@@ -1436,10 +1423,10 @@ def greet(name):
         "doxygen": """
 /**
  * @brief Greets a person by name
- * 
+ *
  * @param name The name of the person to greet
  * @return void
- * 
+ *
  * @code
  * greet("World");
  * @endcode
@@ -1447,13 +1434,12 @@ def greet(name):
 """,
         "comment": """
 // This is a single-line comment
-/* This is a 
+/* This is a
    multi-line comment */
 # This is a shell comment
 -- This is a SQL comment
 """,
     },
-
     # Build & Project Files
     "build": {
         "gitignore": """
@@ -1536,11 +1522,11 @@ class hello {
     ensure  => file,
     content => 'Hello, World!',
   }
-  
+
   package { 'nginx':
     ensure => installed,
   }
-  
+
   service { 'nginx':
     ensure => running,
     enable => true,
@@ -1548,7 +1534,6 @@ class hello {
 }
 """,
     },
-
     # Niche Languages
     "niche": {
         "netlinx": """
@@ -1574,7 +1559,7 @@ BUTTON_EVENT[dvTP, BTN_HELLO]
 task main()
 {
     SetSensor(SENSOR_1, SENSOR_TOUCH);
-    
+
     while(true)
     {
         if(SENSOR_1 == 1)
@@ -1592,7 +1577,7 @@ executable("hello") {
     "main.cc",
     "hello.cc",
   ]
-  
+
   deps = [
     ":hello_lib",
   ]
@@ -1773,7 +1758,7 @@ func main() {
 /*!re2c
     re2c:define:YYCTYPE = char;
     re2c:yyfill:enable = 0;
-    
+
     [0-9]+      { return NUMBER; }
     [a-zA-Z]+   { return IDENTIFIER; }
     [ \\t\\n]+    { return WHITESPACE; }
@@ -1825,7 +1810,7 @@ class HelloWorld {
   public function greet(string $name): string {
     return "Hello, " . $name . "!";
   }
-  
+
   public function add(int $a, int $b): int {
     return $a + $b;
   }
@@ -1874,10 +1859,10 @@ circuit HelloWorld :
     input clock : Clock
     input reset : UInt<1>
     output io : {flip in : UInt<8>, out : UInt<8>}
-    
+
     reg counter : UInt<8>, clock with :
       reset => (reset, UInt<8>("h0"))
-    
+
     counter <= add(counter, UInt<8>("h1"))
     io.out <= counter
 """,
@@ -1922,7 +1907,7 @@ graph TD
     B -->|Yes| C[Great!]
     B -->|No| D[Debug]
     D --> B
-    
+
 classDiagram
     class Animal {
         +String name
@@ -1996,7 +1981,7 @@ Item =
 Parameters = Parameter (',' Parameter)*
 Parameter = Name ':' Type
 
-ClassMember = 
+ClassMember =
   'field' Name ':' Type
 | 'method' Name '(' Parameters? ')' Block
 """,
@@ -2017,11 +2002,11 @@ KERNEL=="sd[a-z]", SUBSYSTEMS=="usb", MODE="0666"
 
 {% block body %}
     <h1>{{ greeting }}</h1>
-    
+
     {% for item in items %}
         <li>{{ item.name }} - {{ item.price|currency }}</li>
     {% endfor %}
-    
+
     {% if user.isAdmin %}
         <a href="/admin">Admin Panel</a>
     {% endif %}
@@ -2056,12 +2041,12 @@ SECTIONS
     .text : {
         *(.text)
     }
-    
+
     . = 0x8000000;
     .data : {
         *(.data)
     }
-    
+
     .bss : {
         *(.bss)
     }
@@ -2073,11 +2058,11 @@ SECTIONS
 
 .method public static main([Ljava/lang/String;)V
     .registers 2
-    
+
     sget-object v0, Ljava/lang/System;->out:Ljava/io/PrintStream;
     const-string v1, "Hello, World!"
     invoke-virtual {v0, v1}, Ljava/io/PrintStream;->println(Ljava/lang/String;)V
-    
+
     return-void
 .end method
 """,
@@ -2086,7 +2071,7 @@ class HelloWorld {
     function greet(name) {
         print("Hello, " + name + "!");
     }
-    
+
     function add(a, b) {
         return a + b;
     }
@@ -2095,7 +2080,7 @@ class HelloWorld {
 local hw = HelloWorld();
 hw.greet("World");
 """,
-    }
+    },
 }
 
 
@@ -2106,43 +2091,41 @@ class TestAllLanguagesChunking:
     async def test_all_languages_chunking(self):
         """Test that all 163 languages can be chunked without errors."""
         chunker = SemanticChunker(max_chunk_size=500)
-        
+
         # Results tracking
-        results = {
-            "success": [],
-            "failed": [],
-            "skipped": []
-        }
-        
+        results = {"success": [], "failed": [], "skipped": []}
+
         # Track detailed results
         language_results = []
-        
+
         # Test each language
         for category, languages in LANGUAGE_SAMPLES.items():
             print(f"\n=== Testing {category.upper()} languages ===")
-            
+
             for lang_name, code in languages.items():
-                print(f"  Testing {lang_name}...", end='', flush=True)
+                print(f"  Testing {lang_name}...", end="", flush=True)
                 try:
                     # Skip if language not supported
                     if not SemanticChunker.is_language_supported(lang_name):
                         results["skipped"].append(lang_name)
-                        language_results.append({
-                            "language": lang_name,
-                            "category": category,
-                            "status": "skipped",
-                            "reason": "not supported"
-                        })
+                        language_results.append(
+                            {
+                                "language": lang_name,
+                                "category": category,
+                                "status": "skipped",
+                                "reason": "not supported",
+                            }
+                        )
                         print(" SKIPPED (not supported)")
                         continue
-                    
+
                     # Try to chunk the code
                     chunk_stream = await chunker.chunk_code(code.strip(), lang_name)
-                    
+
                     chunks = []
                     async for chunk in chunk_stream:
                         chunks.append(chunk)
-                    
+
                     # Verify we got chunks
                     if len(chunks) > 0:
                         # Verify chunk structure
@@ -2151,60 +2134,78 @@ class TestAllLanguagesChunking:
                             if not chunk.text or chunk.start_line < 1:
                                 all_valid = False
                                 break
-                        
+
                         if all_valid:
                             results["success"].append(lang_name)
-                            language_results.append({
-                                "language": lang_name,
-                                "category": category,
-                                "status": "success",
-                                "chunks": len(chunks),
-                                "node_types": list(set(c.metadata.node_type for c in chunks if c.metadata.node_type))
-                            })
+                            language_results.append(
+                                {
+                                    "language": lang_name,
+                                    "category": category,
+                                    "status": "success",
+                                    "chunks": len(chunks),
+                                    "node_types": list(
+                                        set(
+                                            c.metadata.node_type
+                                            for c in chunks
+                                            if c.metadata.node_type
+                                        )
+                                    ),
+                                }
+                            )
                             print(f" ✓ ({len(chunks)} chunks)")
                         else:
                             results["failed"].append(lang_name)
-                            language_results.append({
-                                "language": lang_name,
-                                "category": category,
-                                "status": "failed",
-                                "reason": "invalid chunk structure"
-                            })
+                            language_results.append(
+                                {
+                                    "language": lang_name,
+                                    "category": category,
+                                    "status": "failed",
+                                    "reason": "invalid chunk structure",
+                                }
+                            )
                             print(" ✗ (invalid chunk structure)")
                     else:
                         results["failed"].append(lang_name)
-                        language_results.append({
+                        language_results.append(
+                            {
+                                "language": lang_name,
+                                "category": category,
+                                "status": "failed",
+                                "reason": "no chunks produced",
+                            }
+                        )
+                        print(" ✗ (no chunks)")
+
+                except Exception as e:
+                    results["failed"].append(lang_name)
+                    language_results.append(
+                        {
                             "language": lang_name,
                             "category": category,
                             "status": "failed",
-                            "reason": "no chunks produced"
-                        })
-                        print(" ✗ (no chunks)")
-                    
-                except Exception as e:
-                    results["failed"].append(lang_name)
-                    language_results.append({
-                        "language": lang_name,
-                        "category": category,
-                        "status": "failed",
-                        "reason": str(e)
-                    })
+                            "reason": str(e),
+                        }
+                    )
                     print(f" ✗ (error: {str(e)[:50]}...)")
-        
+
         # Generate summary report
         print("\n\n=== SUMMARY REPORT ===")
-        print(f"Total languages tested: {len(results['success']) + len(results['failed']) + len(results['skipped'])}")
+        print(
+            f"Total languages tested: {len(results['success']) + len(results['failed']) + len(results['skipped'])}"
+        )
         print(f"Successful: {len(results['success'])}")
         print(f"Failed: {len(results['failed'])}")
         print(f"Skipped: {len(results['skipped'])}")
-        
+
         # Print failures if any
         if results["failed"]:
             print("\n=== FAILED LANGUAGES ===")
             for result in language_results:
                 if result["status"] == "failed":
-                    print(f"{result['language']} ({result['category']}): {result['reason']}")
-        
+                    print(
+                        f"{result['language']} ({result['category']}): {result['reason']}"
+                    )
+
         # Print successful languages with details
         print("\n=== SUCCESSFUL LANGUAGES ===")
         by_category = {}
@@ -2214,51 +2215,59 @@ class TestAllLanguagesChunking:
                 if cat not in by_category:
                     by_category[cat] = []
                 by_category[cat].append(result)
-        
+
         for category, langs in sorted(by_category.items()):
             print(f"\n{category.upper()}:")
             for lang in sorted(langs, key=lambda x: x["language"]):
-                node_types = ", ".join(lang["node_types"][:3]) if lang["node_types"] else "no types"
+                node_types = (
+                    ", ".join(lang["node_types"][:3])
+                    if lang["node_types"]
+                    else "no types"
+                )
                 print(f"  - {lang['language']}: {lang['chunks']} chunks ({node_types})")
-        
+
         # Assert that most languages work
-        total_tested = len(results['success']) + len(results['failed'])
-        success_rate = len(results['success']) / total_tested if total_tested > 0 else 0
-        
+        total_tested = len(results["success"]) + len(results["failed"])
+        success_rate = len(results["success"]) / total_tested if total_tested > 0 else 0
+
         print(f"\n=== SUCCESS RATE: {success_rate:.1%} ===")
-        
+
         # We expect at least 90% success rate
         assert success_rate >= 0.9, f"Success rate {success_rate:.1%} is below 90%"
-        
+
         # Verify we tested a significant number of languages
-        assert total_tested >= 140, f"Only tested {total_tested} languages, expected at least 140"
+        assert total_tested >= 140, (
+            f"Only tested {total_tested} languages, expected at least 140"
+        )
 
     @pytest.mark.asyncio
     async def test_chunking_consistency(self):
         """Test that chunking the same code multiple times produces consistent results."""
         chunker = SemanticChunker(max_chunk_size=300)
-        
+
         # Test a few languages for consistency
         test_languages = ["python", "javascript", "rust", "go", "java"]
-        
+
         for lang in test_languages:
-            if lang not in LANGUAGE_SAMPLES["systems"] and \
-               lang not in LANGUAGE_SAMPLES["web"] and \
-               lang not in LANGUAGE_SAMPLES["dynamic"] and \
-               lang not in LANGUAGE_SAMPLES["modern"] and \
-               lang not in LANGUAGE_SAMPLES["jvm"]:
+            if (
+                lang not in LANGUAGE_SAMPLES["systems"]
+                and lang not in LANGUAGE_SAMPLES["web"]
+                and lang not in LANGUAGE_SAMPLES["dynamic"]
+                and lang not in LANGUAGE_SAMPLES["modern"]
+                and lang not in LANGUAGE_SAMPLES["jvm"]
+            ):
                 continue
-            
+
             # Find the code sample
             code = None
             for category, languages in LANGUAGE_SAMPLES.items():
                 if lang in languages:
                     code = languages[lang]
                     break
-            
+
             if not code:
                 continue
-            
+
             # Chunk multiple times
             results = []
             for _ in range(3):
@@ -2267,53 +2276,63 @@ class TestAllLanguagesChunking:
                 async for chunk in chunk_stream:
                     chunks.append(chunk)
                 results.append(chunks)
-            
+
             # Verify consistency
-            assert all(len(r) == len(results[0]) for r in results), \
+            assert all(len(r) == len(results[0]) for r in results), (
                 f"Inconsistent chunk count for {lang}"
-            
+            )
+
             for i in range(len(results[0])):
                 for j in range(1, len(results)):
-                    assert results[0][i].text == results[j][i].text, \
+                    assert results[0][i].text == results[j][i].text, (
                         f"Inconsistent chunk text for {lang}"
-                    assert results[0][i].metadata.node_type == results[j][i].metadata.node_type, \
-                        f"Inconsistent node type for {lang}"
+                    )
+                    assert (
+                        results[0][i].metadata.node_type
+                        == results[j][i].metadata.node_type
+                    ), f"Inconsistent node type for {lang}"
 
     @pytest.mark.asyncio
     async def test_edge_cases(self):
         """Test edge cases like empty code, very small code, and malformed code."""
         chunker = SemanticChunker()
-        
+
         # Test empty code
         for lang in ["python", "javascript", "rust"]:
             chunk_stream = await chunker.chunk_code("", lang)
             chunks = []
             async for chunk in chunk_stream:
                 chunks.append(chunk)
-            assert len(chunks) <= 1, f"Empty code should produce at most 1 chunk for {lang}"
-        
+            assert len(chunks) <= 1, (
+                f"Empty code should produce at most 1 chunk for {lang}"
+            )
+
         # Test very small code
         small_codes = {
             "python": "x = 1",
             "javascript": "let x = 1;",
             "rust": "let x = 1;",
         }
-        
+
         for lang, code in small_codes.items():
             chunk_stream = await chunker.chunk_code(code, lang)
             chunks = []
             async for chunk in chunk_stream:
                 chunks.append(chunk)
-            assert len(chunks) >= 1, f"Small code should produce at least 1 chunk for {lang}"
-            assert chunks[0].text.strip() == code.strip(), "Small code should be preserved"
-        
+            assert len(chunks) >= 1, (
+                f"Small code should produce at least 1 chunk for {lang}"
+            )
+            assert chunks[0].text.strip() == code.strip(), (
+                "Small code should be preserved"
+            )
+
         # Test malformed code (should not crash)
         malformed_codes = {
             "python": "def broken(\n    # missing close",
             "javascript": "function broken() { // missing close",
             "rust": "fn broken() { // missing close",
         }
-        
+
         for lang, code in malformed_codes.items():
             try:
                 chunk_stream = await chunker.chunk_code(code, lang)

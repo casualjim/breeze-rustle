@@ -1,7 +1,7 @@
 // Type definitions for the wrapped module with async generator support
-import { 
-  SemanticChunkJs, 
-  ProjectChunkJs, 
+import {
+  SemanticChunkJs,
+  ProjectChunkJs,
   TokenizerType as NativeTokenizerType,
   ChunkType as NativeChunkType
 } from './index.native';
@@ -17,10 +17,10 @@ export function isLanguageSupported(language: string): boolean;
 // Our clean API
 export declare class SemanticChunker {
   constructor(maxChunkSize?: number, tokenizer?: NativeTokenizerType, hfModel?: string);
-  
+
   /** Chunk code and return an async generator */
   chunkCode(content: string, language: string, filePath?: string): AsyncGenerator<SemanticChunkJs, void, unknown>;
-  
+
   /** Chunk text and return an async generator */
   chunkText(content: string, filePath?: string): AsyncGenerator<SemanticChunkJs, void, unknown>;
 }

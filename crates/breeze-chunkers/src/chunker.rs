@@ -1,6 +1,10 @@
 use crate::{Tokenizer, languages::*, metadata_extractor::extract_metadata_from_tree, types::*};
 use text_splitter::{ChunkConfig, ChunkSizer, CodeSplitter, TextSplitter};
 
+// Type aliases to simplify complex return types
+type ParseResult<'a> = Result<(tree_sitter::Tree, Vec<(usize, &'a str)>, Vec<usize>), ChunkError>;
+type MatchesResult<'a> = Result<(Vec<(usize, &'a str)>, Vec<usize>), ChunkError>;
+
 // Concrete chunk sizer enum to avoid trait object issues
 #[derive(Clone)]
 pub enum ConcreteSizer {
@@ -128,11 +132,7 @@ impl InnerChunker {
     }
   }
 
-  fn setup_code_chunking<'a>(
-    &self,
-    content: &'a str,
-    language: &str,
-  ) -> Result<(tree_sitter::Tree, Vec<(usize, &'a str)>, Vec<usize>), ChunkError> {
+  fn setup_code_chunking<'a>(&self, content: &'a str, language: &str) -> ParseResult<'a> {
     // Get tree-sitter language
     let language_fn = get_language(language)
       .ok_or_else(|| ChunkError::UnsupportedLanguage(language.to_string()))?;
@@ -239,10 +239,7 @@ impl InnerChunker {
     }
   }
 
-  fn setup_text_chunking<'a>(
-    &self,
-    content: &'a str,
-  ) -> Result<(Vec<(usize, &'a str)>, Vec<usize>), ChunkError> {
+  fn setup_text_chunking<'a>(&self, content: &'a str) -> MatchesResult<'a> {
     // Create config and text splitter with our chunk sizer
     let config = ChunkConfig::new(self.max_chunk_size)
       .with_sizer(&self.chunk_sizer)
@@ -334,7 +331,7 @@ class Calculator:
         Chunk::Semantic(sc) => Some(&sc.metadata.definitions),
         _ => None,
       })
-      .flat_map(|defs| defs)
+      .flatten()
       .collect();
 
     assert!(all_definitions.iter().any(|d| d.contains("add")));
@@ -393,7 +390,7 @@ const user = await manager.getUser(123);
         Chunk::Semantic(sc) => Some(&sc.metadata.definitions),
         _ => None,
       })
-      .flat_map(|defs| defs)
+      .flatten()
       .collect();
 
     assert!(all_definitions.iter().any(|d| d == &"fetchUserData"));
@@ -406,7 +403,7 @@ const user = await manager.getUser(123);
         Chunk::Semantic(sc) => Some(&sc.metadata.references),
         _ => None,
       })
-      .flat_map(|refs| refs)
+      .flatten()
       .collect();
 
     assert!(all_references.iter().any(|r| r.contains("fetch")));
@@ -541,7 +538,7 @@ module OuterModule {
             .metadata
             .node_name
             .as_ref()
-            .map_or(false, |n| n == "NestedClass")
+            .is_some_and(|n| n == "NestedClass")
       }
       _ => false,
     });
@@ -743,17 +740,14 @@ enum Result<T, E> {
 
     println!("Total chunks: {}", chunks.len());
     for (i, chunk) in chunks.iter().enumerate() {
-      match chunk {
-        Chunk::Semantic(sc) => {
-          println!(
-            "Chunk {}: node_type={}, node_name={:?}, text_preview={:?}",
-            i,
-            sc.metadata.node_type,
-            sc.metadata.node_name,
-            &sc.text[..50.min(sc.text.len())]
-          );
-        }
-        _ => {}
+      if let Chunk::Semantic(sc) = chunk {
+        println!(
+          "Chunk {}: node_type={}, node_name={:?}, text_preview={:?}",
+          i,
+          sc.metadata.node_type,
+          sc.metadata.node_name,
+          &sc.text[..50.min(sc.text.len())]
+        );
       }
     }
 

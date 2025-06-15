@@ -12,8 +12,6 @@ use tracing::{debug, error, info};
 #[derive(Clone)]
 struct ChunkData {
   text: String,
-  file_path: String,
-  chunk_index: usize,
 }
 
 // Shared statistics
@@ -174,8 +172,6 @@ fn spawn_stream_processor(
     let mut chunk_stream = Box::pin(chunk_stream);
 
     let mut batch_buffer = Vec::new();
-    let mut current_file_chunks = 0;
-    let mut last_file_path = String::new();
 
     while let Some(result) = chunk_stream.next().await {
       match result {
@@ -183,18 +179,7 @@ fn spawn_stream_processor(
           match project_chunk.chunk {
             Chunk::Semantic(sc) | Chunk::Text(sc) => {
               // Accumulate chunk data
-              batch_buffer.push(ChunkData {
-                text: sc.text,
-                file_path: project_chunk.file_path.clone(),
-                chunk_index: current_file_chunks,
-              });
-
-              if project_chunk.file_path != last_file_path {
-                current_file_chunks = 0;
-                last_file_path = project_chunk.file_path.clone();
-              } else {
-                current_file_chunks += 1;
-              }
+              batch_buffer.push(ChunkData { text: sc.text });
 
               stats.chunks.fetch_add(1, Ordering::Relaxed);
 
@@ -210,7 +195,6 @@ fn spawn_stream_processor(
             }
             Chunk::EndOfFile { .. } => {
               stats.files.fetch_add(1, Ordering::Relaxed);
-              current_file_chunks = 0;
             }
           }
         }

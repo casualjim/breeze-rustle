@@ -92,13 +92,6 @@ impl ProjectChunk {
   }
 }
 
-/// A project file with a stream of chunks and rich metadata
-pub struct ProjectFile {
-  pub file_path: String,
-  pub chunks: tokio_stream::wrappers::ReceiverStream<Result<Chunk, ChunkError>>,
-  pub metadata: FileMetadata,
-}
-
 /// File-level metadata
 #[derive(Debug, Clone)]
 pub struct FileMetadata {

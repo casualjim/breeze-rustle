@@ -31,7 +31,7 @@ from breeze_rustle import SemanticChunker
 
 async def main():
     chunker = SemanticChunker(max_chunk_size=16384)
-    
+
     # Chunk a single file
     code = """
 def process_data(items):
@@ -41,9 +41,9 @@ def process_data(items):
             results.append(item * 2)
     return results
 """
-    
+
     chunks = await chunker.chunk_file(code, "python")
-    
+
     for chunk in chunks:
         print(f"Chunk: {chunk.metadata.node_type} - {chunk.metadata.node_name}")
         print(f"  Definitions: {chunk.metadata.definitions}")
@@ -207,11 +207,11 @@ class SemanticChunker:
     def __init__(self, max_chunk_size: int = 16384) -> None:
         """
         Initialize a semantic chunker.
-        
+
         Args:
             max_chunk_size: Maximum tokens per chunk (default: 16384)
         """
-    
+
     async def chunk_file(
         self,
         content: str,
@@ -220,26 +220,26 @@ class SemanticChunker:
     ) -> List[SemanticChunk]:
         """
         Chunk a single file into semantic units.
-        
+
         Args:
             content: File content to chunk
             language: Programming language (e.g., "python", "rust")
             file_path: Optional file path for better error messages
-            
+
         Returns:
             List of semantic chunks with metadata
         """
-    
+
     async def chunk_files(
         self,
         files: List[Tuple[str, str, str]]
     ) -> List[List[SemanticChunk]]:
         """
         Chunk multiple files concurrently.
-        
+
         Args:
             files: List of (content, language, path) tuples
-            
+
         Returns:
             List of chunk lists, one per input file
         """

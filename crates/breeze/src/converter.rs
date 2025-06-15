@@ -17,7 +17,7 @@ use crate::pipeline::BoxStream;
 /// Batches writes based on:
 /// - Maximum documents per batch (configurable)
 /// - Timeout duration (configurable)
-/// Whichever comes first
+///   Whichever comes first
 pub struct BufferedRecordBatchConverter<T> {
   batch_size: NonZeroUsize,
   timeout_seconds: u64,
@@ -26,6 +26,7 @@ pub struct BufferedRecordBatchConverter<T> {
 }
 
 impl<T> BufferedRecordBatchConverter<T> {
+  #[cfg(test)]
   pub fn new(
     batch_size: NonZeroUsize,
     timeout_seconds: u64,
@@ -37,14 +38,6 @@ impl<T> BufferedRecordBatchConverter<T> {
       schema,
       _phantom: PhantomData,
     }
-  }
-
-  /// Create a converter with default timeout of 1 second
-  pub fn with_default_timeout(
-    batch_size: NonZeroUsize,
-    schema: Arc<arrow::datatypes::Schema>,
-  ) -> Self {
-    Self::new(batch_size, 1, schema)
   }
 
   /// Set the schema for the converter
@@ -125,7 +118,7 @@ where
       let mut buffer = Vec::with_capacity(max_batch_size);
       let mut timer = interval(timeout_duration);
       timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-      
+
       loop {
         tokio::select! {
           // Receive items from the stream
@@ -133,7 +126,7 @@ where
             match maybe_item {
               Some(item) => {
                 buffer.push(item);
-                
+
                 // Flush if we hit the max batch size
                 if buffer.len() >= max_batch_size {
                   if !buffer.is_empty() {
@@ -195,7 +188,7 @@ where
               }
             }
           }
-          
+
           // Timeout elapsed, flush buffer
           _ = timer.tick() => {
             if !buffer.is_empty() {

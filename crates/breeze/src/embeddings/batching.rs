@@ -5,26 +5,19 @@ use breeze_chunkers::ProjectChunk;
 #[derive(Debug, Clone)]
 pub struct EmbeddingBatch {
   pub chunks: Vec<ProjectChunk>,
-  pub estimated_tokens: usize,
 }
 
 /// Strategy for batching chunks for embedding
 #[async_trait]
 pub trait BatchingStrategy: Send + Sync {
   /// Prepare chunks for batching
-  async fn prepare_batches(
-    &self,
-    chunks: Vec<ProjectChunk>,
-  ) -> Vec<EmbeddingBatch>;
+  async fn prepare_batches(&self, chunks: Vec<ProjectChunk>) -> Vec<EmbeddingBatch>;
 
   /// Maximum items per batch
   fn max_batch_size(&self) -> usize;
 
   /// Whether this strategy considers token counts
   fn is_token_aware(&self) -> bool;
-
-  /// Maximum concurrent requests (for API providers)
-  fn max_concurrent_requests(&self) -> Option<usize>;
 }
 
 /// Simple batching strategy for local providers
@@ -40,15 +33,11 @@ impl LocalBatchingStrategy {
 
 #[async_trait]
 impl BatchingStrategy for LocalBatchingStrategy {
-  async fn prepare_batches(
-    &self,
-    chunks: Vec<ProjectChunk>,
-  ) -> Vec<EmbeddingBatch> {
+  async fn prepare_batches(&self, chunks: Vec<ProjectChunk>) -> Vec<EmbeddingBatch> {
     chunks
       .chunks(self.batch_size)
       .map(|chunk_batch| EmbeddingBatch {
         chunks: chunk_batch.to_vec(),
-        estimated_tokens: 0, // Not used for local batching
       })
       .collect()
   }
@@ -60,39 +49,26 @@ impl BatchingStrategy for LocalBatchingStrategy {
   fn is_token_aware(&self) -> bool {
     false
   }
-
-  fn max_concurrent_requests(&self) -> Option<usize> {
-    None // Sequential processing
-  }
 }
 
 /// Token-aware batching strategy for API providers
 pub struct TokenAwareBatchingStrategy {
   max_tokens_per_batch: usize,
   max_items_per_batch: usize,
-  max_concurrent_requests: usize,
 }
 
 impl TokenAwareBatchingStrategy {
-  pub fn new(
-    max_tokens_per_batch: usize,
-    max_items_per_batch: usize,
-    max_concurrent_requests: usize,
-  ) -> Self {
+  pub fn new(max_tokens_per_batch: usize, max_items_per_batch: usize) -> Self {
     Self {
       max_tokens_per_batch,
       max_items_per_batch,
-      max_concurrent_requests,
     }
   }
 }
 
 #[async_trait]
 impl BatchingStrategy for TokenAwareBatchingStrategy {
-  async fn prepare_batches(
-    &self,
-    chunks: Vec<ProjectChunk>,
-  ) -> Vec<EmbeddingBatch> {
+  async fn prepare_batches(&self, chunks: Vec<ProjectChunk>) -> Vec<EmbeddingBatch> {
     let mut batches = Vec::new();
     let mut current_batch = Vec::new();
     let mut current_tokens = 0;
@@ -120,7 +96,6 @@ impl BatchingStrategy for TokenAwareBatchingStrategy {
         // Save current batch
         batches.push(EmbeddingBatch {
           chunks: current_batch,
-          estimated_tokens: current_tokens,
         });
         current_batch = Vec::new();
         current_tokens = 0;
@@ -135,7 +110,6 @@ impl BatchingStrategy for TokenAwareBatchingStrategy {
     if !current_batch.is_empty() {
       batches.push(EmbeddingBatch {
         chunks: current_batch,
-        estimated_tokens: current_tokens,
       });
     }
 
@@ -148,9 +122,5 @@ impl BatchingStrategy for TokenAwareBatchingStrategy {
 
   fn is_token_aware(&self) -> bool {
     true
-  }
-
-  fn max_concurrent_requests(&self) -> Option<usize> {
-    Some(self.max_concurrent_requests)
   }
 }

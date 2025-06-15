@@ -119,9 +119,6 @@ mod tests {
   ) -> lancedb::Table {
     let conn = lancedb::connect(db_path).execute().await.unwrap();
 
-    // Create table with schema
-    let schema = Arc::new(CodeDocument::schema(embedding_dim));
-
     // Check if table exists
     let table_names = conn.table_names().execute().await.unwrap();
     if table_names.contains(&table_name.to_string()) {
@@ -238,7 +235,7 @@ mod tests {
 
     // Process the stream
     let mut sink_stream = sink.sink(record_stream);
-    while let Some(_) = sink_stream.next().await {
+    while sink_stream.next().await.is_some() {
       // Process each item
     }
 
@@ -277,7 +274,7 @@ mod tests {
     ));
 
     let mut sink_stream1 = sink.sink(record_stream1);
-    while let Some(_) = sink_stream1.next().await {}
+    while sink_stream1.next().await.is_some() {}
 
     // Update the same document
     doc.content = "updated content".to_string();
@@ -291,14 +288,14 @@ mod tests {
     ));
 
     let mut sink_stream2 = sink.sink(record_stream2);
-    while let Some(_) = sink_stream2.next().await {}
+    while sink_stream2.next().await.is_some() {}
 
     // Verify only one document exists with updated content
     let conn = lancedb::connect(db_path).execute().await.unwrap();
     let table = conn.open_table("upsert_test").execute().await.unwrap();
     let mut query_stream = table
       .query()
-      .only_if(&format!("id = '{}'", original_id))
+      .only_if(format!("id = '{}'", original_id))
       .execute()
       .await
       .unwrap();

@@ -238,7 +238,7 @@ use std::collections::HashMap;
 // Using a function instead of Lazy static to avoid extra dependencies
 pub fn get_block_queries() -> HashMap<&'static str, &'static str> {
     let mut queries = HashMap::new();
-    
+
 """
 
     for lang, queries in language_queries.items():
@@ -248,7 +248,7 @@ pub fn get_block_queries() -> HashMap<&'static str, &'static str> {
         # Use raw string literals to avoid most escaping issues
         rust_code += f'    queries.insert("{lang}", r#"{combined_query}"#);\n'
 
-    rust_code += """    
+    rust_code += """
     queries
 }
 

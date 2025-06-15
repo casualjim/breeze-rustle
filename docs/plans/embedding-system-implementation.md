@@ -28,13 +28,13 @@ A refined embedding system that leverages our streaming pipeline architecture wi
    - OpenAI API integration with tier-based rate limiting
    - Provider-specific batching strategies
    - Retry logic with exponential backoff
-   
+
 2. **CLI Application** (High Priority)
    - `breeze index` command to index a codebase
    - `breeze search` command for similarity search
    - Progress bars and status tracking
    - Configuration file support
-   
+
 3. **Configuration System Integration** (Medium Priority)
    - Load provider selection from TOML config
    - Model configuration per provider
@@ -87,7 +87,7 @@ pub struct SemanticChunk {
 pub enum Chunk {
     Semantic(SemanticChunk),
     Text(SemanticChunk),
-    EndOfFile { 
+    EndOfFile {
         file_path: String,
         content: String,      // Full file content
         content_hash: [u8; 32],  // Blake3 hash
@@ -170,7 +170,7 @@ pub struct VoyageEmbedder {
 }
 
 pub struct OpenAIEmbedder {
-    client: async_openai::Client, 
+    client: async_openai::Client,
     model: String,
     rate_limiter: TokenBucketRateLimiter,
 }
@@ -194,7 +194,7 @@ impl AggregationStrategy for WeightedAverageStrategy {
         let total_tokens: usize = chunk_embeddings.iter()
             .map(|(_, tokens)| tokens)
             .sum();
-        
+
         // Weighted average by token count
         let mut result = vec![0.0; chunk_embeddings[0].0.len()];
         for (embedding, token_count) in chunk_embeddings {
@@ -209,7 +209,7 @@ impl AggregationStrategy for WeightedAverageStrategy {
 
 // Future strategies could include:
 // - AttentionBasedAggregation
-// - MaxPoolingAggregation  
+// - MaxPoolingAggregation
 // - HierarchicalAggregation
 ```
 
@@ -260,7 +260,7 @@ impl TokenBucketRateLimiter {
             request_bucket: TokenBucket::new(1_800, Duration::from_secs(60)),
         }
     }
-    
+
     pub fn new_for_openai(tier: OpenAITier) -> Self {
         // Tier-specific limits
         match tier {
