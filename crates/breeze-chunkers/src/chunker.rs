@@ -140,7 +140,7 @@ impl InnerChunker {
 
     // Parse the content once upfront with timing
     let file_size = content.len() as u64;
-    
+
     // Time just the tree-sitter parsing
     let parse_start = std::time::Instant::now();
     let mut parser = tree_sitter::Parser::new();
@@ -152,13 +152,13 @@ impl InnerChunker {
       .parse(content, None)
       .ok_or_else(|| ChunkError::ParseError("Failed to parse content".to_string()))?;
     let parse_duration = parse_start.elapsed();
-    
+
     // Record parser timing
     crate::performance::get_tracker().record(
-        language.to_string(),
-        file_size,
-        parse_duration,
-        "parser"
+      language.to_string(),
+      file_size,
+      parse_duration,
+      "parser",
     );
 
     // Time the chunking/querying phase
@@ -171,13 +171,13 @@ impl InnerChunker {
     // Get base chunks with indices
     let chunks: Vec<_> = splitter.chunk_indices(content).collect();
     let chunk_duration = chunk_start.elapsed();
-    
+
     // Record chunking timing
     crate::performance::get_tracker().record(
-        language.to_string(),
-        file_size,
-        chunk_duration,
-        "chunking"
+      language.to_string(),
+      file_size,
+      chunk_duration,
+      "chunking",
     );
 
     // Pre-calculate line offsets for efficient line number computation

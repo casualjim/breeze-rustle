@@ -1,8 +1,8 @@
+use serde::{Deserialize, Serialize};
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
 struct Grammar {
@@ -14,7 +14,10 @@ struct Grammar {
 fn get_target_parser_path() -> Result<PathBuf, String> {
   // First check if PARSER_LIB environment variable is set
   if let Ok(parser_lib) = env::var("PARSER_LIB") {
-    println!("cargo:warning=Using PARSER_LIB from environment: {}", parser_lib);
+    println!(
+      "cargo:warning=Using PARSER_LIB from environment: {}",
+      parser_lib
+    );
     return Ok(PathBuf::from(parser_lib));
   }
 
@@ -23,7 +26,7 @@ fn get_target_parser_path() -> Result<PathBuf, String> {
     // If TARGET is not set, fall back to host
     env::var("HOST").unwrap_or_else(|_| "unknown".to_string())
   });
-  
+
   println!("cargo:warning=Building for target: {}", target);
 
   // Map Rust target triple to npm package name
@@ -38,7 +41,10 @@ fn get_target_parser_path() -> Result<PathBuf, String> {
     "x86_64-pc-windows-msvc" | "x86_64-pc-windows-gnu" => "@kumos/tree-sitter-parsers-win32-x64",
     _ => {
       // For unknown targets, try to use npx which will auto-install if needed
-      println!("cargo:warning=Unknown target '{}', trying npx fallback", target);
+      println!(
+        "cargo:warning=Unknown target '{}', trying npx fallback",
+        target
+      );
       return get_npm_parser_path();
     }
   };
@@ -46,10 +52,13 @@ fn get_target_parser_path() -> Result<PathBuf, String> {
   // Try to find the platform-specific package in node_modules
   let node_modules = find_node_modules()?;
   let package_dir = node_modules.join(npm_package);
-  
+
   if package_dir.exists() {
-    println!("cargo:warning=Found platform package at: {}", package_dir.display());
-    
+    println!(
+      "cargo:warning=Found platform package at: {}",
+      package_dir.display()
+    );
+
     // Construct expected filename based on target
     let expected_filename = match target.as_str() {
       "aarch64-apple-darwin" => "libtree-sitter-parsers-all-macos-aarch64.a",
@@ -59,37 +68,47 @@ fn get_target_parser_path() -> Result<PathBuf, String> {
       "aarch64-unknown-linux-musl" => "libtree-sitter-parsers-all-linux-aarch64-musl.a",
       "x86_64-unknown-linux-musl" => "libtree-sitter-parsers-all-linux-x86_64-musl.a",
       "aarch64-pc-windows-msvc" => "libtree-sitter-parsers-all-windows-aarch64.a",
-      "x86_64-pc-windows-msvc" | "x86_64-pc-windows-gnu" => "libtree-sitter-parsers-all-windows-x86_64.a",
+      "x86_64-pc-windows-msvc" | "x86_64-pc-windows-gnu" => {
+        "libtree-sitter-parsers-all-windows-x86_64.a"
+      }
       _ => {
-       
-        return Err(format!("No parser library found in package: {}", npm_package));
+        return Err(format!(
+          "No parser library found in package: {}",
+          npm_package
+        ));
       }
     };
-    
+
     let lib_path = package_dir.join(expected_filename);
     if lib_path.exists() {
       println!("cargo:warning=Found parser library: {}", lib_path.display());
       return Ok(lib_path);
     } else {
-      return Err(format!("Expected library {} not found in package: {}", expected_filename, npm_package));
+      return Err(format!(
+        "Expected library {} not found in package: {}",
+        expected_filename, npm_package
+      ));
     }
   }
 
   // Fall back to npx
-  println!("cargo:warning=Platform package {} not found, falling back to npx", npm_package);
+  println!(
+    "cargo:warning=Platform package {} not found, falling back to npx",
+    npm_package
+  );
   get_npm_parser_path()
 }
 
 fn find_node_modules() -> Result<PathBuf, String> {
   // Start from the current directory and walk up looking for node_modules
   let mut current = env::current_dir().map_err(|e| format!("Failed to get current dir: {}", e))?;
-  
+
   loop {
     let node_modules = current.join("node_modules");
     if node_modules.exists() && node_modules.is_dir() {
       return Ok(node_modules);
     }
-    
+
     if !current.pop() {
       return Err("Could not find node_modules directory".to_string());
     }
@@ -98,12 +117,19 @@ fn find_node_modules() -> Result<PathBuf, String> {
 
 fn get_npm_parser_path() -> Result<PathBuf, String> {
   // Use npx which will auto-install if needed
-  println!("cargo:warning=Getting tree-sitter parsers path via npx (will auto-install if needed)...");
+  println!(
+    "cargo:warning=Getting tree-sitter parsers path via npx (will auto-install if needed)..."
+  );
   let output = Command::new("npx")
     .arg("--yes") // Automatically install if not present
     .arg("@kumos/tree-sitter-parsers")
     .output()
-    .map_err(|e| format!("Failed to run npx: {}. Make sure Node.js and npm are installed.", e))?;
+    .map_err(|e| {
+      format!(
+        "Failed to run npx: {}. Make sure Node.js and npm are installed.",
+        e
+      )
+    })?;
 
   if !output.status.success() {
     return Err(format!(
@@ -112,14 +138,12 @@ fn get_npm_parser_path() -> Result<PathBuf, String> {
     ));
   }
 
-  let path_str = String::from_utf8_lossy(&output.stdout)
-    .trim()
-    .to_string();
-  
+  let path_str = String::from_utf8_lossy(&output.stdout).trim().to_string();
+
   if path_str.is_empty() {
     return Err("Got empty path from tree-sitter-parsers-path".to_string());
   }
-  
+
   Ok(PathBuf::from(path_str))
 }
 
@@ -143,11 +167,7 @@ fn main() {
 
 fn use_npm_parsers(parser_lib_path: &Path, out_path: &Path) {
   // Link the npm parser library
-  let lib_name = parser_lib_path
-    .file_stem()
-    .unwrap()
-    .to_str()
-    .unwrap();
+  let lib_name = parser_lib_path.file_stem().unwrap().to_str().unwrap();
   let lib_name = if lib_name.starts_with("lib") {
     &lib_name[3..]
   } else {
@@ -155,7 +175,10 @@ fn use_npm_parsers(parser_lib_path: &Path, out_path: &Path) {
   };
 
   println!("cargo:rustc-link-lib=static={}", lib_name);
-  println!("cargo:rustc-link-search=native={}", parser_lib_path.parent().unwrap().display());
+  println!(
+    "cargo:rustc-link-search=native={}",
+    parser_lib_path.parent().unwrap().display()
+  );
 
   // Always link C++ standard library as some grammars use C++ scanners
   if cfg!(target_os = "macos") {
@@ -167,17 +190,24 @@ fn use_npm_parsers(parser_lib_path: &Path, out_path: &Path) {
   }
 
   // Check if there's a metadata file alongside the library
-  let metadata_path = parser_lib_path
-    .parent()
-    .unwrap()
-    .join(parser_lib_path.file_name().unwrap().to_str().unwrap().replace(".a", ".json").replace("libtree-sitter-parsers-all-", "grammars-"));
-  
+  let metadata_path = parser_lib_path.parent().unwrap().join(
+    parser_lib_path
+      .file_name()
+      .unwrap()
+      .to_str()
+      .unwrap()
+      .replace(".a", ".json")
+      .replace("libtree-sitter-parsers-all-", "grammars-"),
+  );
+
   if metadata_path.exists() {
-    println!("cargo:warning=Found grammar metadata at: {}", metadata_path.display());
-    let metadata_str = fs::read_to_string(&metadata_path)
-      .expect("Failed to read grammar metadata");
-    let grammars: Vec<Grammar> = serde_json::from_str(&metadata_str)
-      .expect("Failed to parse grammar metadata");
+    println!(
+      "cargo:warning=Found grammar metadata at: {}",
+      metadata_path.display()
+    );
+    let metadata_str = fs::read_to_string(&metadata_path).expect("Failed to read grammar metadata");
+    let grammars: Vec<Grammar> =
+      serde_json::from_str(&metadata_str).expect("Failed to parse grammar metadata");
     generate_bindings(out_path, &grammars);
   } else {
     panic!("No grammar metadata found. The npm package must provide a grammars-*.json file.");

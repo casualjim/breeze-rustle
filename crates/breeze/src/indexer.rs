@@ -4,7 +4,6 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Instant;
 
 use breeze_chunkers::{Chunk, Tokenizer, WalkOptions, walk_project};
-use embed_anything::embeddings::embed::Embedder;
 use futures_util::StreamExt;
 use lancedb::Table;
 use tokio::sync::{RwLock, mpsc};
@@ -14,22 +13,28 @@ use tracing::{debug, error, info};
 use crate::config::Config;
 use crate::converter::BufferedRecordBatchConverter;
 use crate::document_builder::build_document_from_accumulator;
+use crate::embeddings::EmbeddingProvider;
 use crate::models::CodeDocument;
 use crate::pipeline::{ChunkBatch, EmbeddedChunk, EmbeddedChunkWithFile, FileAccumulator};
 use crate::sinks::lancedb_sink::LanceDbSink;
 
 pub struct Indexer<'a> {
   config: &'a Config,
-  embedder: Arc<Embedder>,
+  embedding_provider: Arc<dyn EmbeddingProvider>,
   embedding_dim: usize,
   table: Arc<RwLock<Table>>,
 }
 
 impl<'a> Indexer<'a> {
-  pub fn new(config: &'a Config, embedder: Arc<Embedder>, embedding_dim: usize, table: Arc<RwLock<Table>>) -> Self {
+  pub fn new(
+    config: &'a Config,
+    embedding_provider: Arc<dyn EmbeddingProvider>,
+    embedding_dim: usize,
+    table: Arc<RwLock<Table>>,
+  ) -> Self {
     Self {
       config,
-      embedder,
+      embedding_provider,
       embedding_dim,
       table,
     }
@@ -43,9 +48,18 @@ impl<'a> Indexer<'a> {
     info!(path = %path.display(), "Starting channel-based indexing");
 
     // Setup
+    // Get tokenizer from the embedding provider
+    let tokenizer = if let Some(provider_tokenizer) = self.embedding_provider.tokenizer() {
+      // Use the pre-loaded tokenizer from the provider
+      Tokenizer::PreloadedHuggingFace(provider_tokenizer)
+    } else {
+      // Default to character-based tokenization for local models
+      Tokenizer::Characters
+    };
+    
     let walk_options = WalkOptions {
       max_chunk_size: self.config.max_chunk_size,
-      tokenizer: Tokenizer::Characters,
+      tokenizer,
       max_parallel: self.config.max_parallel_files,
       max_file_size: self.config.max_file_size,
     };
@@ -165,13 +179,13 @@ impl<'a> Indexer<'a> {
     stats: IndexingStats,
     cancel_token: CancellationToken,
   ) -> tokio::task::JoinHandle<()> {
-    let embedder = self.embedder.clone();
-    let batch_size = 128; // Max batch size for embed_anything
+    let embedding_provider = self.embedding_provider.clone();
+    let batching_strategy = self.embedding_provider.create_batching_strategy();
     tokio::spawn(embedder_task(
-      embedder,
+      embedding_provider,
+      batching_strategy,
       batch_rx,
       embedded_tx,
-      batch_size,
       stats,
       cancel_token,
     ))
@@ -321,10 +335,10 @@ async fn stream_processor_task(
 }
 
 async fn embedder_task(
-  embedder: Arc<Embedder>,
+  embedding_provider: Arc<dyn EmbeddingProvider>,
+  batching_strategy: Box<dyn crate::embeddings::batching::BatchingStrategy>,
   mut batch_rx: mpsc::Receiver<ChunkBatch>,
   embedded_tx: mpsc::Sender<EmbeddedChunkWithFile>,
-  max_batch_size: usize,
   stats: IndexingStats,
   cancel_token: CancellationToken,
 ) {
@@ -373,21 +387,49 @@ async fn embedder_task(
             // Store EOF chunks for next iteration
             pending_eofs.extend(eof_chunks);
 
-            // Process chunks in batches of max_batch_size
-            while pending_chunks.len() >= max_batch_size {
-              let batch_to_process: Vec<_> = pending_chunks.drain(..max_batch_size).collect();
-              total_chunks_processed += batch_to_process.len();
-              process_embedding_batch(&embedder, batch_to_process, &embedded_tx, &stats, total_chunks_processed, total_files_processed).await;
+            // Use batching strategy to prepare chunks
+            if pending_chunks.len() >= batching_strategy.max_batch_size() || 
+               (batching_strategy.is_token_aware() && should_process_token_batch(&pending_chunks)) {
+              // Get chunks to process
+              let chunks_to_batch = pending_chunks.clone();
+              pending_chunks.clear();
+              
+              // Let the batching strategy prepare the batches
+              let embedding_batches = batching_strategy.prepare_batches(
+                chunks_to_batch
+              ).await;
+              
+              // Process each batch
+              for embedding_batch in embedding_batches {
+                total_chunks_processed += embedding_batch.chunks.len();
+                process_embedding_batch(
+                  embedding_provider.as_ref(), 
+                  embedding_batch.chunks, 
+                  &embedded_tx, 
+                  &stats, 
+                  total_chunks_processed, 
+                  total_files_processed
+                ).await;
+              }
             }
           }
           None => {
             // Channel closed, process remaining chunks
             if !pending_chunks.is_empty() {
-              // Process remaining chunks in batches
-              for batch_to_process in pending_chunks.chunks(max_batch_size) {
-                let batch_vec = batch_to_process.to_vec();
-                total_chunks_processed += batch_vec.len();
-                process_embedding_batch(&embedder, batch_vec, &embedded_tx, &stats, total_chunks_processed, total_files_processed).await;
+              let embedding_batches = batching_strategy.prepare_batches(
+                pending_chunks
+              ).await;
+              
+              for embedding_batch in embedding_batches {
+                total_chunks_processed += embedding_batch.chunks.len();
+                process_embedding_batch(
+                  embedding_provider.as_ref(),
+                  embedding_batch.chunks,
+                  &embedded_tx,
+                  &stats,
+                  total_chunks_processed,
+                  total_files_processed
+                ).await;
               }
             }
 
@@ -417,8 +459,15 @@ async fn embedder_task(
   );
 }
 
+// Helper function to check if we should process based on token count
+fn should_process_token_batch(chunks: &[breeze_chunkers::ProjectChunk]) -> bool {
+  // For now, simple heuristic - process if we have a reasonable amount of chunks
+  // The actual token counting should come from the walker
+  chunks.len() >= 10
+}
+
 async fn process_embedding_batch(
-  embedder: &Embedder,
+  embedding_provider: &dyn EmbeddingProvider,
   batch: Vec<breeze_chunkers::ProjectChunk>,
   embedded_tx: &mpsc::Sender<EmbeddedChunkWithFile>,
   stats: &IndexingStats,
@@ -429,51 +478,56 @@ async fn process_embedding_batch(
     return;
   }
 
-  debug!("Processing embedding batch of {} chunks (total chunks: {}, files: {})",
-    batch.len(), total_chunks_processed, total_files_processed);
-  // Extract text from chunks
-  let texts: Vec<&str> = batch.iter()
-    .filter_map(|pc| match &pc.chunk {
-      Chunk::Semantic(sc) | Chunk::Text(sc) => Some(sc.text.as_str()),
+  debug!(
+    "Processing embedding batch of {} chunks (total chunks: {}, files: {})",
+    batch.len(),
+    total_chunks_processed,
+    total_files_processed
+  );
+  // Create embedding inputs from chunks (without cloning text)
+  let mut chunks_to_embed = Vec::new();
+  let inputs: Vec<crate::embeddings::EmbeddingInput> = batch
+    .iter()
+    .enumerate()
+    .filter_map(|(idx, pc)| match &pc.chunk {
+      Chunk::Semantic(sc) | Chunk::Text(sc) => {
+        let input = crate::embeddings::EmbeddingInput {
+          text: &sc.text,
+          token_count: sc.tokens.as_ref().map(|t| t.len()),
+        };
+        chunks_to_embed.push(idx);
+        Some(input)
+      }
       Chunk::EndOfFile { .. } => None,
     })
     .collect();
 
-  if texts.is_empty() {
+  if inputs.is_empty() {
     return;
   }
 
-  match embedder.embed(&texts, None, None).await {
-    Ok(embedded_chunks) => {
-      debug!("Successfully embedded {} chunks", embedded_chunks.len());
+  match embedding_provider.embed(&inputs).await {
+    Ok(embeddings) => {
+      debug!("Successfully embedded {} chunks", embeddings.len());
       stats.batches.fetch_add(1, Ordering::Relaxed);
 
-      let mut embedding_iter = embedded_chunks.into_iter();
+      let mut embedding_iter = embeddings.into_iter();
+      let mut chunk_idx_iter = chunks_to_embed.into_iter();
 
-      for pc in batch {
-        match &pc.chunk {
-          Chunk::Semantic(_) | Chunk::Text(_) => {
-            if let Some(embedding_result) = embedding_iter.next() {
-              let embedding_vec = match embedding_result {
-                embed_anything::embeddings::embed::EmbeddingResult::DenseVector(vec) => vec,
-                embed_anything::embeddings::embed::EmbeddingResult::MultiVector(_) => {
-                  error!("Multi-vector embeddings not supported");
-                  continue;
-                }
-              };
-
-              let item = EmbeddedChunkWithFile {
-                file_path: pc.file_path.clone(),
-                chunk: pc.chunk,
-                embedding: embedding_vec,
-              };
-              if embedded_tx.send(item).await.is_err() {
-                error!("Failed to send embedded chunk - receiver dropped");
-                return;
-              }
+      // Consume the batch to avoid cloning
+      for (idx, pc) in batch.into_iter().enumerate() {
+        if chunk_idx_iter.next() == Some(idx) {
+          if let Some(embedding_vec) = embedding_iter.next() {
+            let item = EmbeddedChunkWithFile {
+              file_path: pc.file_path,
+              chunk: pc.chunk,
+              embedding: embedding_vec,
+            };
+            if embedded_tx.send(item).await.is_err() {
+              error!("Failed to send embedded chunk - receiver dropped");
+              return;
             }
           }
-          Chunk::EndOfFile { .. } => {}
         }
       }
     }
@@ -681,6 +735,19 @@ mod tests {
     }
   }
 
+  // Helper function to create test embedding provider
+  async fn create_test_embedding_provider() -> (Arc<dyn EmbeddingProvider>, usize) {
+    use crate::embeddings::local::LocalEmbeddingProvider;
+    
+    let provider = LocalEmbeddingProvider::new(
+      "test-model".to_string(),
+      2, // small batch size for tests
+    ).await.unwrap();
+    
+    let dim = provider.embedding_dim();
+    (Arc::new(provider), dim)
+  }
+
   #[tokio::test]
   async fn test_pipeline_basic_flow() {
     let _ = tracing_subscriber::fmt()
@@ -689,15 +756,8 @@ mod tests {
 
     let config = Config::test();
 
-    // Create embedder for tests
-    let embedder = Arc::new(
-      embed_anything::embeddings::embed::EmbedderBuilder::new()
-        .model_architecture("bert")
-        .onnx_model_id(Some(embed_anything::embeddings::local::text_embedding::ONNXModel::AllMiniLML6V2))
-        .from_pretrained_onnx()
-        .unwrap()
-    );
-    let embedding_dim = 384; // all-MiniLM-L6-v2 has 384 dims
+    // Create embedding provider for tests
+    let (embedding_provider, embedding_dim) = create_test_embedding_provider().await;
 
     // Create temporary LanceDB
     let temp_db = tempdir().unwrap();
@@ -709,7 +769,12 @@ mod tests {
       .await
       .unwrap();
 
-    let indexer = Indexer::new(&config, embedder, embedding_dim, Arc::new(RwLock::new(table)));
+    let indexer = Indexer::new(
+      &config,
+      embedding_provider,
+      embedding_dim,
+      Arc::new(RwLock::new(table)),
+    );
 
     // Create test stream with 2 files
     let chunks = vec![
@@ -730,15 +795,8 @@ mod tests {
   #[tokio::test]
   async fn test_pipeline_error_handling() {
     let config = Config::test();
-    // Create embedder for tests
-    let embedder = Arc::new(
-      embed_anything::embeddings::embed::EmbedderBuilder::new()
-        .model_architecture("bert")
-        .onnx_model_id(Some(embed_anything::embeddings::local::text_embedding::ONNXModel::AllMiniLML6V2))
-        .from_pretrained_onnx()
-        .unwrap()
-    );
-    let embedding_dim = 384; // all-MiniLM-L6-v2 has 384 dims
+    // Create embedding provider for tests
+    let (embedding_provider, embedding_dim) = create_test_embedding_provider().await;
 
     let temp_db = tempdir().unwrap();
     let connection = lancedb::connect(temp_db.path().to_str().unwrap())
@@ -749,7 +807,12 @@ mod tests {
       .await
       .unwrap();
 
-    let indexer = Indexer::new(&config, embedder, embedding_dim, Arc::new(RwLock::new(table)));
+    let indexer = Indexer::new(
+      &config,
+      embedding_provider,
+      embedding_dim,
+      Arc::new(RwLock::new(table)),
+    );
 
     // Stream with an error in the middle
     let chunks = vec![
@@ -785,15 +848,8 @@ mod tests {
     let index_handle = tokio::spawn(async move {
       let config = Config::test();
 
-      // Create embedder for tests
-      let embedder = Arc::new(
-        embed_anything::embeddings::embed::EmbedderBuilder::new()
-          .model_architecture("bert")
-          .onnx_model_id(Some(embed_anything::embeddings::local::text_embedding::ONNXModel::AllMiniLML6V2))
-          .from_pretrained_onnx()
-          .unwrap()
-      );
-      let embedding_dim = 384; // all-MiniLM-L6-v2 has 384 dims
+      // Create embedding provider for tests
+      let (embedding_provider, embedding_dim) = create_test_embedding_provider().await;
 
       let temp_db = tempdir().unwrap();
       let connection = lancedb::connect(temp_db.path().to_str().unwrap())
@@ -804,7 +860,12 @@ mod tests {
         .await
         .unwrap();
 
-      let indexer = Indexer::new(&config, embedder, embedding_dim, Arc::new(RwLock::new(table)));
+      let indexer = Indexer::new(
+        &config,
+        embedding_provider,
+        embedding_dim,
+        Arc::new(RwLock::new(table)),
+      );
       indexer.index_stream(chunk_stream, 5).await
     });
 
@@ -821,15 +882,8 @@ mod tests {
   #[tokio::test]
   async fn test_pipeline_batch_accumulation() {
     let config = Config::test();
-    // Create embedder for tests
-    let embedder = Arc::new(
-      embed_anything::embeddings::embed::EmbedderBuilder::new()
-        .model_architecture("bert")
-        .onnx_model_id(Some(embed_anything::embeddings::local::text_embedding::ONNXModel::AllMiniLML6V2))
-        .from_pretrained_onnx()
-        .unwrap()
-    );
-    let embedding_dim = 384; // all-MiniLM-L6-v2 has 384 dims
+    // Create embedding provider for tests
+    let (embedding_provider, embedding_dim) = create_test_embedding_provider().await;
 
     let temp_db = tempdir().unwrap();
     let connection = lancedb::connect(temp_db.path().to_str().unwrap())
@@ -840,7 +894,12 @@ mod tests {
       .await
       .unwrap();
 
-    let indexer = Indexer::new(&config, embedder, embedding_dim, Arc::new(RwLock::new(table)));
+    let indexer = Indexer::new(
+      &config,
+      embedding_provider,
+      embedding_dim,
+      Arc::new(RwLock::new(table)),
+    );
 
     // Create many chunks for one file to test batching
     let mut chunks = vec![];
@@ -862,15 +921,8 @@ mod tests {
   #[tokio::test]
   async fn test_pipeline_empty_stream() {
     let config = Config::test();
-    // Create embedder for tests
-    let embedder = Arc::new(
-      embed_anything::embeddings::embed::EmbedderBuilder::new()
-        .model_architecture("bert")
-        .onnx_model_id(Some(embed_anything::embeddings::local::text_embedding::ONNXModel::AllMiniLML6V2))
-        .from_pretrained_onnx()
-        .unwrap()
-    );
-    let embedding_dim = 384; // all-MiniLM-L6-v2 has 384 dims
+    // Create embedding provider for tests
+    let (embedding_provider, embedding_dim) = create_test_embedding_provider().await;
 
     let temp_db = tempdir().unwrap();
     let connection = lancedb::connect(temp_db.path().to_str().unwrap())
@@ -881,7 +933,12 @@ mod tests {
       .await
       .unwrap();
 
-    let indexer = Indexer::new(&config, embedder, embedding_dim, Arc::new(RwLock::new(table)));
+    let indexer = Indexer::new(
+      &config,
+      embedding_provider,
+      embedding_dim,
+      Arc::new(RwLock::new(table)),
+    );
 
     let chunk_stream = stream::iter(vec![] as Vec<Result<ProjectChunk, ChunkError>>);
     let count = indexer.index_stream(chunk_stream, 10).await.unwrap();
@@ -892,15 +949,8 @@ mod tests {
   #[tokio::test]
   async fn test_pipeline_eof_only_files() {
     let config = Config::test();
-    // Create embedder for tests
-    let embedder = Arc::new(
-      embed_anything::embeddings::embed::EmbedderBuilder::new()
-        .model_architecture("bert")
-        .onnx_model_id(Some(embed_anything::embeddings::local::text_embedding::ONNXModel::AllMiniLML6V2))
-        .from_pretrained_onnx()
-        .unwrap()
-    );
-    let embedding_dim = 384; // all-MiniLM-L6-v2 has 384 dims
+    // Create embedding provider for tests
+    let (embedding_provider, embedding_dim) = create_test_embedding_provider().await;
 
     let temp_db = tempdir().unwrap();
     let connection = lancedb::connect(temp_db.path().to_str().unwrap())
@@ -911,7 +961,12 @@ mod tests {
       .await
       .unwrap();
 
-    let indexer = Indexer::new(&config, embedder, embedding_dim, Arc::new(RwLock::new(table)));
+    let indexer = Indexer::new(
+      &config,
+      embedding_provider,
+      embedding_dim,
+      Arc::new(RwLock::new(table)),
+    );
 
     // Files with only EOF markers (empty files)
     let chunks = vec![
@@ -929,15 +984,8 @@ mod tests {
   #[tokio::test]
   async fn test_pipeline_single_file_multiple_chunks() {
     let config = Config::test();
-    // Create embedder for tests
-    let embedder = Arc::new(
-      embed_anything::embeddings::embed::EmbedderBuilder::new()
-        .model_architecture("bert")
-        .onnx_model_id(Some(embed_anything::embeddings::local::text_embedding::ONNXModel::AllMiniLML6V2))
-        .from_pretrained_onnx()
-        .unwrap()
-    );
-    let embedding_dim = 384; // all-MiniLM-L6-v2 has 384 dims
+    // Create embedding provider for tests
+    let (embedding_provider, embedding_dim) = create_test_embedding_provider().await;
 
     let temp_db = tempdir().unwrap();
     let connection = lancedb::connect(temp_db.path().to_str().unwrap())
@@ -948,7 +996,12 @@ mod tests {
       .await
       .unwrap();
 
-    let indexer = Indexer::new(&config, embedder, embedding_dim, Arc::new(RwLock::new(table)));
+    let indexer = Indexer::new(
+      &config,
+      embedding_provider,
+      embedding_dim,
+      Arc::new(RwLock::new(table)),
+    );
 
     // Single file with multiple chunks
     let chunks = vec![
@@ -971,15 +1024,8 @@ mod tests {
       .try_init();
 
     let config = Config::test();
-    // Create embedder for tests
-    let embedder = Arc::new(
-      embed_anything::embeddings::embed::EmbedderBuilder::new()
-        .model_architecture("bert")
-        .onnx_model_id(Some(embed_anything::embeddings::local::text_embedding::ONNXModel::AllMiniLML6V2))
-        .from_pretrained_onnx()
-        .unwrap()
-    );
-    let embedding_dim = 384; // all-MiniLM-L6-v2 has 384 dims
+    // Create embedding provider for tests
+    let (embedding_provider, embedding_dim) = create_test_embedding_provider().await;
 
     let temp_db = tempdir().unwrap();
     let connection = lancedb::connect(temp_db.path().to_str().unwrap())
@@ -990,7 +1036,12 @@ mod tests {
       .await
       .unwrap();
 
-    let indexer = Indexer::new(&config, embedder, embedding_dim, Arc::new(RwLock::new(table)));
+    let indexer = Indexer::new(
+      &config,
+      embedding_provider,
+      embedding_dim,
+      Arc::new(RwLock::new(table)),
+    );
 
     // Create 101 files to test the 100 document batch limit
     let mut chunks = Vec::new();
@@ -1012,7 +1063,6 @@ mod tests {
   // Integration test with real embedder (keep existing test)
   #[tokio::test]
   async fn test_indexer_integration() {
-
     let _ = tracing_subscriber::fmt()
       .with_env_filter("breeze=debug,breeze_chunkers=debug")
       .try_init();
@@ -1020,15 +1070,8 @@ mod tests {
     let config = Config::test();
 
     info!("Loading embedder model: {}", config.model);
-    // Create embedder for tests
-    let embedder = Arc::new(
-      embed_anything::embeddings::embed::EmbedderBuilder::new()
-        .model_architecture("bert")
-        .onnx_model_id(Some(embed_anything::embeddings::local::text_embedding::ONNXModel::AllMiniLML6V2))
-        .from_pretrained_onnx()
-        .unwrap()
-    );
-    let embedding_dim = 384; // all-MiniLM-L6-v2 has 384 dims
+    // Create embedding provider for tests
+    let (embedding_provider, embedding_dim) = create_test_embedding_provider().await;
     info!("Embedder loaded, embedding dimension: {}", embedding_dim);
 
     let temp_db = tempdir().unwrap();
@@ -1041,7 +1084,12 @@ mod tests {
       .await
       .unwrap();
 
-    let indexer = Indexer::new(&config, embedder, embedding_dim, Arc::new(RwLock::new(table)));
+    let indexer = Indexer::new(
+      &config,
+      embedding_provider,
+      embedding_dim,
+      Arc::new(RwLock::new(table)),
+    );
 
     let test_dir = tempdir().unwrap();
     let test_file = test_dir.path().join("test.py");

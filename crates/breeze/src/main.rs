@@ -15,7 +15,11 @@ async fn main() {
         cfg
       }
       Err(e) => {
-        warn!("Failed to load config from {}: {}", config_path.display(), e);
+        warn!(
+          "Failed to load config from {}: {}",
+          config_path.display(),
+          e
+        );
         info!("Using default configuration");
         breeze::Config::default()
       }
@@ -28,19 +32,60 @@ async fn main() {
     Commands::Index {
       path,
       database,
+      embedding_provider,
       model,
+      voyage_api_key,
+      voyage_tier,
+      voyage_model,
       max_chunk_size,
       max_file_size,
       max_parallel_files,
       batch_size,
     } => {
-      // Apply CLI overrides
+      // Apply CLI/env overrides (clap has already handled env vars and parsing)
       if let Some(db) = database {
         config.database_path = db;
       }
+      
+      if let Some(provider) = embedding_provider {
+        config.embedding_provider = provider;
+      }
+      
       if let Some(m) = model {
         config.model = m;
       }
+      
+      // Ensure voyage config exists if using voyage provider
+      if config.embedding_provider == breeze::config::EmbeddingProvider::Voyage && config.voyage.is_none() {
+        config.voyage = Some(breeze::config::VoyageConfig {
+          api_key: String::new(),
+          tier: breeze::aiproviders::voyage::Tier::Free,
+          model: breeze::aiproviders::voyage::EmbeddingModel::VoyageCode3,
+        });
+      }
+      
+      // Handle voyage-specific overrides
+      let api_key = voyage_api_key
+        .or_else(|| std::env::var("BREEZE_VOYAGE_API_KEY").ok());
+      
+      if let Some(api_key) = api_key {
+        if let Some(ref mut voyage) = config.voyage {
+          voyage.api_key = api_key;
+        }
+      }
+      
+      if let Some(tier) = voyage_tier {
+        if let Some(ref mut voyage) = config.voyage {
+          voyage.tier = tier;
+        }
+      }
+      
+      if let Some(model) = voyage_model {
+        if let Some(ref mut voyage) = config.voyage {
+          voyage.model = model;
+        }
+      }
+      
       if let Some(size) = max_chunk_size {
         config.max_chunk_size = size;
       }
@@ -63,7 +108,7 @@ async fn main() {
             info!("Indexing completed successfully!");
             // Force clean exit to avoid ONNX cleanup issues
             std::process::exit(0);
-          },
+          }
           Err(e) => {
             error!("Indexing failed: {}", e);
             std::process::exit(1);
@@ -109,9 +154,9 @@ async fn main() {
         max_parallel,
         tokenizer,
       } => {
-        use breeze_chunkers::{walk_project, WalkOptions, Tokenizer};
-        use std::collections::BTreeMap;
+        use breeze_chunkers::{Tokenizer, WalkOptions, walk_project};
         use futures_util::StreamExt;
+        use std::collections::BTreeMap;
         use std::sync::Arc;
         use tokio::sync::Mutex;
 
@@ -126,18 +171,24 @@ async fn main() {
         } else if let Some(model) = tokenizer.strip_prefix("hf:") {
           Tokenizer::HuggingFace(model.to_string())
         } else {
-          error!("Invalid tokenizer format: {}. Use 'characters', 'tiktoken:cl100k_base', or 'hf:org/repo'", tokenizer);
+          error!(
+            "Invalid tokenizer format: {}. Use 'characters', 'tiktoken:cl100k_base', or 'hf:org/repo'",
+            tokenizer
+          );
           std::process::exit(1);
         };
 
         let start = std::time::Instant::now();
 
-        let chunker = walk_project(&path, WalkOptions {
+        let chunker = walk_project(
+          &path,
+          WalkOptions {
             max_chunk_size,
             tokenizer: tokenizer_obj,
             max_parallel,
             max_file_size,
-        });
+          },
+        );
 
         let file_chunk_counts = Arc::new(Mutex::new(BTreeMap::<String, usize>::new()));
         let file_start_times = Arc::new(Mutex::new(BTreeMap::<String, std::time::Instant>::new()));
@@ -147,74 +198,83 @@ async fn main() {
         let concurrent_limit = max_parallel * 2; // Process more chunks than walker threads
 
         chunker
-            .map(|chunk_result| {
-                let file_chunk_counts = Arc::clone(&file_chunk_counts);
-                let file_start_times = Arc::clone(&file_start_times);
-                let total_chunks = Arc::clone(&total_chunks);
+          .map(|chunk_result| {
+            let file_chunk_counts = Arc::clone(&file_chunk_counts);
+            let file_start_times = Arc::clone(&file_start_times);
+            let total_chunks = Arc::clone(&total_chunks);
 
-                async move {
-                    match chunk_result {
-                        Ok(project_chunk) => {
-                            let file_path = project_chunk.file_path.clone();
+            async move {
+              match chunk_result {
+                Ok(project_chunk) => {
+                  let file_path = project_chunk.file_path.clone();
 
-                            // Track the first time we see a chunk from this file
-                            {
-                                let mut start_times = file_start_times.lock().await;
-                                start_times.entry(file_path.clone()).or_insert_with(std::time::Instant::now);
-                            }
+                  // Track the first time we see a chunk from this file
+                  {
+                    let mut start_times = file_start_times.lock().await;
+                    start_times
+                      .entry(file_path.clone())
+                      .or_insert_with(std::time::Instant::now);
+                  }
 
-                            // Check if this is an EOF chunk
-                            if let breeze_chunkers::Chunk::EndOfFile { file_path: eof_path, .. } = &project_chunk.chunk {
-                                // Record the file processing time
-                                let start_time = {
-                                    let mut start_times = file_start_times.lock().await;
-                                    start_times.remove(eof_path)
-                                };
+                  // Check if this is an EOF chunk
+                  if let breeze_chunkers::Chunk::EndOfFile {
+                    file_path: eof_path,
+                    ..
+                  } = &project_chunk.chunk
+                  {
+                    // Record the file processing time
+                    let start_time = {
+                      let mut start_times = file_start_times.lock().await;
+                      start_times.remove(eof_path)
+                    };
 
-                                if let Some(start_time) = start_time {
-                                    let duration = start_time.elapsed();
-                                    let file_size = tokio::fs::metadata(eof_path).await
-                                        .map(|m| m.len())
-                                        .unwrap_or(0);
+                    if let Some(start_time) = start_time {
+                      let duration = start_time.elapsed();
+                      let file_size = tokio::fs::metadata(eof_path)
+                        .await
+                        .map(|m| m.len())
+                        .unwrap_or(0);
 
-                                    // Detect language from the file path
-                                    let language = if let Ok(Some(detection)) = hyperpolyglot::detect(std::path::Path::new(eof_path)) {
-                                        detection.language().to_string()
-                                    } else {
-                                        "unknown".to_string()
-                                    };
+                      // Detect language from the file path
+                      let language = if let Ok(Some(detection)) =
+                        hyperpolyglot::detect(std::path::Path::new(eof_path))
+                      {
+                        detection.language().to_string()
+                      } else {
+                        "unknown".to_string()
+                      };
 
-                                    // Record to performance tracker
-                                    breeze_chunkers::performance::get_tracker().record_file_processing(
-                                        eof_path.clone(),
-                                        language,
-                                        file_size,
-                                        duration,
-                                        "chunking_complete"
-                                    );
-                                }
-                            }
-
-                            // Update counts
-                            {
-                                let mut counts = file_chunk_counts.lock().await;
-                                *counts.entry(file_path).or_insert(0) += 1;
-                            }
-
-                            let count = total_chunks.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
-                            if count % 1000 == 0 {
-                                info!("Processed {} chunks so far...", count);
-                            }
-                        }
-                        Err(e) => {
-                            error!("Error processing chunk: {}", e);
-                        }
+                      // Record to performance tracker
+                      breeze_chunkers::performance::get_tracker().record_file_processing(
+                        eof_path.clone(),
+                        language,
+                        file_size,
+                        duration,
+                        "chunking_complete",
+                      );
                     }
+                  }
+
+                  // Update counts
+                  {
+                    let mut counts = file_chunk_counts.lock().await;
+                    *counts.entry(file_path).or_insert(0) += 1;
+                  }
+
+                  let count = total_chunks.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+                  if count % 1000 == 0 {
+                    info!("Processed {} chunks so far...", count);
+                  }
                 }
-            })
-            .buffer_unordered(concurrent_limit)
-            .collect::<Vec<_>>()
-            .await;
+                Err(e) => {
+                  error!("Error processing chunk: {}", e);
+                }
+              }
+            }
+          })
+          .buffer_unordered(concurrent_limit)
+          .collect::<Vec<_>>()
+          .await;
 
         let elapsed = start.elapsed();
 
@@ -228,7 +288,10 @@ async fn main() {
         println!("Total files processed: {}", final_counts.len());
         println!("Total chunks: {}", final_total);
         println!("Time elapsed: {:.2}s", elapsed.as_secs_f64());
-        println!("Chunks per second: {:.0}", final_total as f64 / elapsed.as_secs_f64());
+        println!(
+          "Chunks per second: {:.0}",
+          final_total as f64 / elapsed.as_secs_f64()
+        );
 
         if final_counts.len() > 0 {
           let avg_chunks_per_file = final_total as f64 / final_counts.len() as f64;

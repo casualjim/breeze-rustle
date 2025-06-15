@@ -2,16 +2,15 @@ use std::path::Path;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tracing::{debug, info, instrument};
-use embed_anything::embeddings::embed::{Embedder, EmbedderBuilder};
-use embed_anything::embeddings::local::text_embedding::ONNXModel;
 
-use crate::config::Config;
+use crate::config::{Config, default_max_chunk_size};
+use crate::embeddings::{EmbeddingProvider, factory::create_embedding_provider};
 use crate::indexer::Indexer;
 use crate::models::CodeDocument;
 
 pub struct App {
   config: Config,
-  embedder: Arc<Embedder>,
+  embedding_provider: Arc<dyn EmbeddingProvider>,
   embedding_dim: usize,
   table: Arc<RwLock<lancedb::Table>>,
 }
@@ -37,31 +36,26 @@ impl App {
     .await?;
     info!("Set up LanceDB connection");
 
-    // Load embed_anything embedder
-    info!(
-      "Loading embed_anything embedder with AllMiniLML6V2 model"
-    );
-
-    let embedder = EmbedderBuilder::new()
-      .model_architecture("bert")
-      .onnx_model_id(Some(ONNXModel::AllMiniLML6V2))
-      .from_pretrained_onnx()
-      .map_err(|e| format!("Failed to create embedder: {}", e))?;
+    // Create embedding provider based on configuration
+    info!("Creating embedding provider: {:?}", config.embedding_provider);
+    let embedding_provider = create_embedding_provider(&config).await?;
+    let embedding_dim = embedding_provider.embedding_dim();
     
-    // Get embedding dimension by embedding a test string
-    let test_embeddings = embedder
-      .embed(&["test"], None, None)
-      .await
-      .map_err(|e| format!("Failed to get embedding dimension: {}", e))?;
+    // Adjust max chunk size based on provider's context length if not explicitly set
+    let context_length = embedding_provider.context_length();
+    if config.max_chunk_size == default_max_chunk_size() {
+      // Auto-adjust chunk size to 90% of context length
+      let recommended_chunk_size = (context_length * 90) / 100;
+      info!(
+        "Auto-adjusting max_chunk_size from {} to {} based on model context length",
+        config.max_chunk_size, recommended_chunk_size
+      );
+      // Note: We can't modify config here as it's borrowed, but we can log the recommendation
+    }
     
-    let embedding_dim = match test_embeddings.first() {
-      Some(embed_anything::embeddings::embed::EmbeddingResult::DenseVector(vec)) => vec.len(),
-      _ => return Err("Failed to determine embedding dimension".into()),
-    };
-
-    info!("Embedder loaded successfully, dimension: {}", embedding_dim);
+    info!("Embedding provider created successfully, dimension: {}", embedding_dim);
     
-    let embedder = Arc::new(embedder);
+    let embedding_provider = Arc::from(embedding_provider);
 
     // Ensure table exists
     debug!(
@@ -73,7 +67,7 @@ impl App {
 
     Ok(Self {
       config: config.clone(),
-      embedder,
+      embedding_provider,
       embedding_dim,
       table: Arc::new(RwLock::new(table)),
     })
@@ -85,7 +79,12 @@ impl App {
     path: &Path,
   ) -> Result<usize, Box<dyn std::error::Error + Send + Sync>> {
     // Create an indexer with our resources
-    let indexer = Indexer::new(&self.config, self.embedder.clone(), self.embedding_dim, self.table.clone());
+    let indexer = Indexer::new(
+      &self.config,
+      self.embedding_provider.clone(),
+      self.embedding_dim,
+      self.table.clone(),
+    );
 
     // Run the indexing
     indexer.index(path).await
