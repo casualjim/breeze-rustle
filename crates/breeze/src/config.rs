@@ -1,4 +1,3 @@
-use candle_core::{Device, backend::BackendDevice};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
@@ -15,10 +14,6 @@ pub struct Config {
   /// Model to use for embeddings
   #[serde(default = "default_model")]
   pub model: String,
-
-  /// Device to run model on ("cpu", "mps", "cuda")
-  #[serde(default = "default_device")]
-  pub device: String,
 
   /// Maximum chunk size in tokens
   #[serde(default = "default_max_chunk_size")]
@@ -49,17 +44,6 @@ fn default_model() -> String {
   "ibm-granite/granite-embedding-125m-english".to_string()
 }
 
-fn default_device() -> String {
-  if cfg!(feature = "cuda") {
-    return "cuda".to_string();
-  } else if cfg!(target_os = "macos") && cfg!(feature = "metal") {
-    // Use MPS on macOS with Metal feature enabled
-    return "mps".to_string();
-  }
-  // Default to CPU on macOS without Metal
-  "cpu".to_string()
-}
-
 fn default_max_chunk_size() -> usize {
   512
 }
@@ -76,13 +60,13 @@ fn default_batch_size() -> usize {
   50  // Default batch size for embedding operations
 }
 
+
 impl Default for Config {
   fn default() -> Self {
     let mut config = Self {
       database_path: default_database_path(),
       table_name: default_table_name(),
       model: default_model(),
-      device: default_device(),
       max_chunk_size: default_max_chunk_size(),
       max_file_size: default_max_file_size(),
       max_parallel_files: default_max_parallel_files(),
@@ -100,13 +84,12 @@ impl Config {
     config.apply_env_overrides();
     Ok(config)
   }
-  
+
   /// Apply environment variable overrides to the configuration
-  /// 
+  ///
   /// Environment variables:
   /// - BREEZE_DATABASE_PATH: Override database path
   /// - BREEZE_MODEL: Override model name
-  /// - BREEZE_DEVICE: Override device (cpu, mps, cuda)
   /// - BREEZE_MAX_CHUNK_SIZE: Override max chunk size
   /// - BREEZE_MAX_FILE_SIZE: Override max file size in bytes
   /// - BREEZE_MAX_PARALLEL_FILES: Override max parallel files
@@ -115,33 +98,29 @@ impl Config {
     if let Ok(path) = std::env::var("BREEZE_DATABASE_PATH") {
       self.database_path = PathBuf::from(path);
     }
-    
+
     if let Ok(model) = std::env::var("BREEZE_MODEL") {
       self.model = model;
     }
-    
-    if let Ok(device) = std::env::var("BREEZE_DEVICE") {
-      self.device = device;
-    }
-    
+
     if let Ok(size) = std::env::var("BREEZE_MAX_CHUNK_SIZE") {
       if let Ok(parsed) = size.parse::<usize>() {
         self.max_chunk_size = parsed;
       }
     }
-    
+
     if let Ok(size) = std::env::var("BREEZE_MAX_FILE_SIZE") {
       if let Ok(parsed) = size.parse::<u64>() {
         self.max_file_size = Some(parsed);
       }
     }
-    
+
     if let Ok(parallel) = std::env::var("BREEZE_MAX_PARALLEL_FILES") {
       if let Ok(parsed) = parallel.parse::<usize>() {
         self.max_parallel_files = parsed;
       }
     }
-    
+
     if let Ok(batch) = std::env::var("BREEZE_BATCH_SIZE") {
       if let Ok(parsed) = batch.parse::<usize>() {
         self.batch_size = parsed;
@@ -155,18 +134,6 @@ impl Config {
     Ok(())
   }
 
-  pub fn get_device(&self, idx: usize) -> Device {
-    match self.device.as_str() {
-      "cpu" => Device::Cpu,
-      "mps" => {
-        Device::Metal(candle_core::MetalDevice::new(idx).expect("Failed to create MPS device"))
-      }
-      "cuda" => {
-        Device::Cuda(candle_core::CudaDevice::new(idx).expect("Failed to create CUDA device"))
-      }
-      _ => panic!("Unsupported device type: {}", self.device),
-    }
-  }
 
   /// Create a config suitable for tests with a small, fast model
   #[cfg(test)]
@@ -175,7 +142,6 @@ impl Config {
       database_path: PathBuf::from("./test_db"),
       table_name: "test_documents".to_string(),
       model: "sentence-transformers/all-MiniLM-L6-v2".to_string(),
-      device: "cpu".to_string(),
       max_chunk_size: 512,
       max_file_size: Some(1024 * 1024), // 1MB
       max_parallel_files: 2,

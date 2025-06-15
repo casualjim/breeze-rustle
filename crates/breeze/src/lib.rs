@@ -1,9 +1,9 @@
 mod app;
+pub mod aiproviders;
 pub mod cli;
 mod config;
 mod converter;
 mod document_builder;
-mod embeddings;
 mod indexer;
 mod logging;
 mod models;

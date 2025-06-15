@@ -29,10 +29,6 @@ pub enum Commands {
         #[arg(short, long)]
         model: Option<String>,
 
-        /// Device to run on: cpu, mps, cuda (overrides config)
-        #[arg(long)]
-        device: Option<String>,
-
         /// Maximum chunk size in tokens (overrides config)
         #[arg(long)]
         max_chunk_size: Option<usize>,
