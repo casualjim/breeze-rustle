@@ -147,6 +147,53 @@ impl Config {
     Ok(())
   }
 
+  /// Calculate optimal chunk size based on embedding provider and tier
+  pub fn optimal_chunk_size(&self) -> usize {
+    match self.embedding_provider {
+      EmbeddingProvider::Voyage => {
+        if let Some(voyage_config) = &self.voyage {
+          // Get model context length
+          let context_length = voyage_config.model.context_length();
+          
+          // Base chunk size on tier and model
+          let chunk_size = match voyage_config.tier {
+            Tier::Free => {
+              // Conservative for free tier: aim for ~2k tokens per chunk
+              // This allows good batching with 128 max batch size
+              2048.min(context_length / 8)
+            }
+            Tier::Tier1 => {
+              // Moderate for Tier 1: ~4k tokens per chunk
+              4096.min(context_length / 6)
+            }
+            Tier::Tier2 => {
+              // Larger for Tier 2: ~8k tokens per chunk
+              8192.min(context_length / 4)
+            }
+            Tier::Tier3 => {
+              // Maximum efficiency for Tier 3: ~16k tokens per chunk
+              // But cap at 80% of context length for safety
+              16384.min((context_length * 4) / 5)
+            }
+          };
+          
+          // Override with user-specified value if it's not the default
+          if self.max_chunk_size != default_max_chunk_size() {
+            self.max_chunk_size
+          } else {
+            chunk_size
+          }
+        } else {
+          self.max_chunk_size
+        }
+      }
+      EmbeddingProvider::Local => {
+        // For local models, use the configured value
+        self.max_chunk_size
+      }
+    }
+  }
+
   /// Create a config suitable for tests with a small, fast model
   #[cfg(test)]
   pub fn test() -> Self {
@@ -196,5 +243,63 @@ mod tests {
 
     let loaded = Config::from_file(&config_path).unwrap();
     assert_eq!(config.table_name, loaded.table_name);
+  }
+
+  #[test]
+  fn test_optimal_chunk_size_voyage_tiers() {
+    // Test Free tier
+    let mut config = Config {
+      embedding_provider: EmbeddingProvider::Voyage,
+      voyage: Some(VoyageConfig {
+        api_key: "test".to_string(),
+        tier: Tier::Free,
+        model: VoyageModel::VoyageCode3,
+      }),
+      max_chunk_size: default_max_chunk_size(), // Use default to trigger calculation
+      ..Default::default()
+    };
+    assert_eq!(config.optimal_chunk_size(), 2048, "Free tier should use 2k chunks");
+
+    // Test Tier 1
+    config.voyage.as_mut().unwrap().tier = Tier::Tier1;
+    assert_eq!(config.optimal_chunk_size(), 4096, "Tier 1 should use 4k chunks");
+
+    // Test Tier 2
+    config.voyage.as_mut().unwrap().tier = Tier::Tier2;
+    assert_eq!(config.optimal_chunk_size(), 8000, "Tier 2 should use 8k chunks");
+
+    // Test Tier 3
+    config.voyage.as_mut().unwrap().tier = Tier::Tier3;
+    assert_eq!(config.optimal_chunk_size(), 16384, "Tier 3 should use 16k chunks");
+
+    // Test with voyage-law-2 (16k context)
+    config.voyage.as_mut().unwrap().model = VoyageModel::VoyageLaw2;
+    config.voyage.as_mut().unwrap().tier = Tier::Tier3;
+    assert_eq!(config.optimal_chunk_size(), 12800, "Tier 3 with 16k model should cap at 80% of context");
+  }
+
+  #[test]
+  fn test_optimal_chunk_size_user_override() {
+    let config = Config {
+      embedding_provider: EmbeddingProvider::Voyage,
+      voyage: Some(VoyageConfig {
+        api_key: "test".to_string(),
+        tier: Tier::Free,
+        model: VoyageModel::VoyageCode3,
+      }),
+      max_chunk_size: 1000, // User-specified value
+      ..Default::default()
+    };
+    assert_eq!(config.optimal_chunk_size(), 1000, "Should respect user override");
+  }
+
+  #[test]
+  fn test_optimal_chunk_size_local_provider() {
+    let config = Config {
+      embedding_provider: EmbeddingProvider::Local,
+      max_chunk_size: 1024,
+      ..Default::default()
+    };
+    assert_eq!(config.optimal_chunk_size(), 1024, "Local provider should use configured size");
   }
 }
