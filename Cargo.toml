@@ -5,7 +5,23 @@ resolver = "2"
 [workspace.package]
 edition = "2024"
 license = "MIT"
-exclude = ["test_files/*", "python", "*.py", "pyproject.toml", "*.js", "*.ts", "node", "package.json", "examples/images/*", "mkdocs.yml", "docs/*", "tests/*", ".github", "Dockerfile", "docs"]
+exclude = [
+    "test_files/*",
+    "python",
+    "*.py",
+    "pyproject.toml",
+    "*.js",
+    "*.ts",
+    "node",
+    "package.json",
+    "examples/images/*",
+    "mkdocs.yml",
+    "docs/*",
+    "tests/*",
+    ".github",
+    "Dockerfile",
+    "docs",
+]
 version = "0.1.0"
 
 [workspace.dependencies]

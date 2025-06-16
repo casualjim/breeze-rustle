@@ -57,8 +57,14 @@ impl<'a> Indexer<'a> {
       Tokenizer::Characters
     };
 
+    let optimal_chunk_size = self.config.optimal_chunk_size();
+    info!(
+      chunk_size = optimal_chunk_size,
+      "Using optimal chunk size based on embedding provider configuration"
+    );
+
     let walk_options = WalkOptions {
-      max_chunk_size: self.config.max_chunk_size,
+      max_chunk_size: optimal_chunk_size,
       tokenizer,
       max_parallel: self.config.max_parallel_files,
       max_file_size: self.config.max_file_size,
