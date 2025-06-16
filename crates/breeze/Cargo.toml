@@ -4,13 +4,13 @@ version = "0.1.0"
 edition = "2024"
 
 [features]
-default = []
-cuda = ["embed_anything/cuda"]
-cudnn = ["embed_anything/cudnn"]
-mkl = ["embed_anything/mkl"]
-accelerate = ["embed_anything/accelerate"]
-metal = ["embed_anything/metal"]
-flash-attn = ["embed_anything/flash-attn"]
+default = ["ort"]
+cuda = ["candle-core/cuda", "candle-nn/cuda", "candle-transformers/cuda", "ort/cuda"]
+cudnn = ["candle-core/cudnn"]
+flash-attn = ["cuda", "candle-transformers/flash-attn", "dep:candle-flash-attn"]
+mkl = ["dep:intel-mkl-src", "candle-nn/mkl", "candle-transformers/mkl", "candle-core/mkl"]
+accelerate = ["dep:accelerate-src", "candle-core/accelerate", "candle-nn/accelerate", "candle-transformers/accelerate"]
+metal = ["candle-core/metal", "candle-nn/metal", "ort/coreml"]
 
 [dependencies]
 anyhow = "1.0"
@@ -23,23 +23,28 @@ async-stream = "0.3"
 async-trait = "0.1.88"
 blake3 = { version = "1.8.2", features = ["serde"] }
 breeze-chunkers = { path = "../breeze-chunkers" }
+candle-core = "0.9.1"
+candle-nn = "0.9.1"
+candle-transformers = { version = "0.9.1" }
+candle-flash-attn = { version = "0.9.1", optional = true }
 chrono = { version = "0.4", features = ["serde"] }
 
 # Configuration and CLI
 clap = { version = "4.5", features = ["derive", "env"] }
 config = "0.15"
 console-subscriber = "0.4.1"
-embed_anything = { version = "0.6.4", features = ["ort"] }
 flume = "0.11"
 futures = "0.3.31"
 futures-util = "0.3.31"
 governor = "0.10"
+hf-hub = { version = "0.4.2", features = ["rustls-tls", "tokio", "ureq"], default-features = false }
 http = "1.2"
 
 hyperpolyglot = "0.1.7"     # Language detection
 ignore = { version = "0.4.23", features = ["simd-accel"] }
 infer = "0.19.0"            # File type detection
 lancedb = { version = "0.20.0" }
+ndarray = "0.16.1"
 
 num_cpus = "1"
 rand = "0.9"
@@ -51,6 +56,8 @@ retry-policies = "0.5"
 serde = { version = "1", features = ["derive"] }
 serde_arrow = "0.13.4"
 serde_json = "1.0"
+small_ctor = "0.1.2"
+strum = { version = "0.27.1", features = ["derive"] }
 
 # Error handling
 thiserror = "2.0"
@@ -66,6 +73,14 @@ tower = "0.5"
 tracing.workspace = true
 tracing-subscriber = { version = "0.3.19", features = ["env-filter", "fmt"] }
 uuid = { version = "1", features = ["v7", "serde", "zerocopy"] }
+
+intel-mkl-src = { version = "0.8.1", optional = true }
+accelerate-src = { version = "0.3.2", optional = true }
+
+[target.'cfg(not(target_os = "macos"))'.dependencies]
+ort = {version = "=2.0.0-rc.10", features = ["load-dynamic", "half"], optional = true}
+[target.'cfg(target_os = "macos")'.dependencies]
+ort = {version = "=2.0.0-rc.10", features = ["half", "coreml"], optional = true}
 
 [dev-dependencies]
 tempfile = "3.11"

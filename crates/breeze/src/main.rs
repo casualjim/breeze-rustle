@@ -1,11 +1,23 @@
 use breeze::cli::{Cli, Commands, DebugCommands};
 use tracing::{error, info, warn};
 
-#[tokio::main]
-async fn main() {
-  let cli = Cli::parse();
-
+fn main() {
+  breeze::ensure_ort_initialized().expect("Failed to initialize ONNX runtime");
   let _log_guard = breeze::init_logging(env!("CARGO_PKG_NAME"));
+
+  let rt = tokio::runtime::Builder::new_multi_thread()
+    .enable_all()
+    .build()
+    .expect("Failed to create Tokio runtime");
+  rt.block_on(async_main());
+  // Ensure all tasks are completed before exiting
+  rt.shutdown_timeout(std::time::Duration::from_secs(10));
+  info!("Breeze indexing completed. Exiting gracefully.");
+  std::process::exit(0);
+}
+
+async fn async_main() {
+  let cli = Cli::parse();
 
   // Load configuration
   let mut config = if let Some(config_path) = &cli.config {
@@ -107,8 +119,6 @@ async fn main() {
         Ok(app) => match app.index(&path).await {
           Ok(_) => {
             info!("Indexing completed successfully!");
-            // Force clean exit to avoid ONNX cleanup issues
-            std::process::exit(0);
           }
           Err(e) => {
             error!("Indexing failed: {}", e);

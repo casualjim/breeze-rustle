@@ -2,6 +2,12 @@
 members = ["crates/*"]
 resolver = "2"
 
+[workspace.package]
+edition = "2024"
+license = "MIT"
+exclude = ["test_files/*", "python", "*.py", "pyproject.toml", "*.js", "*.ts", "node", "package.json", "examples/images/*", "mkdocs.yml", "docs/*", "tests/*", ".github", "Dockerfile", "docs"]
+version = "0.1.0"
+
 [workspace.dependencies]
 # Text splitting - the main crate we'll use
 text-splitter = { version = "0.27", features = [
@@ -20,3 +26,9 @@ tracing = "0.1.41"
 # Tree-sitter parsers (individual crates for all languages)
 tree-sitter = "0.25"
 tree-sitter-language = "0.1.5"
+
+[profile.dev]
+rpath = true
+
+[profile.release]
+rpath = true

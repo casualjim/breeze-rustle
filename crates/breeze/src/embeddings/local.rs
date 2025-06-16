@@ -1,16 +1,95 @@
+mod bert;
+mod model_info;
+mod ort_bert;
+mod pooling;
+mod text;
+mod utils;
+
+use anyhow::anyhow;
 use async_trait::async_trait;
-use embed_anything::embeddings::embed::{Embedder, EmbedderBuilder, EmbeddingResult};
-use embed_anything::embeddings::local::text_embedding::ONNXModel;
+use candle_core::{Device, Tensor};
+use serde::Deserialize;
 use std::sync::Arc;
+
+use crate::embeddings::local::{bert::BertEmbed, ort_bert::OrtBertEmbedder, text::ONNXModel};
 
 use super::{
   EmbeddingProvider,
   batching::{BatchingStrategy, LocalBatchingStrategy},
 };
 
+pub fn normalize_l2(v: &Tensor) -> candle_core::Result<Tensor> {
+  v.broadcast_div(&v.sqr()?.sum_keepdim(1)?.sqrt()?)
+}
+
+pub fn select_device() -> Device {
+  #[cfg(feature = "metal")]
+  {
+    Device::new_metal(0).unwrap_or(Device::Cpu)
+  }
+  #[cfg(all(not(feature = "metal"), feature = "cuda"))]
+  {
+    Device::cuda_if_available(0).unwrap_or(Device::Cpu)
+  }
+  #[cfg(not(any(feature = "metal", feature = "cuda")))]
+  {
+    Device::Cpu
+  }
+}
+
+pub enum Dtype {
+  F16,
+  INT8,
+  Q4,
+  UINT8,
+  BNB4,
+  F32,
+  Q4F16,
+  QUANTIZED,
+  BF16,
+}
+
+#[derive(Deserialize, Debug, Clone)]
+pub enum EmbeddingResult {
+  DenseVector(Vec<f32>),
+  MultiVector(Vec<Vec<f32>>),
+}
+
+impl From<Vec<f32>> for EmbeddingResult {
+  fn from(value: Vec<f32>) -> Self {
+    EmbeddingResult::DenseVector(value)
+  }
+}
+
+impl From<Vec<Vec<f32>>> for EmbeddingResult {
+  fn from(value: Vec<Vec<f32>>) -> Self {
+    EmbeddingResult::MultiVector(value)
+  }
+}
+
+impl EmbeddingResult {
+  pub fn to_dense(&self) -> Result<Vec<f32>, anyhow::Error> {
+    match self {
+      EmbeddingResult::DenseVector(x) => Ok(x.to_vec()),
+      EmbeddingResult::MultiVector(_) => Err(anyhow!(
+        "Multi-vector Embedding are not supported for this operation"
+      )),
+    }
+  }
+
+  pub fn to_multi_vector(&self) -> Result<Vec<Vec<f32>>, anyhow::Error> {
+    match self {
+      EmbeddingResult::MultiVector(x) => Ok(x.to_vec()),
+      EmbeddingResult::DenseVector(_) => Err(anyhow!(
+        "Dense Embedding are not supported for this operation"
+      )),
+    }
+  }
+}
+
 /// Local embedding provider using embed_anything
 pub struct LocalEmbeddingProvider {
-  embedder: Arc<Embedder>,
+  embedder: Arc<OrtBertEmbedder>,
   embedding_dim: usize,
   batch_size: usize,
   #[allow(dead_code)]
@@ -22,18 +101,16 @@ impl LocalEmbeddingProvider {
     model_name: String,
     batch_size: usize,
   ) -> Result<Self, Box<dyn std::error::Error>> {
+    // Ensure ONNX runtime is initialized
+    crate::ensure_ort_initialized()?;
+
     // For now, we use AllMiniLM-L6-v2 as the default
     // In the future, we can map model_name to different ONNX models
-    let embedder = EmbedderBuilder::new()
-      .model_architecture("bert")
-      .onnx_model_id(Some(ONNXModel::AllMiniLML6V2))
-      .from_pretrained_onnx()
-      .map_err(|e| format!("Failed to create embedder: {}", e))?;
+    let embedder = OrtBertEmbedder::new(Some(ONNXModel::AllMiniLML12V2), None, None, None, None)?;
 
     // Get embedding dimension by embedding a test string
     let test_embeddings = embedder
       .embed(&["test"], None, None)
-      .await
       .map_err(|e| format!("Failed to get embedding dimension: {}", e))?;
 
     let embedding_dim = match test_embeddings.first() {
@@ -62,7 +139,6 @@ impl EmbeddingProvider for LocalEmbeddingProvider {
     let embeddings = self
       .embedder
       .embed(&texts, None, None)
-      .await
       .map_err(|e| format!("Failed to embed: {}", e))?;
 
     let mut result = Vec::with_capacity(embeddings.len());

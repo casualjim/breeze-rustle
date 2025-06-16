@@ -38,7 +38,9 @@
       "mcp__zep__search_memory_facts",
       "mcp__code-index__search_code",
       "mcp__code-index__find_files",
-      "WebFetch(domain:docs.rs)"
+      "WebFetch(domain:docs.rs)",
+      "mcp__github__search_issues",
+      "WebFetch(domain:ort.pyke.io)"
     ],
     "deny": []
   }
