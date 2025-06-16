@@ -14,3 +14,40 @@ mod sinks;
 pub use app::App;
 pub use config::{Config, EmbeddingProvider};
 pub use logging::init as init_logging;
+
+// Global ONNX runtime initialization to prevent multiple initialization issues
+use small_ctor::ctor;
+use std::sync::OnceLock;
+
+static ORT_INIT_RESULT: OnceLock<Result<(), String>> = OnceLock::new();
+
+#[ctor]
+unsafe fn init_onnx_runtime() {
+  // Set ONNX runtime to quiet mode
+  // SAFETY: This is called once at program initialization before any threads are spawned
+  unsafe {
+    std::env::set_var("ORT_DISABLE_ALL_LOGS", "1");
+  }
+
+  // Initialize ONNX runtime with rc.10 API
+  let result = ort::init()
+    .with_name("breeze")
+    .commit()
+    .map(|_| ()) // Convert bool to ()
+    .map_err(|e| format!("Failed to initialize ONNX runtime: {}", e));
+
+  // Store the result - OnceLock ensures this only happens once
+  let _ = ORT_INIT_RESULT.set(result);
+}
+
+// Ensures ONNX runtime is initialized, can be called multiple times safely
+pub fn ensure_ort_initialized() -> Result<(), Box<dyn std::error::Error>> {
+  match ORT_INIT_RESULT.get() {
+    Some(Ok(())) => Ok(()),
+    Some(Err(e)) => Err(e.clone().into()),
+    None => {
+      // This should never happen since ctor runs before main
+      Err("ONNX Runtime initialization not completed".into())
+    }
+  }
+}
