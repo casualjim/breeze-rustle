@@ -56,27 +56,27 @@ jobs:
 
       - name: Create Python virtual environment
         run: |
-          uv venv .venv --python python${{ matrix.python-version }}
+          cd crates/breeze-py && uv venv .venv --python python${{ matrix.python-version }}
 
       - name: Install Python development dependencies (Linux)
         if: runner.os == 'Linux'
         run: |
-          uv pip install --python .venv pytest pytest-asyncio maturin[patchelf]
+          cd crates/breeze-py && uv pip install --python .venv pytest pytest-asyncio maturin[patchelf]
 
       - name: Install Python development dependencies (non-Linux)
         if: runner.os != 'Linux'
         run: |
-          uv pip install --python .venv pytest pytest-asyncio maturin
+          cd crates/breeze-py && uv pip install --python .venv pytest pytest-asyncio maturin
 
       - name: Build Python package (Linux)
         if: runner.os == 'Linux'
         run: |
-          cd crates/breeze-py && uv run --python ../../.venv maturin develop --release --zig
+          cd crates/breeze-py && uv run --python .venv maturin develop --release
 
       - name: Build Python package (non-Linux)
         if: runner.os != 'Linux'
         run: |
-          cd crates/breeze-py && uv run --python ../../.venv maturin develop --release
+          cd crates/breeze-py && uv run --python .venv maturin develop --release
 
       - name: Run Rust tests
         run: |
@@ -84,7 +84,7 @@ jobs:
 
       - name: Run Python tests
         run: |
-          cd crates/breeze-py && uv run --python ../../.venv pytest -v
+          cd crates/breeze-py && uv run --python .venv pytest -v
 
       - name: Run Node.js tests
         run: |
