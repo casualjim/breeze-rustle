@@ -82,6 +82,13 @@ pub enum Commands {
     full: bool,
   },
 
+  /// Initialize configuration file
+  Init {
+    /// Force overwrite existing config file
+    #[arg(short, long)]
+    force: bool,
+  },
+
   /// Show current configuration
   Config {
     /// Show default configuration

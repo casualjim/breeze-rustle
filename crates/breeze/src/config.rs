@@ -136,7 +136,9 @@ pub struct Config {
 }
 
 fn default_database_path() -> PathBuf {
-  PathBuf::from("./embeddings.db")
+  Config::default_data_dir()
+    .unwrap_or_else(|_| PathBuf::from("./data"))
+    .join("embeddings.db")
 }
 
 fn default_table_name() -> String {
@@ -204,6 +206,27 @@ impl Default for Config {
 }
 
 impl Config {
+  /// Get the default config directory path
+  pub fn default_config_dir() -> anyhow::Result<PathBuf> {
+    let config_dir = dirs::preference_dir()
+      .ok_or_else(|| anyhow::anyhow!("Could not determine preferences directory"))?
+      .join(env!("CARGO_PKG_NAME"));
+    Ok(config_dir)
+  }
+
+  /// Get the default config file path
+  pub fn default_config_path() -> anyhow::Result<PathBuf> {
+    Ok(Self::default_config_dir()?.join("config.toml"))
+  }
+
+  /// Get the default data directory path
+  pub fn default_data_dir() -> anyhow::Result<PathBuf> {
+    let data_dir = dirs::data_dir()
+      .ok_or_else(|| anyhow::anyhow!("Could not determine data directory"))?
+      .join(env!("CARGO_PKG_NAME"));
+    Ok(data_dir)
+  }
+
   pub fn from_file<P: AsRef<std::path::Path>>(path: P) -> anyhow::Result<Self> {
     let content = std::fs::read_to_string(path)?;
     let config: Self = toml::from_str(&content)?;
@@ -214,6 +237,173 @@ impl Config {
     let content = toml::to_string_pretty(self)?;
     std::fs::write(path, content)?;
     Ok(())
+  }
+
+  /// Load config from default location or return default
+  pub fn load_from_default_or_fallback() -> Self {
+    match Self::default_config_path() {
+      Ok(default_path) if default_path.exists() => {
+        Self::from_file(&default_path).unwrap_or_else(|_| Self::default())
+      }
+      _ => Self::default(),
+    }
+  }
+
+  /// Generate a default configuration with helpful comments
+  pub fn generate_commented_config() -> String {
+    let data_dir = Self::default_data_dir()
+      .unwrap_or_else(|_| PathBuf::from("./data"))
+      .display()
+      .to_string();
+
+    format!(
+      r#"# Breeze Configuration File
+#
+# This configuration file controls how breeze indexes and searches your codebase.
+# You can override any of these settings via command-line arguments or environment variables.
+#
+# Command-line arguments take precedence over environment variables, which take precedence
+# over this config file.
+
+# Path to the LanceDB database where embeddings are stored
+# Default: "./embeddings.db"
+# Environment variable: BREEZE_DATABASE_PATH
+database_path = "{}/embeddings.db"
+
+# Table name in the LanceDB database
+# Default: "code_files"
+table_name = "code_files"
+
+# Embedding provider to use: "local", "voyage", or "openailike"
+# - "local": Uses local ONNX models (no API required, runs on your machine)
+# - "voyage": Uses Voyage AI's API (requires API key)
+# - "openailike": Uses any OpenAI-compatible API (configurable endpoints)
+# Default: "local"
+# Environment variable: BREEZE_EMBEDDING_PROVIDER
+embedding_provider = "local"
+
+# Model to use for local embeddings
+# This should be a HuggingFace model ID that has ONNX exports available
+# Popular options:
+# - "sentence-transformers/all-MiniLM-L6-v2" (default, fast, good quality)
+# - "BAAI/bge-small-en-v1.5" (small, efficient)
+# - "thenlper/gte-large" (larger, better quality)
+# Default: "sentence-transformers/all-MiniLM-L6-v2"
+# Environment variable: BREEZE_MODEL
+model = "sentence-transformers/all-MiniLM-L6-v2"
+
+# Maximum chunk size in tokens
+# Files are split into chunks no larger than this to fit within embedding model limits
+# Smaller chunks = more granular search, but more storage and slower indexing
+# Larger chunks = better context, but might miss specific details
+# Default: 512
+# Environment variable: BREEZE_MAX_CHUNK_SIZE
+max_chunk_size = 512
+
+# Maximum file size in bytes to process
+# Files larger than this are skipped during indexing
+# Set to null to process files of any size
+# Default: 5242880 (5MB)
+# Environment variable: BREEZE_MAX_FILE_SIZE
+max_file_size = 5242880
+
+# Number of files to process in parallel during indexing
+# Higher values speed up indexing but use more memory
+# Default: number of CPU cores
+# Environment variable: BREEZE_MAX_PARALLEL_FILES
+max_parallel_files = {}
+
+# Batch size for embedding operations
+# How many chunks to embed at once (for providers that support batching)
+# Default: 50
+# Environment variable: BREEZE_BATCH_SIZE
+batch_size = 50
+
+# Number of threads dedicated to processing large files
+# Large files are processed in parallel chunks using this many threads
+# Default: 4
+large_file_threads = 4
+
+# Number of concurrent workers for remote embedding providers
+# Only applies to voyage and openailike providers
+# Default: 4
+# Environment variable: BREEZE_EMBEDDING_WORKERS
+embedding_workers = 4
+
+# ============================================================================
+# Voyage AI Configuration
+# ============================================================================
+# Uncomment and configure this section if using embedding_provider = "voyage"
+
+# [voyage]
+# # Your Voyage AI API key
+# # Get one at: https://dash.voyageai.com
+# # Can also be set via VOYAGE_API_KEY or BREEZE_VOYAGE_API_KEY environment variable
+# api_key = "your-api-key-here"
+#
+# # Subscription tier: "free", "tier1", "tier2", or "tier3"
+# # This affects rate limits and chunk size optimization
+# # Default: "free"
+# # Environment variable: BREEZE_VOYAGE_TIER
+# tier = "free"
+#
+# # Voyage model to use
+# # Options:
+# # - "voyage-3" (best general-purpose)
+# # - "voyage-3-lite" (faster, lower cost)
+# # - "voyage-code-3" (optimized for code, recommended)
+# # - "voyage-finance-2" (finance documents)
+# # - "voyage-law-2" (legal documents)
+# # - "voyage-multilingual-2" (multiple languages)
+# # Default: "voyage-code-3"
+# # Environment variable: BREEZE_VOYAGE_MODEL
+# model = "voyage-code-3"
+
+# ============================================================================
+# OpenAI-like Provider Configuration
+# ============================================================================
+# Configure any OpenAI-compatible embedding API (OpenAI, llama.cpp, Ollama, etc.)
+# You can define multiple providers and switch between them
+
+# # Example: OpenAI
+# [openai_providers.openai]
+# api_base = "https://api.openai.com/v1"
+# api_key = "sk-..."  # Or set via OPENAI_API_KEY environment variable
+# model = "text-embedding-3-small"
+# embedding_dim = 1536
+# context_length = 8191
+# max_batch_size = 2048
+# requests_per_minute = 3000
+# tokens_per_minute = 1000000
+# max_concurrent_requests = 50
+#
+# [openai_providers.openai.tokenizer]
+# type = "tiktoken"
+# encoding = "cl100k_base"
+
+# # Example: Local llama.cpp server
+# [openai_providers.local]
+# api_base = "http://localhost:8080/v1"
+# # No API key needed for local server
+# model = "nomic-embed-text"
+# embedding_dim = 768
+# context_length = 8192
+# max_batch_size = 512
+# requests_per_minute = 10000  # High limit for local server
+# tokens_per_minute = 10000000
+# max_concurrent_requests = 50
+#
+# [openai_providers.local.tokenizer]
+# type = "huggingface"
+# model_id = "nomic-ai/nomic-embed-text-v1.5"
+
+# # Select which provider to use (must match a key in openai_providers)
+# # Only needed when embedding_provider = "openailike"
+# openai_provider = "openai"
+"#,
+      data_dir,
+      num_cpus::get()
+    )
   }
 
   /// Calculate optimal chunk size based on embedding provider and tier

@@ -83,3 +83,6 @@ node_modules/
 .env.*
 .env.*
 !.env.example
+
+# Code Index MCP cache directory
+.code_indexer/
