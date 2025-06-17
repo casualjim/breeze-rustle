@@ -1,16 +1,13 @@
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use reqwest::header::{AUTHORIZATION, CONTENT_TYPE, HeaderMap, HeaderValue};
-use reqwest_middleware::{ClientBuilder, ClientWithMiddleware};
-use reqwest_retry::{RetryTransientMiddleware, policies::ExponentialBackoff};
 use serde::{Deserialize, Serialize};
 use tracing::debug;
 
 use super::error::{ApiErrorResponse, Error, ErrorCode};
-use super::middleware::{RateLimitMiddleware, RateLimiterConfig, TokenCount};
 use super::models::EmbeddingModel;
 use super::types::Tier;
+use crate::reqwestx::api_client::{ApiClient, ApiClientConfig};
 
 /// Voyage API base URL
 const API_BASE: &str = "https://api.voyageai.com/v1";
@@ -85,6 +82,7 @@ pub struct Config {
   pub tier: Tier,
   pub model: EmbeddingModel,
   pub timeout: Duration,
+  pub max_concurrent_requests: Option<usize>,
 }
 
 impl Config {
@@ -94,7 +92,8 @@ impl Config {
       api_key,
       tier,
       model,
-      timeout: Duration::from_secs(30),
+      timeout: Duration::from_secs(90),
+      max_concurrent_requests: None,
     }
   }
 
@@ -103,47 +102,33 @@ impl Config {
     self.timeout = timeout;
     self
   }
+
+  /// Set max concurrent requests (e.g., based on number of embed workers)
+  pub fn with_max_concurrent_requests(mut self, max_concurrent_requests: usize) -> Self {
+    self.max_concurrent_requests = Some(max_concurrent_requests);
+    self
+  }
 }
 
 /// Voyage AI API client
 pub struct Client {
-  client: ClientWithMiddleware,
+  client: ApiClient,
 }
 
 impl Client {
   /// Create a new Voyage client with rate limiting
   pub fn new(config: Config) -> Result<Self> {
-    // Create base reqwest client
-    let mut headers = HeaderMap::new();
-    headers.insert(
-      AUTHORIZATION,
-      HeaderValue::from_str(&format!("Bearer {}", config.api_key))
-        .context("Invalid API key format")?,
-    );
-    headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
-
-    let reqwest_client = reqwest::Client::builder()
-      .default_headers(headers)
-      .timeout(config.timeout)
-      .build()
-      .context("Failed to create HTTP client")?;
-
-    // Create retry policy with exponential backoff
-    let retry_policy = ExponentialBackoff::builder()
-      .base(2)
-      .retry_bounds(Duration::from_secs(1), Duration::from_secs(60))
-      .build_with_max_retries(3);
-
-    // Build middleware client with rate limiting and retry
-    let rate_limiter_config = RateLimiterConfig {
-      tier: config.tier,
-      model: config.model,
+    let api_config = ApiClientConfig {
+      base_url: API_BASE.to_string(),
+      api_key: Some(config.api_key.clone()),
+      max_concurrent_requests: config.max_concurrent_requests.unwrap_or(50),
+      max_requests_per_minute: config.tier.safe_requests_per_minute() as usize,
+      max_tokens_per_minute: config.tier.safe_tokens_per_minute(config.model) as usize,
+      max_retries: 3,
+      timeout: config.timeout,
     };
 
-    let client = ClientBuilder::new(reqwest_client)
-      .with(RateLimitMiddleware::new(rate_limiter_config))
-      .with(RetryTransientMiddleware::new_with_policy(retry_policy))
-      .build();
+    let client = ApiClient::new(api_config).context("Failed to create API client")?;
 
     Ok(Self { client })
   }
@@ -160,59 +145,87 @@ impl Client {
       estimated_tokens
     );
 
-    // Create request with token count in extensions
-    let response = self
+    self
       .client
-      .post(format!("{}/embeddings", API_BASE))
-      .with_extension(TokenCount(estimated_tokens))
-      .json(&request)
-      .send()
-      .await?;
+      .post_json("/embeddings", &request, estimated_tokens)
+      .await
+      .map_err(|e| {
+        let error_str = e.to_string();
 
-    self.handle_response(response).await
+        // Try to extract HTTP status code from error message
+        if let Some(status_match) = error_str.split("status ").nth(1) {
+          if let Some(status_str) = status_match.split(':').next() {
+            if let Ok(status) = status_str.parse::<u16>() {
+              // Try to parse the error body
+              if let Some(api_error) = error_str.split(": ").last() {
+                if let Ok(api_err) = serde_json::from_str::<ApiErrorResponse>(api_error) {
+                  let code = ErrorCode::from_status(status);
+                  return Error::Api {
+                    status,
+                    code,
+                    message: api_err.error.message,
+                  };
+                }
+              }
+
+              // Return generic API error for known status codes
+              let code = ErrorCode::from_status(status);
+              return Error::Api {
+                status,
+                code,
+                message: error_str,
+              };
+            }
+          }
+        }
+
+        // Convert to anyhow error
+        Error::Other(anyhow::Error::msg(error_str))
+      })
   }
 
   /// Rerank documents based on relevance to a query
   pub async fn rerank(&self, request: RerankRequest) -> Result<RerankResponse, Error> {
     debug!("Reranking {} documents", request.documents.len());
 
-    let response = self
+    // Reranking typically uses minimal tokens
+    self
       .client
-      .post(format!("{}/rerank", API_BASE))
-      .with_extension(TokenCount(0))
-      .json(&request)
-      .send()
-      .await?;
+      .post_json("/rerank", &request, 100)
+      .await
+      .map_err(|e| {
+        let error_str = e.to_string();
 
-    self.handle_response(response).await
-  }
+        // Try to extract HTTP status code from error message
+        if let Some(status_match) = error_str.split("status ").nth(1) {
+          if let Some(status_str) = status_match.split(':').next() {
+            if let Ok(status) = status_str.parse::<u16>() {
+              // Try to parse the error body
+              if let Some(api_error) = error_str.split(": ").last() {
+                if let Ok(api_err) = serde_json::from_str::<ApiErrorResponse>(api_error) {
+                  let code = ErrorCode::from_status(status);
+                  return Error::Api {
+                    status,
+                    code,
+                    message: api_err.error.message,
+                  };
+                }
+              }
 
-  /// Handle API response and errors
-  async fn handle_response<T: for<'de> Deserialize<'de>>(
-    &self,
-    response: reqwest::Response,
-  ) -> Result<T, Error> {
-    if !response.status().is_success() {
-      let status = response.status();
-      let code = ErrorCode::from_status(status.as_u16());
+              // Return generic API error for known status codes
+              let code = ErrorCode::from_status(status);
+              return Error::Api {
+                status,
+                code,
+                message: error_str,
+              };
+            }
+          }
+        }
 
-      let error_text = response.text().await.unwrap_or_default();
-
-      // Try to parse as API error response
-      let message = if let Ok(api_error) = serde_json::from_str::<ApiErrorResponse>(&error_text) {
-        api_error.error.message
-      } else {
-        error_text
-      };
-
-      return Err(Error::Api {
-        status: status.as_u16(),
-        code,
-        message,
-      });
-    }
-
-    response.json().await.map_err(Into::into)
+        // Convert to anyhow error
+        Error::Other(anyhow::Error::msg(error_str))
+      })
   }
 }
 

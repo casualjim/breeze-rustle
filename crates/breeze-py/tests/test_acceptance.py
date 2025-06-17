@@ -179,7 +179,7 @@ class TestTokenizerTypes:
         """Should support character-based chunking"""
         content = "def test(): pass"
         chunker = SemanticChunker(
-            max_chunk_size=100, tokenizer=TokenizerType.CHARACTERS
+            max_chunk_size=100, tokenizer_type=TokenizerType.CHARACTERS
         )
         chunk_stream = await chunker.chunk_code(content, "Python")
 
@@ -193,7 +193,9 @@ class TestTokenizerTypes:
     async def test_tiktoken_tokenizer(self):
         """Should support tiktoken tokenizer"""
         content = "def test(): pass"
-        chunker = SemanticChunker(max_chunk_size=100, tokenizer=TokenizerType.TIKTOKEN)
+        chunker = SemanticChunker(
+            max_chunk_size=100, tokenizer_type=TokenizerType.TIKTOKEN
+        )
         chunk_stream = await chunker.chunk_code(content, "Python")
 
         chunks = []
@@ -208,8 +210,8 @@ class TestTokenizerTypes:
         content = "def test(): pass"
         chunker = SemanticChunker(
             max_chunk_size=100,
-            tokenizer=TokenizerType.HUGGINGFACE,
-            hf_model="bert-base-uncased",
+            tokenizer_type=TokenizerType.HUGGINGFACE,
+            tokenizer_name="bert-base-uncased",
         )
         chunk_stream = await chunker.chunk_code(content, "Python")
 
@@ -221,8 +223,8 @@ class TestTokenizerTypes:
 
     def test_huggingface_without_model_fails(self):
         """Should fail when HuggingFace tokenizer is used without model"""
-        with pytest.raises(ValueError, match="HUGGINGFACE requires hf_model"):
-            SemanticChunker(tokenizer=TokenizerType.HUGGINGFACE)
+        with pytest.raises(ValueError, match="HUGGINGFACE requires tokenizer_name"):
+            SemanticChunker(tokenizer_type=TokenizerType.HUGGINGFACE)
 
 
 class TestMetadataExtraction:

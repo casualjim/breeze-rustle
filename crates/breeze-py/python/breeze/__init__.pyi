@@ -67,22 +67,23 @@ class SemanticChunker:
     def __init__(
         self,
         max_chunk_size: Optional[int] = None,
-        tokenizer: Optional[TokenizerType] = None,
-        hf_model: Optional[str] = None,
+        tokenizer_type: Optional[TokenizerType] = None,
+        tokenizer_name: Optional[str] = None,
     ) -> None:
         """
         Initialize a new SemanticChunker.
 
         Args:
             max_chunk_size: Maximum chunk size in tokens/characters (default: 1500)
-            tokenizer: Tokenization method to use:
+            tokenizer_type: Tokenization method to use:
                 - TokenizerType.CHARACTERS (default): Character-based chunking
-                - TokenizerType.TIKTOKEN: OpenAI's tiktoken (cl100k_base) tokenizer
-                - TokenizerType.HUGGINGFACE: HuggingFace tokenizer (requires hf_model)
-            hf_model: HuggingFace model name (required when tokenizer is TokenizerType.HUGGINGFACE)
+                - TokenizerType.TIKTOKEN: OpenAI's tiktoken (eg. cl100k_base) tokenizer
+                - TokenizerType.HUGGINGFACE: HuggingFace tokenizer (requires tokenizer_name)
+            tokenizer_name: Tokenizer name or HuggingFace model name (required if tokenizer is HUGGINGFACE or TIKTOKEN)
 
         Raises:
-            ValueError: If TokenizerType.HUGGINGFACE is used without hf_model
+            ValueError: If TokenizerType.HUGGINGFACE is used without tokenizer_name
+            ValueError: If TokenizerType.TIKTOKEN is used without tokenizer_name
             RuntimeError: If tokenizer initialization fails
         """
         ...
@@ -156,8 +157,8 @@ class SemanticChunker:
         self,
         path: str,
         max_chunk_size: Optional[int] = None,
-        tokenizer: Optional[TokenizerType] = None,
-        hf_model: Optional[str] = None,
+        tokenizer_type: Optional[TokenizerType] = None,
+        tokenizer_name: Optional[str] = None,
         max_parallel: Optional[int] = None,
     ) -> Coroutine[Any, Any, ProjectWalker]:
         """
@@ -166,8 +167,8 @@ class SemanticChunker:
         Args:
             path: Path to the project directory
             max_chunk_size: Maximum chunk size (defaults to instance setting)
-            tokenizer: Tokenizer type (defaults to instance setting)
-            hf_model: HuggingFace model name (required if tokenizer is HUGGINGFACE)
+            tokenizer_type: Tokenizer type (defaults to instance setting)
+            tokenizer_name: Tokenizer name or HuggingFace model name (required if tokenizer is HUGGINGFACE or TIKTOKEN)
             max_parallel: Maximum number of files to process in parallel (default: 8)
 
         Returns:

@@ -8,6 +8,7 @@ use std::str::FromStr;
 pub enum EmbeddingProvider {
   Local,
   Voyage,
+  OpenAILike,
 }
 
 impl FromStr for EmbeddingProvider {
@@ -17,8 +18,9 @@ impl FromStr for EmbeddingProvider {
     match s.to_lowercase().as_str() {
       "local" => Ok(EmbeddingProvider::Local),
       "voyage" => Ok(EmbeddingProvider::Voyage),
+      "openailike" | "openai-like" | "openai_like" => Ok(EmbeddingProvider::OpenAILike),
       _ => Err(format!(
-        "Invalid embedding provider: {}. Use 'local' or 'voyage'",
+        "Invalid embedding provider: {}. Use 'local', 'voyage', or 'openailike'",
         s
       )),
     }
@@ -37,6 +39,45 @@ pub struct VoyageConfig {
   /// Model to use
   #[serde(default = "default_voyage_model")]
   pub model: VoyageModel,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct OpenAILikeConfig {
+  /// API base URL (e.g., "https://api.openai.com/v1" or "http://localhost:8080/v1")
+  pub api_base: String,
+
+  /// Optional API key for authentication
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub api_key: Option<String>,
+
+  /// Model name to use (e.g., "text-embedding-ada-002")
+  pub model: String,
+
+  /// Embedding dimension
+  pub embedding_dim: usize,
+
+  /// Maximum context length in tokens
+  pub context_length: usize,
+
+  /// Maximum batch size for API calls
+  pub max_batch_size: usize,
+
+  /// Tokenizer configuration
+  pub tokenizer: breeze_chunkers::Tokenizer,
+
+  /// Rate limiting: requests per minute
+  pub requests_per_minute: u32,
+
+  /// Rate limiting: tokens per minute
+  pub tokens_per_minute: u32,
+
+  /// Maximum concurrent requests (defaults to 50)
+  #[serde(default = "default_max_concurrent_requests")]
+  pub max_concurrent_requests: usize,
+}
+
+fn default_max_concurrent_requests() -> usize {
+  50
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -61,6 +102,14 @@ pub struct Config {
   #[serde(skip_serializing_if = "Option::is_none")]
   pub voyage: Option<VoyageConfig>,
 
+  /// OpenAI-like API configurations (keyed by provider name)
+  #[serde(default, skip_serializing_if = "std::collections::HashMap::is_empty")]
+  pub openai_providers: std::collections::HashMap<String, OpenAILikeConfig>,
+
+  /// Selected OpenAI-like provider (must match a key in openai_providers)
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub openai_provider: Option<String>,
+
   /// Maximum chunk size in tokens
   #[serde(default = "default_max_chunk_size")]
   pub max_chunk_size: usize,
@@ -76,6 +125,14 @@ pub struct Config {
   /// Batch size for embedding operations
   #[serde(default = "default_batch_size")]
   pub batch_size: usize,
+
+  /// Number of threads dedicated to processing large files
+  #[serde(default = "default_large_file_threads")]
+  pub large_file_threads: Option<usize>,
+
+  /// Number of concurrent embedding workers for remote providers
+  #[serde(default = "default_embedding_workers")]
+  pub embedding_workers: usize,
 }
 
 fn default_database_path() -> PathBuf {
@@ -118,6 +175,14 @@ fn default_batch_size() -> usize {
   50 // Default batch size for embedding operations
 }
 
+fn default_large_file_threads() -> Option<usize> {
+  Some(4) // Default 4 threads for large files
+}
+
+fn default_embedding_workers() -> usize {
+  4 // Default 4 workers for remote embedding providers
+}
+
 impl Default for Config {
   fn default() -> Self {
     Self {
@@ -126,10 +191,14 @@ impl Default for Config {
       embedding_provider: default_embedding_provider(),
       model: default_model(),
       voyage: None,
+      openai_providers: std::collections::HashMap::new(),
+      openai_provider: None,
       max_chunk_size: default_max_chunk_size(),
       max_file_size: default_max_file_size(),
       max_parallel_files: default_max_parallel_files(),
       batch_size: default_batch_size(),
+      large_file_threads: default_large_file_threads(),
+      embedding_workers: default_embedding_workers(),
     }
   }
 }
@@ -154,7 +223,7 @@ impl Config {
         if let Some(voyage_config) = &self.voyage {
           // Get model context length
           let context_length = voyage_config.model.context_length();
-          
+
           // Base chunk size on tier and model
           let chunk_size = match voyage_config.tier {
             Tier::Free => {
@@ -176,7 +245,7 @@ impl Config {
               16384.min((context_length * 4) / 5)
             }
           };
-          
+
           // Override with user-specified value if it's not the default
           if self.max_chunk_size != default_max_chunk_size() {
             self.max_chunk_size
@@ -191,6 +260,11 @@ impl Config {
         // For local models, use the configured value
         self.max_chunk_size
       }
+      EmbeddingProvider::OpenAILike => {
+        // For OpenAI-like providers, use the configured value
+        // The actual limits depend on the specific provider
+        self.max_chunk_size
+      }
     }
   }
 
@@ -203,10 +277,14 @@ impl Config {
       embedding_provider: EmbeddingProvider::Local,
       model: "sentence-transformers/all-MiniLM-L6-v2".to_string(),
       voyage: None,
+      openai_providers: std::collections::HashMap::new(),
+      openai_provider: None,
       max_chunk_size: 512,
       max_file_size: Some(1024 * 1024), // 1MB
       max_parallel_files: 2,
-      batch_size: 2, // Small batch size for tests
+      batch_size: 2,               // Small batch size for tests
+      large_file_threads: Some(2), // Small number for tests
+      embedding_workers: 1,        // Small number for tests
     }
   }
 }
@@ -258,24 +336,44 @@ mod tests {
       max_chunk_size: default_max_chunk_size(), // Use default to trigger calculation
       ..Default::default()
     };
-    assert_eq!(config.optimal_chunk_size(), 2048, "Free tier should use 2k chunks");
+    assert_eq!(
+      config.optimal_chunk_size(),
+      2048,
+      "Free tier should use 2k chunks"
+    );
 
     // Test Tier 1
     config.voyage.as_mut().unwrap().tier = Tier::Tier1;
-    assert_eq!(config.optimal_chunk_size(), 4096, "Tier 1 should use 4k chunks");
+    assert_eq!(
+      config.optimal_chunk_size(),
+      4096,
+      "Tier 1 should use 4k chunks"
+    );
 
     // Test Tier 2
     config.voyage.as_mut().unwrap().tier = Tier::Tier2;
-    assert_eq!(config.optimal_chunk_size(), 8000, "Tier 2 should use 8k chunks");
+    assert_eq!(
+      config.optimal_chunk_size(),
+      8000,
+      "Tier 2 should use 8k chunks"
+    );
 
     // Test Tier 3
     config.voyage.as_mut().unwrap().tier = Tier::Tier3;
-    assert_eq!(config.optimal_chunk_size(), 16384, "Tier 3 should use 16k chunks");
+    assert_eq!(
+      config.optimal_chunk_size(),
+      16384,
+      "Tier 3 should use 16k chunks"
+    );
 
     // Test with voyage-law-2 (16k context)
     config.voyage.as_mut().unwrap().model = VoyageModel::VoyageLaw2;
     config.voyage.as_mut().unwrap().tier = Tier::Tier3;
-    assert_eq!(config.optimal_chunk_size(), 12800, "Tier 3 with 16k model should cap at 80% of context");
+    assert_eq!(
+      config.optimal_chunk_size(),
+      12800,
+      "Tier 3 with 16k model should cap at 80% of context"
+    );
   }
 
   #[test]
@@ -290,7 +388,11 @@ mod tests {
       max_chunk_size: 1000, // User-specified value
       ..Default::default()
     };
-    assert_eq!(config.optimal_chunk_size(), 1000, "Should respect user override");
+    assert_eq!(
+      config.optimal_chunk_size(),
+      1000,
+      "Should respect user override"
+    );
   }
 
   #[test]
@@ -300,6 +402,10 @@ mod tests {
       max_chunk_size: 1024,
       ..Default::default()
     };
-    assert_eq!(config.optimal_chunk_size(), 1024, "Local provider should use configured size");
+    assert_eq!(
+      config.optimal_chunk_size(),
+      1024,
+      "Local provider should use configured size"
+    );
   }
 }

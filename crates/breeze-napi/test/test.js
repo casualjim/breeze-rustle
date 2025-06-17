@@ -151,7 +151,7 @@ test('should support character-based chunking', async () => {
 
 test('should support tiktoken tokenizer', async () => {
     const content = "def test(): pass";
-    const chunker = new SemanticChunker(100, TokenizerType.Tiktoken);
+    const chunker = new SemanticChunker(100, TokenizerType.Tiktoken, "cl100k_base");
     const chunks = [];
 
     for await (const chunk of chunker.chunkCode(content, "Python")) {
@@ -176,7 +176,7 @@ test('should support HuggingFace tokenizer with model', async () => {
 test('should fail when HuggingFace tokenizer is used without model', () => {
     assert.throws(() => {
         new SemanticChunker(100, TokenizerType.HuggingFace);
-    }, /HuggingFace requires hfModel/);
+    }, /HuggingFace requires tokenizerName/);
 });
 
 // Test Metadata Extraction
@@ -527,7 +527,8 @@ test('should walk with different tokenizers', async (t) => {
 
         for (const tokenizer of [TokenizerType.Characters, TokenizerType.Tiktoken]) {
             const chunks = [];
-            for await (const chunk of walkProject(tempDir, 200, tokenizer)) {
+            const tokenizerName = tokenizer === TokenizerType.Tiktoken ? "cl100k_base" : undefined;
+            for await (const chunk of walkProject(tempDir, 200, tokenizer, tokenizerName)) {
                 chunks.push(chunk);
             }
 

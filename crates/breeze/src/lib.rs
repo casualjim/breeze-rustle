@@ -9,6 +9,7 @@ mod indexer;
 mod logging;
 mod models;
 mod pipeline;
+mod reqwestx;
 mod sinks;
 
 pub use app::App;

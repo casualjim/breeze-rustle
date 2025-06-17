@@ -1,3 +1,13 @@
+#![allow(unused, dead_code)]
+#![allow(clippy::upper_case_acronyms)]
+#![allow(clippy::needless_return)]
+#![allow(clippy::excessive_precision)]
+#![allow(clippy::useless_conversion)]
+#![allow(clippy::unwrap_or_default)]
+#![allow(clippy::manual_range_contains)]
+#![allow(clippy::let_and_return)]
+#![allow(clippy::manual_contains)]
+
 mod bert;
 mod model_info;
 mod ort_bert;
@@ -104,9 +114,9 @@ impl LocalEmbeddingProvider {
     // Ensure ONNX runtime is initialized
     crate::ensure_ort_initialized()?;
 
-    // For now, we use AllMiniLM-L6-v2 as the default
+    // For now, we use BGESmallENV15 as the default
     // In the future, we can map model_name to different ONNX models
-    let embedder = OrtBertEmbedder::new(Some(ONNXModel::AllMiniLML12V2), None, None, None, None)?;
+    let embedder = OrtBertEmbedder::new(Some(ONNXModel::BGESmallENV15), None, None, None, None)?;
 
     // Get embedding dimension by embedding a test string
     let test_embeddings = embedder

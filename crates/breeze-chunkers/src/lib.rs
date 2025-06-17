@@ -28,22 +28,43 @@ pub use crate::types::{
 pub use crate::walker::{WalkOptions, walk_project};
 
 /// Tokenizer type for chunk size calculation
-#[derive(Clone, Debug)]
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "type", rename_all = "lowercase")]
 pub enum Tokenizer {
   /// Simple character-based tokenization
+  #[serde(rename = "characters")]
   Characters,
-  /// OpenAI tiktoken tokenizer (cl100k_base)
-  Tiktoken,
+  /// OpenAI tiktoken tokenizer with encoding name (e.g., "cl100k_base", "p50k_base")
+  #[serde(rename = "tiktoken")]
+  Tiktoken(#[serde(rename = "encoding")] String),
+  /// Pre-loaded tiktoken tokenizer (internal use only, not exposed to bindings)
+  #[doc(hidden)]
+  #[serde(skip)]
+  PreloadedTiktoken(std::sync::Arc<tiktoken_rs::CoreBPE>),
   /// HuggingFace tokenizer with specified model
-  HuggingFace(String),
+  #[serde(rename = "huggingface")]
+  HuggingFace(#[serde(rename = "model_id")] String),
   /// Pre-loaded HuggingFace tokenizer (internal use only, not exposed to bindings)
   #[doc(hidden)]
+  #[serde(skip)]
   PreloadedHuggingFace(std::sync::Arc<tokenizers::Tokenizer>),
 }
 
 impl Default for Tokenizer {
   fn default() -> Self {
     Self::Characters
+  }
+}
+
+impl std::fmt::Debug for Tokenizer {
+  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    match self {
+      Tokenizer::Characters => write!(f, "Characters"),
+      Tokenizer::Tiktoken(name) => write!(f, "Tiktoken({})", name),
+      Tokenizer::PreloadedTiktoken(_) => write!(f, "PreloadedTiktoken"),
+      Tokenizer::HuggingFace(model) => write!(f, "HuggingFace({})", model),
+      Tokenizer::PreloadedHuggingFace(_) => write!(f, "PreloadedHuggingFace"),
+    }
   }
 }
 

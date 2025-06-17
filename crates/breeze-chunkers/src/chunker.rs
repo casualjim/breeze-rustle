@@ -34,11 +34,26 @@ impl InnerChunker {
   pub fn new(max_chunk_size: usize, tokenizer_type: Tokenizer) -> Result<Self, ChunkError> {
     let chunk_sizer = match tokenizer_type {
       Tokenizer::Characters => ConcreteSizer::Characters(text_splitter::Characters),
-      Tokenizer::Tiktoken => {
-        let tiktoken = tiktoken_rs::cl100k_base()
-          .map_err(|e| ChunkError::ParseError(format!("Failed to create tiktoken: {}", e)))?;
+      Tokenizer::Tiktoken(encoding) => {
+        let tiktoken = match encoding.as_str() {
+          "cl100k_base" => tiktoken_rs::cl100k_base(),
+          "p50k_base" => tiktoken_rs::p50k_base(),
+          "p50k_edit" => tiktoken_rs::p50k_edit(),
+          "r50k_base" => tiktoken_rs::r50k_base(),
+          "o200k_base" => tiktoken_rs::o200k_base(),
+          _ => {
+            return Err(ChunkError::ParseError(format!(
+              "Unknown tiktoken encoding: {}",
+              encoding
+            )));
+          }
+        }
+        .map_err(|e| ChunkError::ParseError(format!("Failed to create tiktoken: {}", e)))?;
         ConcreteSizer::Tiktoken(tiktoken)
       }
+      Tokenizer::PreloadedTiktoken(tiktoken) => ConcreteSizer::Tiktoken(
+        std::sync::Arc::try_unwrap(tiktoken).unwrap_or_else(|arc| (*arc).clone()),
+      ),
       Tokenizer::HuggingFace(model) => {
         let tokenizer = tokenizers::tokenizer::Tokenizer::from_pretrained(&model, None)
           .map_err(|e| ChunkError::ParseError(format!("Failed to load HF tokenizer: {}", e)))?;

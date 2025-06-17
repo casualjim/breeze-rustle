@@ -13,12 +13,14 @@ pub(crate) struct EmbeddedChunk {
 /// A batch of chunks ready for embedding
 #[derive(Debug)]
 pub(crate) struct ChunkBatch {
+  pub batch_id: usize,
   pub chunks: Vec<ProjectChunk>,
 }
 
 /// Embedded chunks with file path information
 #[derive(Debug, Clone)]
 pub(crate) struct EmbeddedChunkWithFile {
+  pub batch_id: usize,
   pub file_path: String,
   pub chunk: Chunk,
   pub embedding: Vec<f32>,

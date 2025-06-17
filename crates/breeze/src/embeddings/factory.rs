@@ -1,4 +1,7 @@
-use super::{EmbeddingProvider, local::LocalEmbeddingProvider, voyage::VoyageEmbeddingProvider};
+use super::{
+  EmbeddingProvider, local::LocalEmbeddingProvider, openailike::OpenAILikeEmbeddingProvider,
+  voyage::VoyageEmbeddingProvider,
+};
 use crate::config::{Config, EmbeddingProvider as EmbeddingProviderType};
 
 /// Create an embedding provider based on configuration
@@ -21,7 +24,25 @@ pub async fn create_embedding_provider(
         return Err("Voyage API key is required. Set BREEZE_VOYAGE_API_KEY or VOYAGE_API_KEY environment variable".into());
       }
 
-      let provider = VoyageEmbeddingProvider::new(voyage_config).await?;
+      let chunk_size = config.optimal_chunk_size();
+      let provider =
+        VoyageEmbeddingProvider::new(voyage_config, config.embedding_workers, chunk_size).await?;
+      Ok(Box::new(provider))
+    }
+    EmbeddingProviderType::OpenAILike => {
+      let provider_name = config
+        .openai_provider
+        .as_ref()
+        .ok_or("OpenAI provider name must be specified with openai_provider")?;
+
+      let openai_config = config.openai_providers.get(provider_name).ok_or_else(|| {
+        format!(
+          "OpenAI provider '{}' not found in openai_providers",
+          provider_name
+        )
+      })?;
+
+      let provider = OpenAILikeEmbeddingProvider::new(openai_config).await?;
       Ok(Box::new(provider))
     }
   }
