@@ -19,7 +19,7 @@ jobs:
     strategy:
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
-        python-version: ["3.10", "3.11", "3.12"]
+        python-version: ["3.11", "3.12"]
     steps:
       - uses: actions/checkout@v4
 
@@ -50,11 +50,6 @@ jobs:
         with:
           tool: nextest
 
-      - name: Install cargo-zigbuild
-        uses: taiki-e/install-action@v2
-        with:
-          tool: cargo-zigbuild
-
       - name: Install Node.js dependencies in breeze-napi
         run: |
           cd crates/breeze-napi && npm install
@@ -69,16 +64,15 @@ jobs:
 
       - name: Build Python package
         run: |
-          cd crates/breeze-py && maturin develop --release --zig
+          cd crates/breeze-py && uv run maturin develop --release --zig
 
       - name: Run Rust tests
         run: |
-          cargo zigbuild --release --workspace --exclude breeze-py --exclude breeze-napi
           cargo nextest run --workspace
 
       - name: Run Python tests
         run: |
-          cd crates/breeze-py && pytest -v
+          cd crates/breeze-py && uv run pytest -v
 
       - name: Run Node.js tests
         run: |
@@ -149,6 +143,7 @@ jobs:
         uses: arduino/setup-protoc@v3
         with:
           version: "25.x"
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
       - name: Build wheels
         uses: PyO3/maturin-action@v1
         with:
@@ -203,6 +198,7 @@ jobs:
         uses: arduino/setup-protoc@v3
         with:
           version: "25.x"
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
       - name: Build wheels
         uses: PyO3/maturin-action@v1
         with:
@@ -241,6 +237,7 @@ jobs:
         uses: arduino/setup-protoc@v3
         with:
           version: "25.x"
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
       - name: Build wheels
         uses: PyO3/maturin-action@v1
         with:
@@ -336,6 +333,7 @@ jobs:
         uses: arduino/setup-protoc@v3
         with:
           version: "25.x"
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Install dependencies
         run: cd crates/breeze-napi && npm install
