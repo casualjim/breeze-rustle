@@ -12,8 +12,6 @@ fn main() {
   rt.block_on(async_main());
   // Ensure all tasks are completed before exiting
   rt.shutdown_timeout(std::time::Duration::from_secs(10));
-  info!("Breeze indexing completed. Exiting gracefully.");
-  std::process::exit(0);
 }
 
 async fn async_main() {
@@ -21,6 +19,7 @@ async fn async_main() {
 
   // Load configuration
   let mut config = if let Some(config_path) = &cli.config {
+    // User specified a config path explicitly
     match breeze::Config::from_file(config_path) {
       Ok(cfg) => {
         info!("Loaded configuration from: {}", config_path.display());
@@ -37,7 +36,28 @@ async fn async_main() {
       }
     }
   } else {
-    breeze::Config::default()
+    // No config specified, try default location
+    match breeze::Config::default_config_path() {
+      Ok(default_path) if default_path.exists() => match breeze::Config::from_file(&default_path) {
+        Ok(cfg) => {
+          info!("Loaded configuration from: {}", default_path.display());
+          cfg
+        }
+        Err(e) => {
+          warn!(
+            "Failed to load config from {}: {}",
+            default_path.display(),
+            e
+          );
+          info!("Using default configuration");
+          breeze::Config::default()
+        }
+      },
+      _ => {
+        // No config file found, use defaults
+        breeze::Config::default()
+      }
+    }
   };
 
   match cli.command {
@@ -168,14 +188,60 @@ async fn async_main() {
       }
     }
 
-    Commands::Config { defaults } => {
-      let cfg = if defaults {
-        breeze::Config::default()
-      } else {
-        config
-      };
+    Commands::Init { force } => {
+      match breeze::Config::default_config_path() {
+        Ok(config_path) => {
+          // Check if config already exists
+          if config_path.exists() && !force {
+            error!(
+              "Configuration file already exists at: {}\nUse --force to overwrite",
+              config_path.display()
+            );
+            std::process::exit(1);
+          }
 
-      println!("{}", toml::to_string_pretty(&cfg).unwrap());
+          // Create config directory if it doesn't exist
+          if let Some(parent) = config_path.parent() {
+            if let Err(e) = std::fs::create_dir_all(parent) {
+              error!("Failed to create config directory: {}", e);
+              std::process::exit(1);
+            }
+          }
+
+          // Write the commented config file
+          let config_content = breeze::Config::generate_commented_config();
+          if let Err(e) = std::fs::write(&config_path, config_content) {
+            error!("Failed to write config file: {}", e);
+            std::process::exit(1);
+          }
+
+          println!(
+            "✅ Configuration file created at: {}",
+            config_path.display()
+          );
+          println!("\nYou can now:");
+          println!("  1. Edit the config file to customize settings");
+          println!("  2. Run 'breeze index /path/to/code' to start indexing");
+          println!("\nThe config file is heavily commented to help you get started!");
+        }
+        Err(e) => {
+          error!("Failed to determine config path: {}", e);
+          std::process::exit(1);
+        }
+      }
+    }
+
+    Commands::Config { defaults } => {
+      if defaults {
+        // Show the default configuration
+        println!(
+          "{}",
+          toml::to_string_pretty(&breeze::Config::default()).unwrap()
+        );
+      } else {
+        // Show the actual loaded configuration (which already factors in the config file)
+        println!("{}", toml::to_string_pretty(&config).unwrap());
+      }
     }
 
     Commands::Debug { command } => match command {
