@@ -6,12 +6,13 @@ use crate::{
 };
 use blake3::Hasher;
 use futures::{Stream, StreamExt};
-use ignore::{DirEntry, WalkBuilder, WalkState};
-use std::path::Path;
+use ignore::{DirEntry, WalkBuilder};
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
-use tracing::{debug, error};
+use tracing::{debug, error, info};
 
 /// Default ignore patterns embedded from extra-ignores file
 const DEFAULT_IGNORE_PATTERNS: &str = include_str!("../../../extra-ignores");
@@ -81,6 +82,7 @@ pub struct WalkOptions {
   pub tokenizer: Tokenizer,
   pub max_parallel: usize,
   pub max_file_size: Option<u64>,
+  pub large_file_threads: usize,
 }
 
 impl Default for WalkOptions {
@@ -90,6 +92,7 @@ impl Default for WalkOptions {
       tokenizer: Tokenizer::Characters,
       max_parallel: 4,
       max_file_size: Some(5 * 1024 * 1024), // 5MB default
+      large_file_threads: 4,
     }
   }
 }
@@ -102,8 +105,8 @@ pub fn walk_project(
   let path = path.as_ref().to_owned();
   let max_file_size = options.max_file_size;
 
-  // Create a channel for streaming results with buffer matching parallelism
-  let (tx, rx) = mpsc::channel::<Result<ProjectChunk, ChunkError>>(options.max_parallel);
+  // Create a channel for streaming results
+  let (tx, rx) = mpsc::channel::<Result<ProjectChunk, ChunkError>>(options.max_parallel * 2);
 
   // Create the chunker upfront
   let chunker = match InnerChunker::new(options.max_chunk_size, options.tokenizer) {
@@ -118,74 +121,244 @@ pub fn walk_project(
     }
   };
 
-  // Spawn blocking task for the walker
-  tokio::task::spawn_blocking(move || {
-    // Use tokio runtime handle to spawn async tasks from blocking context
-    let handle = tokio::runtime::Handle::current();
+  tokio::spawn(async move {
+    // Phase 1: Collect all files with their sizes
+    let file_entries = match collect_files_with_sizes(&path, max_file_size).await {
+      Ok(entries) => entries,
+      Err(e) => {
+        let _ = tx.send(Err(ChunkError::IoError(e))).await;
+        return;
+      }
+    };
 
-    // Build the walker with parallelism
+    if file_entries.is_empty() {
+      debug!("No files found to process");
+      return;
+    }
+
+    info!("Collected {} files for processing", file_entries.len());
+
+    // Sort by size (largest first)
+    let mut file_entries = file_entries;
+    file_entries.sort_by_key(|(_, size)| std::cmp::Reverse(*size));
+
+    // Log size distribution
+    let total_size: u64 = file_entries.iter().map(|(_, size)| size).sum();
+    let largest_size = file_entries.first().map(|(_, size)| *size).unwrap_or(0);
+    let smallest_size = file_entries.last().map(|(_, size)| *size).unwrap_or(0);
+    info!(
+      "File size distribution: {} files, total: {} MB, largest: {} KB, smallest: {} bytes",
+      file_entries.len(),
+      total_size / (1024 * 1024),
+      largest_size / 1024,
+      smallest_size
+    );
+
+    // Phase 2: Process files with dual-pool work-stealing
+    process_with_dual_pools(
+      file_entries,
+      chunker,
+      tx,
+      options.large_file_threads,
+      options.max_parallel,
+    )
+    .await;
+  });
+
+  ReceiverStream::new(rx)
+}
+
+/// Collect all files with their sizes
+async fn collect_files_with_sizes(
+  path: &Path,
+  max_file_size: Option<u64>,
+) -> Result<Vec<(PathBuf, u64)>, std::io::Error> {
+  // Use tokio's spawn_blocking for the walker
+  let path = path.to_owned();
+  let entries = tokio::task::spawn_blocking(move || {
+    let mut entries = Vec::new();
     let mut builder = WalkBuilder::new(&path);
 
-    // Add our default ignore patterns as a global gitignore file
+    // Add our default ignore patterns
     let default_ignore = get_default_ignore_file();
     if default_ignore.exists() {
       builder.add_ignore(default_ignore);
     }
 
     builder
-      .threads(options.max_parallel)
       .max_filesize(max_file_size)
       .filter_entry(should_process_entry)
       .add_custom_ignore_filename(".breezeignore");
 
-    let walker = builder.build_parallel();
+    for entry in builder.build().flatten() {
+      if let Some(file_type) = entry.file_type() {
+        if file_type.is_file() {
+          if let Ok(metadata) = entry.metadata() {
+            let size = metadata.len();
+            if size > 0 {
+              entries.push((entry.path().to_owned(), size));
+            }
+          }
+        }
+      }
+    }
+    entries
+  })
+  .await?;
 
-    let tx = Arc::new(tx);
+  Ok(entries)
+}
 
-    walker.run(|| {
-      let tx = tx.clone();
-      let chunker = chunker.clone();
-      let handle = handle.clone();
+/// Process files using dual-pool work-stealing approach
+async fn process_with_dual_pools(
+  file_entries: Vec<(PathBuf, u64)>,
+  chunker: Arc<InnerChunker>,
+  tx: mpsc::Sender<Result<ProjectChunk, ChunkError>>,
+  large_file_threads: usize,
+  small_file_threads: usize,
+) {
+  use std::collections::VecDeque;
+  use std::sync::Mutex;
 
-      Box::new(move |result| {
-        if let Ok(entry) = result {
-          let path = entry.path().to_owned();
-          let tx = tx.clone();
-          let chunker = chunker.clone();
+  // Create a deque that allows taking from both ends
+  let work_queue = Arc::new(Mutex::new(VecDeque::from(file_entries.clone())));
 
-          // Spawn async task on the runtime
-          handle.spawn(async move {
-            let mut stream = Box::pin(process_file(&path, chunker));
+  // Track total work and completed work
+  let total_files = file_entries.len();
+  let remaining_work = Arc::new(AtomicUsize::new(total_files));
+
+  info!(
+    "Starting dual-pool processing: {} total files, {} large file threads, {} small file threads",
+    total_files, large_file_threads, small_file_threads
+  );
+
+  // Spawn large file workers (take from front)
+  let mut handles = Vec::new();
+  for i in 0..large_file_threads {
+    let work_queue = work_queue.clone();
+    let chunker = chunker.clone();
+    let tx = tx.clone();
+    let remaining = remaining_work.clone();
+
+    let handle = tokio::spawn(async move {
+      debug!("Large file worker {} started", i);
+      let mut processed = 0;
+      let mut total_size_processed = 0u64;
+
+      loop {
+        // Take from the front (largest files)
+        let work_item = {
+          let mut queue = work_queue.lock().unwrap();
+          queue.pop_front()
+        };
+
+        match work_item {
+          Some((path, size)) => {
+            debug!(
+              "Large file worker {} processing: {} ({} KB)",
+              i,
+              path.display(),
+              size / 1024
+            );
+            total_size_processed += size;
+
+            let mut stream = Box::pin(process_file(&path, chunker.clone()));
             while let Some(result) = stream.next().await {
-              match result {
-                Ok(chunk) => {
-                  if tx.send(Ok(chunk)).await.is_err() {
-                    return; // Receiver dropped
-                  }
-                }
-                Err(e) => {
-                  // Log based on error type
-                  match &e {
-                    ChunkError::IoError(io_err)
-                      if io_err.kind() == std::io::ErrorKind::InvalidData =>
-                    {
-                      debug!("Skipping non-UTF8 file {}: {}", path.display(), e);
-                    }
-                    _ => {
-                      error!("Error processing {}: {}", path.display(), e);
-                    }
-                  }
-                }
+              if tx.send(result).await.is_err() {
+                debug!("Large file worker {} exiting: receiver dropped", i);
+                return;
               }
             }
-          });
-        }
-        WalkState::Continue
-      })
-    });
-  });
 
-  ReceiverStream::new(rx)
+            processed += 1;
+            let remaining_count = remaining.fetch_sub(1, Ordering::SeqCst) - 1;
+            if remaining_count % 100 == 0 && remaining_count > 0 {
+              debug!("Progress: {} files remaining", remaining_count);
+            }
+          }
+          None => {
+            debug!("Large file worker {} found empty queue, exiting", i);
+            break;
+          }
+        }
+      }
+
+      info!(
+        "Large file worker {} completed: processed {} files, {} MB total",
+        i,
+        processed,
+        total_size_processed / (1024 * 1024)
+      );
+    });
+    handles.push(handle);
+  }
+
+  // Spawn small file workers (take from back)
+  for i in 0..small_file_threads {
+    let work_queue = work_queue.clone();
+    let chunker = chunker.clone();
+    let tx = tx.clone();
+    let remaining = remaining_work.clone();
+
+    let handle = tokio::spawn(async move {
+      debug!("Small file worker {} started", i);
+      let mut processed = 0;
+      let mut total_size_processed = 0u64;
+
+      loop {
+        // Take from the back (smallest files)
+        let work_item = {
+          let mut queue = work_queue.lock().unwrap();
+          queue.pop_back()
+        };
+
+        match work_item {
+          Some((path, size)) => {
+            debug!(
+              "Small file worker {} processing: {} ({} bytes)",
+              i,
+              path.display(),
+              size
+            );
+            total_size_processed += size;
+
+            let mut stream = Box::pin(process_file(&path, chunker.clone()));
+            while let Some(result) = stream.next().await {
+              if tx.send(result).await.is_err() {
+                debug!("Small file worker {} exiting: receiver dropped", i);
+                return;
+              }
+            }
+
+            processed += 1;
+            let remaining_count = remaining.fetch_sub(1, Ordering::SeqCst) - 1;
+            if remaining_count > 0 && (remaining_count % 100 == 0 || remaining_count < 10) {
+              debug!("Progress: {} files remaining", remaining_count);
+            }
+          }
+          None => {
+            debug!("Small file worker {} found empty queue, exiting", i);
+            break;
+          }
+        }
+      }
+
+      info!(
+        "Small file worker {} completed: processed {} files, {} KB total",
+        i,
+        processed,
+        total_size_processed / 1024
+      );
+    });
+    handles.push(handle);
+  }
+
+  // Wait for all workers to complete
+  for handle in handles {
+    let _ = handle.await;
+  }
+
+  info!("All files processed. Total: {}", total_files);
 }
 
 /// Process a single file and yield chunks as a stream
@@ -521,6 +694,7 @@ python -m pytest tests/
         tokenizer: Tokenizer::Characters,
         max_parallel: 4,
         max_file_size: None,
+        large_file_threads: 2,
       },
     );
 
@@ -577,6 +751,7 @@ python -m pytest tests/
         tokenizer: Tokenizer::Characters,
         max_parallel: 2,
         max_file_size: None,
+        large_file_threads: 2,
       },
     );
 
@@ -620,6 +795,7 @@ python -m pytest tests/
         tokenizer: Tokenizer::Characters,
         max_parallel: 4,
         max_file_size: None,
+        large_file_threads: 2,
       },
     );
 
@@ -645,6 +821,7 @@ python -m pytest tests/
           tokenizer: Tokenizer::Characters,
           max_parallel,
           max_file_size: None,
+          large_file_threads: 2,
         },
       );
 

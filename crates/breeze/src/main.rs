@@ -176,9 +176,8 @@ async fn async_main() {
         // Parse tokenizer string
         let tokenizer_obj = if tokenizer == "characters" {
           Tokenizer::Characters
-        } else if let Some(_model) = tokenizer.strip_prefix("tiktoken:") {
-          // For now, tiktoken only supports cl100k_base
-          Tokenizer::Tiktoken
+        } else if let Some(encoding) = tokenizer.strip_prefix("tiktoken:") {
+          Tokenizer::Tiktoken(encoding.to_string())
         } else if let Some(model) = tokenizer.strip_prefix("hf:") {
           Tokenizer::HuggingFace(model.to_string())
         } else {
@@ -198,6 +197,7 @@ async fn async_main() {
             tokenizer: tokenizer_obj,
             max_parallel,
             max_file_size,
+            large_file_threads: 4,
           },
         );
 

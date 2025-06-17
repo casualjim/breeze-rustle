@@ -229,21 +229,29 @@ impl SemanticChunker {
   #[napi(constructor)]
   pub fn new(
     max_chunk_size: Option<i32>,
-    tokenizer: Option<TokenizerType>,
-    hf_model: Option<String>,
+    tokenizer_type: Option<TokenizerType>,
+    tokenizer_name: Option<String>,
   ) -> Result<Self> {
     let max_chunk_size = max_chunk_size.unwrap_or(1500) as usize;
 
     // Convert JS TokenizerType to Rust Tokenizer
-    let tokenizer_type = match tokenizer.unwrap_or(TokenizerType::Characters) {
+    let tokenizer_type = match tokenizer_type.unwrap_or(TokenizerType::Characters) {
       TokenizerType::Characters => RustTokenizer::Characters,
-      TokenizerType::Tiktoken => RustTokenizer::Tiktoken,
-      TokenizerType::HuggingFace => match hf_model {
+      TokenizerType::Tiktoken => match tokenizer_name {
+        Some(model) => RustTokenizer::Tiktoken(model),
+        None => {
+          return Err(Error::new(
+            Status::InvalidArg,
+            "TokenizerType.Tiktoken requires tokenizerName parameter".to_string(),
+          ));
+        }
+      },
+      TokenizerType::HuggingFace => match tokenizer_name {
         Some(model) => RustTokenizer::HuggingFace(model),
         None => {
           return Err(Error::new(
             Status::InvalidArg,
-            "TokenizerType.HuggingFace requires hfModel parameter".to_string(),
+            "TokenizerType.HuggingFace requires tokenizerName parameter".to_string(),
           ));
         }
       },
@@ -334,23 +342,31 @@ impl SemanticChunker {
 pub async fn walk_project(
   path: String,
   max_chunk_size: Option<i32>,
-  tokenizer: Option<TokenizerType>,
-  hf_model: Option<String>,
+  tokenizer_type: Option<TokenizerType>,
+  tokenizer_name: Option<String>,
   max_parallel: Option<i32>,
 ) -> Result<ProjectChunkIterator> {
   let max_chunk_size = max_chunk_size.unwrap_or(1500) as usize;
   let max_parallel = max_parallel.unwrap_or(8) as usize;
 
   // Convert JS TokenizerType to Rust Tokenizer
-  let tokenizer_type = match tokenizer.unwrap_or(TokenizerType::Characters) {
+  let tokenizer_type = match tokenizer_type.unwrap_or(TokenizerType::Characters) {
     TokenizerType::Characters => RustTokenizer::Characters,
-    TokenizerType::Tiktoken => RustTokenizer::Tiktoken,
-    TokenizerType::HuggingFace => match hf_model {
+    TokenizerType::Tiktoken => match tokenizer_name {
+      Some(model) => RustTokenizer::Tiktoken(model),
+      None => {
+        return Err(Error::new(
+          Status::InvalidArg,
+          "TokenizerType.Tiktoken requires tokenizerName parameter".to_string(),
+        ));
+      }
+    },
+    TokenizerType::HuggingFace => match tokenizer_name {
       Some(model) => RustTokenizer::HuggingFace(model),
       None => {
         return Err(Error::new(
           Status::InvalidArg,
-          "TokenizerType.HuggingFace requires hfModel parameter".to_string(),
+          "TokenizerType.HuggingFace requires tokenizerName parameter".to_string(),
         ));
       }
     },

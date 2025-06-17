@@ -1,5 +1,4 @@
 use serde::{Deserialize, Serialize};
-use std::error::Error as StdError;
 use thiserror::Error;
 
 /// Voyage AI error codes from their documentation
@@ -59,9 +58,6 @@ pub enum Error {
   #[error("Network error: {0}")]
   Network(#[from] reqwest::Error),
 
-  #[error("Middleware error: {0}")]
-  Middleware(#[from] reqwest_middleware::Error),
-
   #[error("JSON error: {0}")]
   Json(#[from] serde_json::Error),
 
@@ -83,19 +79,6 @@ impl Error {
       Self::Network(e) => {
         // Network timeouts and connection errors are retryable
         e.is_timeout() || e.is_connect()
-      }
-      Self::Middleware(e) => {
-        // Middleware errors can contain network errors
-        if let Some(source) = e.source() {
-          // Try to downcast to reqwest error
-          if let Some(req_err) = source.downcast_ref::<reqwest::Error>() {
-            req_err.is_timeout() || req_err.is_connect()
-          } else {
-            false
-          }
-        } else {
-          false
-        }
       }
       Self::RateLimit(_) => true,
       _ => false,

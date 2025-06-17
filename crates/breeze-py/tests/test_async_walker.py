@@ -163,7 +163,7 @@ function greet(name) {
     async def test_walker_with_different_tokenizers(self, test_project_dir):
         """Test walker with different tokenizer types."""
         for tokenizer in [TokenizerType.CHARACTERS, TokenizerType.TIKTOKEN]:
-            chunker = SemanticChunker(max_chunk_size=200, tokenizer=tokenizer)
+            chunker = SemanticChunker(max_chunk_size=200, tokenizer_type=tokenizer)
             walker = await chunker.walk_project(test_project_dir)
 
             chunks = []

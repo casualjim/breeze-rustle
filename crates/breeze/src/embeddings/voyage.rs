@@ -7,7 +7,7 @@ use super::{
   batching::{BatchingStrategy, TokenAwareBatchingStrategy},
 };
 use crate::aiproviders::voyage::{
-  Config as VoyageClientConfig, EmbeddingModel, EmbeddingRequest, Tier, VoyageClient, new_client,
+  Config as VoyageClientConfig, EmbeddingModel, EmbeddingRequest, VoyageClient, new_client,
 };
 use crate::config::VoyageConfig;
 
@@ -16,11 +16,14 @@ pub struct VoyageEmbeddingProvider {
   client: Arc<dyn VoyageClient>,
   model: EmbeddingModel,
   tokenizer: Arc<Tokenizer>,
-  tier: Tier,
 }
 
 impl VoyageEmbeddingProvider {
-  pub async fn new(config: &VoyageConfig) -> Result<Self, Box<dyn std::error::Error>> {
+  pub async fn new(
+    config: &VoyageConfig,
+    _worker_count: usize,
+    _chunk_size: usize,
+  ) -> Result<Self, Box<dyn std::error::Error>> {
     let client_config = VoyageClientConfig::new(config.api_key.clone(), config.tier, config.model);
 
     let client = new_client(client_config)?;
@@ -34,7 +37,6 @@ impl VoyageEmbeddingProvider {
       client: Arc::new(client),
       model: config.model,
       tokenizer: Arc::new(tokenizer),
-      tier: config.tier,
     })
   }
 }
@@ -61,12 +63,7 @@ impl EmbeddingProvider for VoyageEmbeddingProvider {
         if let Some(count) = input.token_count {
           count as u32
         } else {
-          // Count tokens using the tokenizer
-          self
-            .tokenizer
-            .encode(input.text, false)
-            .map(|encoding| encoding.len() as u32)
-            .unwrap_or_else(|_| (input.text.len() / 4) as u32) // Fallback estimate
+          unreachable!("Token count should be provided by batching strategy")
         }
       })
       .sum();
@@ -98,18 +95,22 @@ impl EmbeddingProvider for VoyageEmbeddingProvider {
   }
 
   fn create_batching_strategy(&self) -> Box<dyn BatchingStrategy> {
-    // Calculate safe token limit (90% of tier limit divided by concurrent requests)
-    let tokens_per_minute = self.tier.safe_tokens_per_minute(self.model);
-    let max_concurrent = 4; // Could be configurable
-    let max_tokens_per_batch = tokens_per_minute / (max_concurrent * 60); // Per second rate
+    // Use conservative batch sizes to avoid rate limits
+    // Python uses 80% safety margin on these limits
+    const MAX_TOKENS_PER_BATCH: usize = 96_000;
+    const MAX_TEXTS_PER_BATCH: usize = 100;
 
     Box::new(TokenAwareBatchingStrategy::new(
-      max_tokens_per_batch as usize,
-      self.model.max_batch_size(),
+      MAX_TOKENS_PER_BATCH,
+      MAX_TEXTS_PER_BATCH,
     ))
   }
 
   fn tokenizer(&self) -> Option<Arc<tokenizers::Tokenizer>> {
     Some(self.tokenizer.clone())
+  }
+
+  fn is_remote(&self) -> bool {
+    true
   }
 }

@@ -1,0 +1,49 @@
+# Example configuration for OpenAI-like embedding providers
+
+database_path = "./embeddings.db"
+table_name = "code_files"
+embedding_provider = "openailike"
+openai_provider = "openai"  # Must match a key in openai_providers
+
+# Define multiple OpenAI-compatible providers
+[openai_providers.openai]
+api_base = "https://api.openai.com/v1"
+api_key = "sk-..."  # Or set via OPENAI_API_KEY env var
+model = "text-embedding-3-small"
+embedding_dim = 1536
+context_length = 8191
+max_batch_size = 2048
+requests_per_minute = 3000
+tokens_per_minute = 1000000
+
+[openai_providers.openai.tokenizer]
+type = "tiktoken"
+encoding = "cl100k_base"
+
+[openai_providers.local_llamacpp]
+api_base = "http://localhost:8080/v1"
+# No API key needed for local server
+model = "nomic-embed-text"
+embedding_dim = 768
+context_length = 8192
+max_batch_size = 512
+requests_per_minute = 10000  # Local server, high limit
+tokens_per_minute = 10000000
+
+[openai_providers.local_llamacpp.tokenizer]
+type = "huggingface"
+model_id = "nomic-ai/nomic-embed-text-v1.5"
+
+[openai_providers.anyscale]
+api_base = "https://api.endpoints.anyscale.com/v1"
+api_key = "esecret_..."  # Or set via ANYSCALE_API_KEY env var
+model = "thenlper/gte-large"
+embedding_dim = 1024
+context_length = 512
+max_batch_size = 512
+requests_per_minute = 1000
+tokens_per_minute = 500000
+
+[openai_providers.anyscale.tokenizer]
+type = "huggingface"
+model_id = "thenlper/gte-large"

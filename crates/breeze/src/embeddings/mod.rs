@@ -5,6 +5,7 @@ use std::sync::Arc;
 pub mod batching;
 pub mod factory;
 pub mod local;
+pub mod openailike;
 pub mod voyage;
 
 /// Input for embedding a single item (borrows text to avoid cloning)
@@ -36,4 +37,9 @@ pub trait EmbeddingProvider: Send + Sync {
 
   /// Get the HuggingFace tokenizer for this provider (if applicable)
   fn tokenizer(&self) -> Option<Arc<tokenizers::Tokenizer>>;
+
+  /// Whether this provider is remote (network-based) or local
+  fn is_remote(&self) -> bool {
+    false // Default to local
+  }
 }
