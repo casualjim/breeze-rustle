@@ -58,26 +58,6 @@ test-crate crate:
 watch-test:
     cargo watch -x "nextest run"
 
-# Run benchmarks
-bench:
-    cargo bench
-
-# Check code (lint, format, clippy)
-check:
-    cargo check --workspace
-    cargo fmt --all -- --check
-    cargo clippy --workspace --all-targets -- -D warnings
-
-# Format code
-fmt:
-    cargo fmt --all
-
-# Fix common issues
-fix:
-    cargo fix --workspace --allow-dirty --allow-staged
-    cargo clippy --workspace --all-targets --fix -- -D warnings
-    cargo fmt --all
-
 # Clean build artifacts
 clean:
     cargo clean
@@ -109,9 +89,6 @@ docs:
 
 # CI-related commands
 
-# Run CI checks locally
-ci-check: check test
-
 # Build wheels for Python (requires maturin)
 build-wheels:
     cd crates/breeze-py && maturin build --release --zig
@@ -138,27 +115,6 @@ loc:
 # List all todos in the codebase
 todos:
     rg -i "todo|fixme|hack|xxx" --type rust --type python --type javascript
-
-# Grammar-specific commands
-
-# Fetch latest nvim-treesitter queries
-fetch-queries:
-    python tools/fetch-queries
-
-# Build grammars for all platforms (requires zig)
-build-all-grammars:
-    ./tools/build-grammars --all-platforms
-
-# Language-specific test commands
-
-# Test specific language support
-test-language lang:
-    cargo test -p breeze-grammars {{lang}}
-    cd crates/breeze-py && pytest -v -k {{lang}}
-
-# Test all supported languages
-test-all-languages:
-    cd crates/breeze-py && pytest -v tests/test_all_languages_chunking.py
 
 # Performance testing
 
@@ -198,15 +154,6 @@ publish-python:
 publish-npm:
     cd crates/breeze-napi && npm publish
 
-# Docker commands (if needed in future)
-
-# Build Docker image
-docker-build:
-    docker build -t breeze-rustle .
-
-# Run in Docker
-docker-run:
-    docker run --rm -it breeze-rustle
 
 # Environment setup
 
