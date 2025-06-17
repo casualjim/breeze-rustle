@@ -8,6 +8,7 @@
 - Smart batching for different embedding providers
 - Streaming pipeline architecture for processing large codebases
 - Python bindings via PyO3
+- Hybrid search combining vector similarity and full-text search
 
 ## Current Architecture
 
@@ -186,6 +187,16 @@ progress_report_interval = 100
   - Edge cases (empty input, EOF-only files)
   - Real embedding model integration (sentence-transformers/all-MiniLM-L6-v2)
   - Performance profiling (identified chunking as bottleneck, not parsing)
+- **Hybrid Search Implementation** ✨
+  - Integrated vector search and full-text search using LanceDB
+  - FTS index creation added to CodeDocument::ensure_table
+  - Uses RRF (Reciprocal Rank Fusion) reranking with k=60
+  - Single query builder with full_text_search() and nearest_to()
+  - Proper RecordBatch stream processing
+  - CLI search command integration in main.rs
+  - SearchResult struct with full metadata (id, content_hash, timestamps)
+  - Comprehensive test suite for search functionality
+  - Score-based result formatting in CLI
 - **Token Storage in Chunks** ✨
   - Added `tokens: Option<Vec<u32>>` to SemanticChunk
   - Chunker populates tokens during chunking when using tokenizers
@@ -219,6 +230,33 @@ Current performance (kuzu project):
 - **26.2 seconds** total time
 - **12,883 chunks/second** throughput
 
+## Hybrid Search Design
+
+### Overview
+Implement hybrid search that combines vector similarity search and full-text search (FTS) using LanceDB's capabilities, with results combined using Reciprocal Rank Fusion (RRF).
+
+### Key Components
+1. **HybridSearcher**: Main search implementation that orchestrates both search types
+2. **Vector Search**: Uses our existing embeddings with LanceDB's vector search
+3. **Full-Text Search**: Uses LanceDB's built-in FTS capabilities
+4. **RRF Reranking**: Combines results using reciprocal rank fusion (k=60)
+
+### Search Flow
+1. Execute FTS query with 2x requested limit
+2. Execute vector search with 2x requested limit
+3. Normalize scores from both searches to [0,1] range
+4. Apply RRF formula: `score = 1 / (rank + k)` where k=60
+5. Merge results, removing duplicates
+6. Sort by combined RRF score
+7. Return top N results
+
+### Technical Details
+- FTS index on `content` field for text search
+- Vector search on `content_embedding` field
+- Score normalization using min-max scaling
+- Configurable result limit and display modes
+- Error handling for missing indexes
+
 ## Key Technical Decisions
 
 1. **Streaming-first**: All operations use async streams
@@ -226,6 +264,7 @@ Current performance (kuzu project):
 3. **Token counting**: Essential for API optimization
 4. **Leverage text-splitter**: Don't reinvent chunking logic
 5. **Arrow/LanceDB**: Efficient storage with vector search
+6. **Hybrid search**: Combine vector and FTS for better results
 
 ## Development Commands
 

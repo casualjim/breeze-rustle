@@ -10,11 +10,13 @@ mod logging;
 mod models;
 mod pipeline;
 mod reqwestx;
+mod search;
 mod sinks;
 
 pub use app::App;
 pub use config::{Config, EmbeddingProvider};
 pub use logging::init as init_logging;
+pub use search::{SearchResult, hybrid_search};
 
 // Global ONNX runtime initialization to prevent multiple initialization issues
 use small_ctor::ctor;

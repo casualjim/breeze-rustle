@@ -102,10 +102,7 @@ impl Clone for LanceDbSink {
 mod tests {
   use super::*;
   use crate::models::CodeDocument;
-  use arrow::array::{
-    FixedSizeBinaryArray, FixedSizeListArray, Float32Array, StringArray, TimestampNanosecondArray,
-    UInt64Array,
-  };
+  use arrow::array::StringArray;
   use arrow::record_batch::RecordBatch;
   use futures_util::stream;
   use lancedb::arrow::IntoArrow;
@@ -147,68 +144,28 @@ mod tests {
       return RecordBatch::new_empty(Arc::new(CodeDocument::schema(384)));
     }
 
-    let embedding_dim = docs[0].content_embedding.len();
-    let schema = Arc::new(CodeDocument::schema(embedding_dim));
-
-    // Build arrays from documents
-    let ids: Vec<&str> = docs.iter().map(|d| d.id.as_str()).collect();
-    let file_paths: Vec<&str> = docs.iter().map(|d| d.file_path.as_str()).collect();
-    let contents: Vec<&str> = docs.iter().map(|d| d.content.as_str()).collect();
-    let file_sizes: Vec<u64> = docs.iter().map(|d| d.file_size).collect();
-
-    let id_array = StringArray::from(ids);
-    let file_path_array = StringArray::from(file_paths);
-    let content_array = StringArray::from(contents);
-
-    // Create content_hash array
-    let content_hashes: Vec<&[u8]> = docs.iter().map(|d| d.content_hash.as_ref()).collect();
-    let content_hash_array = FixedSizeBinaryArray::from(content_hashes);
-
-    // Create embedding array
-    let all_embeddings: Vec<f32> = docs
-      .iter()
-      .flat_map(|d| d.content_embedding.clone())
+    // Use the IntoArrow implementation from CodeDocument
+    // This creates a RecordBatchReader which we can collect into a single batch
+    let readers: Vec<Box<dyn arrow::array::RecordBatchReader + Send>> = docs
+      .into_iter()
+      .map(|doc| doc.into_arrow().unwrap())
       .collect();
-    let embedding_values = Float32Array::from(all_embeddings);
-    let embedding_array = FixedSizeListArray::new(
-      Arc::new(arrow::datatypes::Field::new(
-        "item",
-        arrow::datatypes::DataType::Float32,
-        true,
-      )),
-      embedding_dim as i32,
-      Arc::new(embedding_values),
-      None,
-    );
 
-    let file_size_array = UInt64Array::from(file_sizes);
+    // Collect all batches from all readers
+    let mut all_batches = Vec::new();
+    for mut reader in readers {
+      for batch in reader.by_ref().flatten() {
+        all_batches.push(batch);
+      }
+    }
 
-    // Convert timestamps
-    let last_modified: Vec<i64> = docs
-      .iter()
-      .map(|d| d.last_modified.and_utc().timestamp_nanos_opt().unwrap_or(0))
-      .collect();
-    let indexed_at: Vec<i64> = docs
-      .iter()
-      .map(|d| d.indexed_at.and_utc().timestamp_nanos_opt().unwrap_or(0))
-      .collect();
-    let last_modified_array = TimestampNanosecondArray::from(last_modified);
-    let indexed_at_array = TimestampNanosecondArray::from(indexed_at);
-
-    RecordBatch::try_new(
-      schema,
-      vec![
-        Arc::new(id_array),
-        Arc::new(file_path_array),
-        Arc::new(content_array),
-        Arc::new(content_hash_array),
-        Arc::new(embedding_array),
-        Arc::new(file_size_array),
-        Arc::new(last_modified_array),
-        Arc::new(indexed_at_array),
-      ],
-    )
-    .expect("Failed to create batch")
+    // Concatenate all batches into one
+    if all_batches.is_empty() {
+      RecordBatch::new_empty(Arc::new(CodeDocument::schema(384)))
+    } else {
+      let schema = all_batches[0].schema();
+      arrow::compute::concat_batches(&schema, &all_batches).expect("Failed to concat batches")
+    }
   }
 
   #[tokio::test]

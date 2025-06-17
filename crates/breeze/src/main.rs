@@ -133,18 +133,39 @@ async fn async_main() {
     }
 
     Commands::Search {
-      query: _,
+      query,
       database,
-      limit: _,
-      full: _,
+      limit,
+      full,
     } => {
       // Apply CLI overrides
       if let Some(db) = database {
         config.database_path = db;
       }
 
-      error!("Search functionality not yet implemented");
-      std::process::exit(1);
+      info!("Starting search for: \"{}\"", query);
+      info!("Using configuration: {:?}", config);
+
+      match breeze::App::new(config).await {
+        Ok(app) => match app.search(&query, limit).await {
+          Ok(results) => {
+            if results.is_empty() {
+              println!("No results found for query: \"{}\"", query);
+            } else {
+              println!("\nFound {} results for query: \"{}\"", results.len(), query);
+              println!("{}", breeze::cli::format_results(&results, full));
+            }
+          }
+          Err(e) => {
+            error!("Search failed: {}", e);
+            std::process::exit(1);
+          }
+        },
+        Err(e) => {
+          error!("Failed to initialize app: {}", e);
+          std::process::exit(1);
+        }
+      }
     }
 
     Commands::Config { defaults } => {

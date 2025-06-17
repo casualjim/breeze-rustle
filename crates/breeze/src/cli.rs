@@ -126,3 +126,49 @@ impl Cli {
     <Self as Parser>::parse()
   }
 }
+
+/// Format search results for display
+pub fn format_results(results: &[crate::search::SearchResult], show_full_content: bool) -> String {
+  let mut output = String::new();
+
+  for (idx, result) in results.iter().enumerate() {
+    output.push_str(&format!("\n[{}] {}\n", idx + 1, result.file_path));
+
+    // Only show score if it's meaningful (not 0.0)
+    if result.relevance_score > 0.0 {
+      output.push_str(&format!(
+        "   Score: {:.4} | Size: {} bytes\n",
+        result.relevance_score, result.file_size
+      ));
+    } else {
+      output.push_str(&format!("   Size: {} bytes\n", result.file_size));
+    }
+
+    if show_full_content {
+      output.push('\n');
+      output.push_str(&result.content);
+      output.push('\n');
+    } else {
+      // Show first 5 lines as preview
+      let preview_lines: Vec<&str> = result.content.lines().take(5).collect();
+
+      if !preview_lines.is_empty() {
+        output.push('\n');
+        for line in preview_lines {
+          output.push_str("   ");
+          output.push_str(line);
+          output.push('\n');
+        }
+
+        let total_lines = result.content.lines().count();
+        if total_lines > 5 {
+          output.push_str(&format!("   ... ({} more lines)\n", total_lines - 5));
+        }
+      }
+    }
+
+    output.push_str(&format!("{}\n", "-".repeat(80)));
+  }
+
+  output
+}
