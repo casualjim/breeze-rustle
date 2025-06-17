@@ -54,8 +54,8 @@ fn get_target_parser_path() -> Result<PathBuf, String> {
     let expected_filename = match target.as_str() {
       "aarch64-apple-darwin" => "libtree-sitter-parsers-all-macos-aarch64.a",
       "x86_64-apple-darwin" => "libtree-sitter-parsers-all-macos-x86_64.a",
-      "aarch64-unknown-linux-gnu" => "libtree-sitter-parsers-all-linux-aarch64.a",
-      "x86_64-unknown-linux-gnu" => "libtree-sitter-parsers-all-linux-x86_64.a",
+      "aarch64-unknown-linux-gnu" => "libtree-sitter-parsers-all-linux-aarch64-glibc.a",
+      "x86_64-unknown-linux-gnu" => "libtree-sitter-parsers-all-linux-x86_64-glibc.a",
       "aarch64-unknown-linux-musl" => "libtree-sitter-parsers-all-linux-aarch64-musl.a",
       "x86_64-unknown-linux-musl" => "libtree-sitter-parsers-all-linux-x86_64-musl.a",
       "aarch64-pc-windows-msvc" => "libtree-sitter-parsers-all-windows-aarch64.a",
