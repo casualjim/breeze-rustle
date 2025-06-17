@@ -6,6 +6,8 @@ High-performance semantic code chunking for [Breeze](https://github.com/casualji
 
 `breeze-rustle` is a Rust library with Python bindings that provides intelligent code chunking using tree-sitter parsers and nvim-treesitter's battle-tested query files. It splits code into semantic units (functions, classes, methods) while preserving context and extracting rich metadata.
 
+**Key insight**: While we chunk code to fit within embedding model constraints, we store embeddings at the file level. The chunking ensures we respect semantic boundaries (never splitting functions/classes arbitrarily) while staying within token limits. File embeddings are created by aggregating chunk embeddings.
+
 ### Key Features
 
 - **🚀 Fast**: Written in Rust with async/concurrent processing
@@ -29,7 +31,7 @@ from breeze_rustle import SemanticChunker
 
 async def main():
     chunker = SemanticChunker(max_chunk_size=16384)
-    
+
     # Chunk a single file
     code = """
 def process_data(items):
@@ -39,9 +41,9 @@ def process_data(items):
             results.append(item * 2)
     return results
 """
-    
+
     chunks = await chunker.chunk_file(code, "python")
-    
+
     for chunk in chunks:
         print(f"Chunk: {chunk.metadata.node_type} - {chunk.metadata.node_name}")
         print(f"  Definitions: {chunk.metadata.definitions}")
@@ -55,12 +57,13 @@ asyncio.run(main())
 
 ### Semantic Chunking
 
-Instead of splitting code arbitrarily, breeze-rustle understands code structure:
+breeze-rustle chunks code to fit within embedding model constraints while respecting code structure:
 
-- Keeps functions, classes, and methods intact
-- Splits large functions intelligently at scope boundaries
-- Preserves context with parent information
-- Tracks symbol definitions and usage
+- **Purpose**: Fit within embedder token limits (e.g., 8k tokens)
+- **Boundaries**: Only splits at semantic boundaries (functions, classes)
+- **Largest units**: Creates the largest possible chunks that fit constraints
+- **File handling**: Small files = one chunk, large files = multiple chunks
+- **Aggregation**: Multiple chunks from one file are aggregated back to a single file embedding
 
 ### Rich Metadata
 
@@ -204,11 +207,11 @@ class SemanticChunker:
     def __init__(self, max_chunk_size: int = 16384) -> None:
         """
         Initialize a semantic chunker.
-        
+
         Args:
             max_chunk_size: Maximum tokens per chunk (default: 16384)
         """
-    
+
     async def chunk_file(
         self,
         content: str,
@@ -217,26 +220,26 @@ class SemanticChunker:
     ) -> List[SemanticChunk]:
         """
         Chunk a single file into semantic units.
-        
+
         Args:
             content: File content to chunk
             language: Programming language (e.g., "python", "rust")
             file_path: Optional file path for better error messages
-            
+
         Returns:
             List of semantic chunks with metadata
         """
-    
+
     async def chunk_files(
         self,
         files: List[Tuple[str, str, str]]
     ) -> List[List[SemanticChunk]]:
         """
         Chunk multiple files concurrently.
-        
+
         Args:
             files: List of (content, language, path) tuples
-            
+
         Returns:
             List of chunk lists, one per input file
         """

@@ -39,7 +39,7 @@ use breeze_grammars::{get_language, get_language_fn, is_language_supported, supp
 if is_language_supported("rust") {
     // Get the language (returns Option<tree_sitter::Language>)
     let language = get_language("Rust").unwrap();
-    
+
     // Use with tree-sitter parser
     let mut parser = tree_sitter::Parser::new();
     parser.set_language(&language).unwrap();

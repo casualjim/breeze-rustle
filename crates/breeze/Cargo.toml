@@ -3,17 +3,89 @@ name = "breeze"
 version = "0.1.0"
 edition = "2024"
 
+[features]
+default = ["ort"]
+cuda = ["candle-core/cuda", "candle-nn/cuda", "candle-transformers/cuda", "ort/cuda"]
+cudnn = ["candle-core/cudnn"]
+flash-attn = ["cuda", "candle-transformers/flash-attn", "dep:candle-flash-attn"]
+mkl = [
+    "dep:intel-mkl-src",
+    "candle-nn/mkl",
+    "candle-transformers/mkl",
+    "candle-core/mkl",
+]
+accelerate = [
+    "dep:accelerate-src",
+    "candle-core/accelerate",
+    "candle-nn/accelerate",
+    "candle-transformers/accelerate",
+]
+metal = ["candle-core/metal", "candle-nn/metal", "ort/coreml"]
+
+[target.'cfg(not(target_os = "macos"))'.dependencies]
+ort = { version = "=2.0.0-rc.10", features = ["load-dynamic", "half"], optional = true }
+[target.'cfg(target_os = "macos")'.dependencies]
+ort = { version = "=2.0.0-rc.10", features = ["half", "coreml"], optional = true }
+
 [dependencies]
-breeze-chunkers = { path = "../breeze-chunkers" }
+accelerate-src = { version = "0.3.2", optional = true }
+anyhow = "1.0"
 arrow = { version = "55.1.0", features = ["prettyprint"] }
-arrow_convert = "0.9.0"
-lancedb = { version = "0.20.0" }
-serde = "1"
-serde_arrow = "0.13.4"
-uuid = { version = "1", features = ["v7", "serde", "zerocopy"] }
-chrono = { version = "0.4", features = ["serde"] }
-blake3 = { version = "1.8.2", features = ["serde"] }
-tokio = { workspace = true }
-pretty_env_logger = "0.5.0"
-futures-util = "0.3.31"
+
+# Embedding providers
+async-stream = "0.3"
 async-trait = "0.1.88"
+blake3 = { version = "1.8.2", features = ["serde"] }
+breeze-chunkers = { path = "../breeze-chunkers" }
+bytes = "1.0"
+candle-core = "0.9.1"
+candle-flash-attn = { version = "0.9.1", optional = true }
+candle-nn = "0.9.1"
+candle-transformers = { version = "0.9.1" }
+chrono = { version = "0.4", features = ["serde"] }
+
+# Configuration and CLI
+clap = { version = "4.5", features = ["derive", "env"] }
+config = "0.15"
+console-subscriber = "0.4.1"
+flume = "0.11"
+futures = "0.3.31"
+futures-util = "0.3.31"
+hf-hub = { version = "0.4.2", features = ["rustls-tls", "tokio", "ureq"], default-features = false }
+http = "1.2"
+
+hyperpolyglot = "0.1.7"     # Language detection
+ignore = { version = "0.4.23", features = ["simd-accel"] }
+infer = "0.19.0"            # File type detection
+
+intel-mkl-src = { version = "0.8.1", optional = true }
+lancedb = { version = "0.20.0" }
+ndarray = "0.16.1"
+
+num_cpus = "1"
+pin-project-lite = "0.2"
+rand = "0.9"
+reqwest = { version = "0.12", features = ["json", "stream"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1.0"
+small_ctor = "0.1.2"
+strum = { version = "0.27.1", features = ["derive"] }
+
+# Error handling
+thiserror = "2.0"
+tiktoken-rs = "0.7"
+tokenizers = "0.21"
+tokio = { workspace = true }
+tokio-stream = "0.1"
+
+# Rate limiting and utilities
+tokio-util = { version = "0.7", features = ["rt"] }
+toml = "0.8"
+
+tracing.workspace = true
+tracing-subscriber = { version = "0.3.19", features = ["env-filter", "fmt"] }
+uuid = { version = "1", features = ["v7", "serde", "zerocopy"] }
+
+[dev-dependencies]
+tempfile = "3.11"
+wiremock = "0.6"

@@ -7,18 +7,13 @@ default:
 
 # Install all development dependencies
 install:
-    # Install Rust toolchain
-    rustup update stable
-    rustup default stable
-
-    # Install cargo tools
     cargo install cargo-nextest
+    cargo install flamegraph
+    cargo install cargo-zigbuild
 
-    # Install Python dependencies
     uv venv --python 3.12
     uv sync --extra dev
 
-    # Install Node.js dependencies for napi
     cd crates/breeze-napi && npm install
 
 # Build all components
@@ -26,7 +21,7 @@ build: build-rust build-python build-node
 
 # Build only Rust crates (excluding Python and Node.js bindings)
 build-rust:
-    cargo build --release --workspace --exclude breeze-py --exclude breeze-napi
+    cargo zigbuild --release --workspace --exclude breeze-py --exclude breeze-napi
 
 # Build Python bindings
 build-python:
@@ -119,11 +114,11 @@ ci-check: check test
 
 # Build wheels for Python (requires maturin)
 build-wheels:
-    cd crates/breeze-py && maturin build --release
+    cd crates/breeze-py && maturin build --release --zig
 
 # Build for specific platform
 build-platform target:
-    cd crates/breeze-py && maturin build --release --target {{target}}
+    cd crates/breeze-py && maturin build --release --zig --target {{target}}
 
 # Utility commands
 

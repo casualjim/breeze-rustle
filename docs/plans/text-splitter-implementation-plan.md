@@ -49,7 +49,7 @@ use once_cell::sync::Lazy;
 
 pub static LANGUAGE_REGISTRY: Lazy<HashMap<&'static str, Language>> = Lazy::new(|| {
     let mut registry = HashMap::new();
-    
+
     // Map standard names to parsers
     registry.insert("Python", tree_sitter_python::language());
     registry.insert("JavaScript", tree_sitter_javascript::language());
@@ -69,7 +69,7 @@ pub static LANGUAGE_REGISTRY: Lazy<HashMap<&'static str, Language>> = Lazy::new(
     registry.insert("SQL", tree_sitter_sql::language());
     registry.insert("Shell", tree_sitter_bash::language());
     registry.insert("R", tree_sitter_r::language());
-    
+
     registry
 });
 
@@ -143,10 +143,10 @@ impl BreezeChunker {
         let chunk_config = ChunkConfig::new(max_chunk_size)
             .with_sizer(sizer)
             .with_trim(false);
-        
+
         Self { chunk_config }
     }
-    
+
     pub async fn chunk_file(
         &self,
         content: &str,
@@ -156,19 +156,19 @@ impl BreezeChunker {
         // Get tree-sitter language
         let ts_language = get_language(language)
             .ok_or_else(|| ChunkError::UnsupportedLanguage(language.to_string()))?;
-        
+
         // Create CodeSplitter
         let splitter = CodeSplitter::new(ts_language, self.chunk_config.clone())?;
-        
+
         // Get base chunks with indices
         let chunks: Vec<_> = splitter.chunk_indices(content).collect();
-        
+
         // Parse once for metadata extraction
         let mut parser = Parser::new();
         parser.set_language(&ts_language)?;
         let tree = parser.parse(content, None)
             .ok_or_else(|| ChunkError::ParseError("Failed to parse".into()))?;
-        
+
         // Enrich chunks with metadata
         let mut enriched_chunks = Vec::new();
         for (offset, chunk_text) in chunks {
@@ -179,7 +179,7 @@ impl BreezeChunker {
                 chunk_text.len(),
                 language,
             )?;
-            
+
             let chunk = SemanticChunk {
                 text: chunk_text.to_string(),
                 start_byte: offset,
@@ -188,10 +188,10 @@ impl BreezeChunker {
                 end_line: content[..offset + chunk_text.len()].matches('\n').count() + 1,
                 metadata,
             };
-            
+
             enriched_chunks.push(chunk);
         }
-        
+
         Ok(enriched_chunks)
     }
 }
@@ -227,7 +227,7 @@ impl SemanticChunker {
     #[pyo3(signature = (max_chunk_size=None, tokenizer=None, hf_model=None))]
     fn new(max_chunk_size: Option<usize>, tokenizer: Option<TokenizerType>, hf_model: Option<String>) -> PyResult<Self> {
         let max_chunk_size = max_chunk_size.unwrap_or(1500);
-        
+
         // Convert Python TokenizerType to Rust implementation
         let tokenizer_type = match tokenizer.unwrap_or(TokenizerType::Characters) {
             TokenizerType::Characters => RustTokenizerType::Characters,
@@ -243,15 +243,15 @@ impl SemanticChunker {
                 }
             }
         };
-        
+
         let inner = InnerChunker::new(max_chunk_size, tokenizer_type)
             .map_err(|e| PyRuntimeError::new_err(format!("Failed to create chunker: {}", e)))?;
-        
+
         Ok(Self {
             inner: Arc::new(inner),
         })
     }
-    
+
     #[pyo3(signature = (content, language, file_path=None))]
     fn chunk_code<'p>(
         &self,
@@ -263,13 +263,13 @@ impl SemanticChunker {
         let chunker = self.inner.clone();
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             let stream = chunker.chunk_code(content, language, file_path);
-            
+
             Ok(ChunkStream {
                 stream: Arc::new(Mutex::new(Box::pin(stream))),
             })
         })
     }
-    
+
     #[pyo3(signature = (content, file_path=None))]
     fn chunk_text<'p>(
         &self,
@@ -278,7 +278,7 @@ impl SemanticChunker {
         file_path: Option<String>,
     ) -> PyResult<&'p PyAny> {
         let chunker = self.inner.clone();
-        
+
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             chunker
                 .chunk_text(&content, file_path.as_deref())
@@ -286,12 +286,12 @@ impl SemanticChunker {
                 .map_err(|e| PyRuntimeError::new_err(format!("Text chunking error: {}", e)))
         })
     }
-    
+
     #[staticmethod]
     fn supported_languages() -> Vec<&'static str> {
         supported_languages()
     }
-    
+
     #[staticmethod]
     fn is_language_supported(language: &str) -> bool {
         get_language(language).is_some()
@@ -301,16 +301,16 @@ impl SemanticChunker {
 #[pymodule]
 fn breeze_rustle(_py: Python<'_>, m: &PyModule) -> PyResult<()> {
     pyo3_log::init();
-    
+
     // Add enum
     m.add_class::<TokenizerType>()?;
-    
+
     // Add classes
     m.add_class::<SemanticChunker>()?;
     m.add_class::<SemanticChunk>()?;
     m.add_class::<ChunkMetadata>()?;
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;
-    
+
     Ok(())
 }
 ```
@@ -475,7 +475,7 @@ class TestBasicFunctionality:
         assert "Python" in languages
         assert "Rust" in languages
         assert "JavaScript" in languages
-    
+
     @pytest.mark.asyncio
     async def test_simple_python_file(self):
         """Should chunk a simple Python file correctly"""
@@ -487,72 +487,72 @@ def hello(name):
 class Greeter:
     def __init__(self, lang):
         self.lang = lang
-    
+
     def greet(self, name):
         return hello(name)
 '''
         chunker = SemanticChunker()
         chunk_stream = await chunker.chunk_code(content, "Python")
-        
+
         chunks = []
         async for chunk in chunk_stream:
             chunks.append(chunk)
-        
+
         assert len(chunks) > 0
-        
+
         # Check metadata
         for chunk in chunks:
             assert chunk.metadata.language == "Python"
             assert chunk.metadata.node_type is not None
-    
+
     @pytest.mark.asyncio
     async def test_tokenizer_types(self):
         """Should support different tokenizer types"""
         content = "def test(): pass"
-        
+
         # Test each tokenizer type
         for tokenizer in [TokenizerType.CHARACTERS, TokenizerType.TIKTOKEN]:
             chunker = SemanticChunker(tokenizer=tokenizer)
             chunk_stream = await chunker.chunk_code(content, "Python")
-            
+
             chunks = []
             async for chunk in chunk_stream:
                 chunks.append(chunk)
-            
+
             assert len(chunks) > 0
-    
+
     @pytest.mark.asyncio
     async def test_text_chunking(self):
         """Should handle plain text chunking for unsupported languages"""
         content = "This is plain text content."
         chunker = SemanticChunker()
-        
+
         # Test with unsupported language
         if not SemanticChunker.is_language_supported("COBOL"):
             text_stream = await chunker.chunk_text(content)
-            
+
             chunks = []
             async for chunk in text_stream:
                 chunks.append(chunk)
-                
+
             assert len(chunks) > 0
             assert chunks[0].metadata.language == "text"
-    
+
     @pytest.mark.asyncio
     async def test_project_walker(self):
         """Should walk project directories and chunk files"""
         chunker = SemanticChunker()
         walker = await chunker.walk_project("./test_project")
-        
+
         semantic_count = 0
         text_count = 0
-        
+
         async for project_chunk in walker:
             if project_chunk.chunk_type == ChunkType.SEMANTIC:
                 semantic_count += 1
             else:
                 text_count += 1
-        
+
         assert semantic_count > 0 or text_count > 0  # Should find some files
 ```
 

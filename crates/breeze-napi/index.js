@@ -19,13 +19,13 @@ class SemanticChunker {
   constructor(maxChunkSize, tokenizer, hfModel) {
     this._native = new native.SemanticChunker(maxChunkSize, tokenizer, hfModel);
   }
-  
+
   // Return async generators directly
   async *chunkCode(content, language, filePath) {
     const iterator = await this._native.chunkCode(content, language, filePath);
     yield* makeAsyncGenerator(iterator);
   }
-  
+
   async *chunkText(content, filePath) {
     const iterator = await this._native.chunkText(content, filePath);
     yield* makeAsyncGenerator(iterator);
@@ -43,11 +43,11 @@ module.exports = {
   // Re-export only the enums/constants users need
   TokenizerType: native.TokenizerType,
   ChunkType: native.ChunkType,
-  
+
   // Re-export language utility functions
   supportedLanguages: native.supportedLanguages,
   isLanguageSupported: native.isLanguageSupported,
-  
+
   // Export our wrapped versions
   SemanticChunker,
   walkProject,

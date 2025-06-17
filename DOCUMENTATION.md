@@ -68,23 +68,23 @@ class SemanticChunker:
         tokenizer: TokenizerType = TokenizerType.CHARACTERS,
         hf_model: Optional[str] = None
     ): ...
-    
+
     async def chunk_file(
         self,
         content: str,
         language: str,
         file_path: Optional[str] = None
     ) -> List[SemanticChunk]: ...
-    
+
     async def chunk_text(
         self,
         content: str,
         file_path: Optional[str] = None
     ) -> List[SemanticChunk]: ...
-    
+
     @staticmethod
     def supported_languages() -> List[str]: ...
-    
+
     @staticmethod
     def is_language_supported(language: str) -> bool: ...
 ```
@@ -139,13 +139,13 @@ class TokenizerType(Enum):
 async def process_single_file(file_path: str):
     with open(file_path, 'r') as f:
         content = f.read()
-    
+
     # Detect language from extension
     lang = detect_language_from_extension(file_path)
-    
+
     chunker = SemanticChunker()
     chunks = await chunker.chunk_file(content, lang, file_path)
-    
+
     return chunks
 ```
 
@@ -154,10 +154,10 @@ async def process_single_file(file_path: str):
 ```python
 async def process_directory_with_progress(directory: Path):
     from tqdm.asyncio import tqdm
-    
+
     chunker = SemanticChunker(max_chunk_size=1000)
     files = list(directory.rglob("*.py"))
-    
+
     async def process_file(file_path):
         try:
             content = file_path.read_text()
@@ -165,11 +165,11 @@ async def process_directory_with_progress(directory: Path):
         except Exception as e:
             print(f"Error processing {file_path}: {e}")
             return []
-    
+
     # Process files concurrently
     tasks = [process_file(f) for f in files]
     results = await tqdm.gather(*tasks, desc="Processing files")
-    
+
     # Flatten results
     all_chunks = [chunk for chunks in results for chunk in chunks]
     return all_chunks
@@ -205,10 +205,10 @@ code_chunker = SemanticChunker(
 async def extract_classes_and_functions(code: str, language: str):
     chunker = SemanticChunker()
     chunks = await chunker.chunk_file(code, language)
-    
+
     classes = []
     functions = []
-    
+
     for chunk in chunks:
         if chunk.metadata.node_type == "class_definition":
             classes.append({
@@ -222,7 +222,7 @@ async def extract_classes_and_functions(code: str, language: str):
                 "code": chunk.text,
                 "parent": chunk.metadata.parent_context
             }
-            
+
             if chunk.metadata.parent_context:
                 # It's a method, add to its class
                 for cls in classes:
@@ -231,7 +231,7 @@ async def extract_classes_and_functions(code: str, language: str):
             else:
                 # It's a standalone function
                 functions.append(func_info)
-    
+
     return {"classes": classes, "functions": functions}
 ```
 
@@ -245,19 +245,19 @@ async def smart_chunk_file(file_path: str):
     # Read content
     with open(file_path, 'r', encoding='utf-8') as f:
         content = f.read()
-    
+
     # Detect language
     detected_lang = detect_language(file_path)
-    
+
     chunker = SemanticChunker()
-    
+
     # Try semantic chunking first
     if detected_lang and SemanticChunker.is_language_supported(detected_lang):
         try:
             return await chunker.chunk_file(content, detected_lang, file_path)
         except Exception as e:
             print(f"Semantic chunking failed: {e}, falling back to text chunking")
-    
+
     # Fall back to text chunking
     return await chunker.chunk_text(content, file_path)
 ```
@@ -276,11 +276,11 @@ async def smart_chunk_file(file_path: str):
    # Process files concurrently
    async def batch_process(files, max_concurrent=10):
        semaphore = asyncio.Semaphore(max_concurrent)
-       
+
        async def process_with_limit(file):
            async with semaphore:
                return await process_file(file)
-       
+
        tasks = [process_with_limit(f) for f in files]
        return await asyncio.gather(*tasks)
    ```
@@ -291,17 +291,17 @@ async def smart_chunk_file(file_path: str):
    async def process_large_file(file_path, chunk_size=1024*1024):
        chunker = SemanticChunker()
        all_chunks = []
-       
+
        with open(file_path, 'r') as f:
            while True:
                content = f.read(chunk_size)
                if not content:
                    break
-               
+
                # Process partial content
                chunks = await chunker.chunk_text(content)
                all_chunks.extend(chunks)
-       
+
        return all_chunks
    ```
 
@@ -313,16 +313,16 @@ import asyncio
 
 async def benchmark_chunker(content, language, iterations=100):
     chunker = SemanticChunker()
-    
+
     # Warm up
     await chunker.chunk_file(content, language)
-    
+
     # Benchmark
     start = time.perf_counter()
     for _ in range(iterations):
         await chunker.chunk_file(content, language)
     end = time.perf_counter()
-    
+
     avg_time = (end - start) / iterations
     print(f"Average time: {avg_time*1000:.2f}ms")
     print(f"Throughput: {len(content) / avg_time / 1024:.2f} KB/s")
@@ -345,21 +345,21 @@ class CodeRAGPipeline:
         )
         self.embedding_model = embedding_model
         self.vector_store = vector_store
-    
+
     async def index_codebase(self, codebase_path: str):
         """Index an entire codebase for RAG."""
         all_chunks = []
-        
+
         # Collect all code files
         for file_path in Path(codebase_path).rglob("*"):
             if file_path.is_file() and self.is_code_file(file_path):
                 chunks = await self.process_file(file_path)
                 all_chunks.extend(chunks)
-        
+
         # Generate embeddings
         texts = [c.text for c in all_chunks]
         embeddings = self.embedding_model.encode(texts)
-        
+
         # Store in vector database
         metadata = [{
             "file": c.file_path,
@@ -368,22 +368,22 @@ class CodeRAGPipeline:
             "language": c.metadata.language,
             "scope": "/".join(c.metadata.scope_path)
         } for c in all_chunks]
-        
+
         self.vector_store.add_documents(
             texts=texts,
             embeddings=embeddings,
             metadata=metadata
         )
-    
+
     async def search(self, query: str, k: int = 5) -> List[Dict]:
         """Search for relevant code chunks."""
         query_embedding = self.embedding_model.encode([query])[0]
-        
+
         results = self.vector_store.similarity_search(
             query_embedding,
             k=k
         )
-        
+
         return results
 ```
 
@@ -395,14 +395,14 @@ from typing import List
 
 class BreezeRustleSplitter(TextSplitter):
     """LangChain-compatible splitter using breeze-rustle."""
-    
+
     def __init__(self, language: str = "Python", **kwargs):
         super().__init__(**kwargs)
         self.language = language
         self.chunker = SemanticChunker(
             max_chunk_size=self.chunk_size
         )
-    
+
     def split_text(self, text: str) -> List[str]:
         """Split text into chunks."""
         # Run async in sync context
@@ -463,7 +463,7 @@ vectorstore = FAISS.from_documents(splits, embedding_model)
    async def main():
        chunker = SemanticChunker()
        # Your async code here
-   
+
    # Run properly
    asyncio.run(main())
    ```
@@ -480,7 +480,7 @@ logging.basicConfig(level=logging.DEBUG)
 async def debug_chunk(content, language):
     chunker = SemanticChunker()
     chunks = await chunker.chunk_file(content, language)
-    
+
     for i, chunk in enumerate(chunks):
         print(f"\n--- Chunk {i} ---")
         print(f"Type: {chunk.metadata.node_type}")
@@ -502,19 +502,19 @@ from pstats import SortKey
 
 async def profile_chunking():
     chunker = SemanticChunker()
-    
+
     # Read a large file
     with open("large_file.py", "r") as f:
         content = f.read()
-    
+
     # Profile the chunking
     profiler = cProfile.Profile()
     profiler.enable()
-    
+
     chunks = await chunker.chunk_file(content, "Python")
-    
+
     profiler.disable()
-    
+
     # Print stats
     stats = pstats.Stats(profiler)
     stats.sort_stats(SortKey.TIME)

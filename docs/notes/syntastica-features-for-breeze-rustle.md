@@ -70,14 +70,14 @@ pub struct LanguageRegistry {
 impl LanguageRegistry {
     pub fn new() -> Self {
         let mut queries = HashMap::new();
-        
+
         // Map language names to their locals queries
         queries.insert("rust", RUST_LOCALS);
         queries.insert("python", PYTHON_LOCALS);
         queries.insert("javascript", JAVASCRIPT_LOCALS);
         queries.insert("typescript", TYPESCRIPT_LOCALS);
         // ... add more as needed
-        
+
         Self {
             parsers: HashMap::new(),
             queries,
@@ -96,16 +96,16 @@ pub fn find_semantic_boundaries(
     let parser = self.get_parser(language)?;
     let query_str = self.queries.get(language)
         .ok_or("Unsupported language")?;
-    
+
     let query = tree_sitter::Query::new(
         parser.language(),
         query_str
     )?;
-    
+
     // Find @local.scope captures for chunk boundaries
     let scope_index = query.capture_index_for_name("local.scope")
         .ok_or("No scope captures")?;
-    
+
     // Parse and find chunks...
 }
 ```

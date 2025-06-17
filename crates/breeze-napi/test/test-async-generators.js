@@ -2,7 +2,7 @@ const { SemanticChunker, walkProject, TokenizerType } = require('../index.js');
 
 async function testAsyncGenerators() {
     console.log('Testing async generators with for-await-of...\n');
-    
+
     const chunker = new SemanticChunker();
     const code = `
 function hello() {
@@ -47,7 +47,7 @@ This helps with text processing.`;
     console.log('Testing walkProject:');
     count = 0;
     const maxChunks = 5;
-    
+
     for await (const projectChunk of walkProject('.', 500, TokenizerType.Characters)) {
         count++;
         console.log(`Chunk ${count} from ${projectChunk.filePath}:`, {
@@ -56,13 +56,13 @@ This helps with text processing.`;
             lines: `${projectChunk.chunk.startLine}-${projectChunk.chunk.endLine}`,
             language: projectChunk.chunk.metadata.language
         });
-        
+
         if (count >= maxChunks) {
             console.log(`(Stopping after ${maxChunks} chunks)`);
             break;
         }
     }
-    
+
     console.log('\nAll async generator tests passed!');
 }
 

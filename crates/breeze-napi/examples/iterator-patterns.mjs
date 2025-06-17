@@ -27,13 +27,13 @@ async function collectingChunks() {
     console.log('\n=== Example 2: Collecting chunks ===');
     const chunker = new SemanticChunker(100); // Small chunks
     const text = 'This is a long text. '.repeat(50);
-    
+
     // Collect all chunks into an array
     const chunks = [];
     for await (const chunk of chunker.chunkText(text)) {
         chunks.push(chunk);
     }
-    
+
     console.log(`Collected ${chunks.length} text chunks`);
     console.log(`First chunk: "${chunks[0].text.substring(0, 50)}..."`);
     console.log(`Last chunk: "${chunks[chunks.length - 1].text.substring(0, 50)}..."`);
@@ -43,7 +43,7 @@ async function collectingChunks() {
 async function earlyTermination() {
     console.log('\n=== Example 3: Early termination ===');
     const chunker = new SemanticChunker();
-    
+
     // Find first function in a file
     const code = `
 // Some comments
@@ -69,18 +69,18 @@ function anotherFunction() {
 async function concurrentProcessing() {
     console.log('\n=== Example 4: Concurrent processing ===');
     const chunker = new SemanticChunker();
-    
+
     const pythonCode = 'def hello(): return "Python"';
     const rustCode = 'fn hello() -> &str { "Rust" }';
     const jsCode = 'function hello() { return "JavaScript"; }';
-    
+
     // Process multiple languages concurrently
     const [pythonResult, rustResult, jsResult] = await Promise.all([
         processLanguage(chunker, pythonCode, 'python'),
         processLanguage(chunker, rustCode, 'rust'),
         processLanguage(chunker, jsCode, 'javascript')
     ]);
-    
+
     console.log('Concurrent results:', { pythonResult, rustResult, jsResult });
 }
 
@@ -98,14 +98,14 @@ async function projectWalking() {
     // Walk current directory, but only process first 5 JavaScript files
     let jsFileCount = 0;
     const jsChunks = [];
-    
+
     for await (const projectChunk of walkProject('.', 500, TokenizerType.Characters)) {
         if (projectChunk.filePath.endsWith('.js') || projectChunk.filePath.endsWith('.mjs')) {
             jsChunks.push(projectChunk);
             if (projectChunk.chunk.metadata.nodeType !== 'text_chunk') {
                 console.log(`JS: ${projectChunk.filePath} - ${projectChunk.chunk.metadata.nodeType}`);
             }
-            
+
             jsFileCount++;
             if (jsFileCount >= 5) {
                 console.log('(stopped after 5 JS files)');
@@ -119,7 +119,7 @@ async function projectWalking() {
 async function transformChunks() {
     console.log('\n=== Example 6: Transform chunks ===');
     const chunker = new SemanticChunker();
-    
+
     async function* addLineNumbers(iterator) {
         let index = 0;
         for await (const chunk of iterator) {
@@ -130,17 +130,17 @@ async function transformChunks() {
             };
         }
     }
-    
+
     const code = `
 def func1():
     pass
 
 def func2():
     pass`;
-    
+
     const iterator = chunker.chunkCode(code, 'python');
     const numberedIterator = addLineNumbers(iterator);
-    
+
     for await (const chunk of numberedIterator) {
         console.log(`Chunk ${chunk.index}: ${chunk.preview}`);
     }

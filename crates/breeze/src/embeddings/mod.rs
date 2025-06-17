@@ -1,33 +1,45 @@
 use async_trait::async_trait;
-use breeze_chunkers::Chunk;
-use futures_util::{Stream, StreamExt};
+use std::error::Error;
+use std::sync::Arc;
 
-#[async_trait]
-trait EmbeddingFunction {
-    /// Computes embeddings for the given source code.
-    async fn compute(&self, source: &str) -> Result<Vec<u32>, breeze_chunkers::ChunkError>;
+pub mod batching;
+pub mod factory;
+pub mod local;
+pub mod openailike;
+pub mod voyage;
 
-    
+/// Input for embedding a single item (borrows text to avoid cloning)
+#[derive(Debug)]
+pub struct EmbeddingInput<'a> {
+  /// The text to embed
+  pub text: &'a str,
+  /// Pre-computed token count (if available)
+  pub token_count: Option<usize>,
 }
 
+/// Main trait for embedding providers
+#[async_trait]
+pub trait EmbeddingProvider: Send + Sync {
+  /// Embed a batch of inputs
+  async fn embed(
+    &self,
+    inputs: &[EmbeddingInput<'_>],
+  ) -> Result<Vec<Vec<f32>>, Box<dyn Error + Send + Sync>>;
 
-// pub async fn generate_embeddings(
-//     chunks: impl Stream<Item = Result<Chunk, breeze_chunkers::ChunkError>> + Unpin,
-//     embedder: &impl EmbeddingFunction,
-// ) -> Result<Vec<u32>, breeze_chunkers::ChunkError> {
-//     let mut embeddings = Vec::new();
+  /// Get the embedding dimension for this provider's model
+  fn embedding_dim(&self) -> usize;
 
-//     while let Some(chunk) = chunks.next().await {
-//         match chunk {
-//             Ok(chunk) => {
-//                 // let embedding = embedder.compute_source_embeddings(chunk.content.as_str()).await?;
-//                 // embeddings.push(embedding);
-//             }
-//             Err(e) => {
-//                 eprintln!("Error processing chunk: {}", e);
-//             }
-//         }
-//     }
+  /// Get the maximum context length in tokens
+  fn context_length(&self) -> usize;
 
-//     Ok(embeddings)
-// }
+  /// Create the appropriate batching strategy for this provider
+  fn create_batching_strategy(&self) -> Box<dyn batching::BatchingStrategy>;
+
+  /// Get the HuggingFace tokenizer for this provider (if applicable)
+  fn tokenizer(&self) -> Option<Arc<tokenizers::Tokenizer>>;
+
+  /// Whether this provider is remote (network-based) or local
+  fn is_remote(&self) -> bool {
+    false // Default to local
+  }
+}
