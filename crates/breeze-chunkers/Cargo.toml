@@ -1,0 +1,33 @@
+[package]
+name = "breeze-chunkers"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+breeze-grammars = { path = "../breeze-grammars" }
+text-splitter = { workspace = true }
+
+tokio = { version = "1", features = ["rt", "macros", "fs", "sync"] }
+
+# Tokenization
+tokenizers = { workspace = true }
+tiktoken-rs = { workspace = true }
+
+# Tree-sitter parsers (individual crates for all languages)
+
+tree-sitter = { workspace = true }
+tree-sitter-language = { workspace = true }
+
+# Error handling
+thiserror = "2.0"
+
+# Project walker
+ignore = "0.4"              # Gitignore-aware traversal
+futures = "0.3"             # Async streams
+hyperpolyglot = "0.1.7"     # Language detection
+infer = "0.19.0"            # File type detection
+tokio-stream = "0.1"        # Async streaming
+async-stream = "0.3"        # Async stream macros
+
+[dev-dependencies]
+tempfile = "3.11"          # Temporary file handling
