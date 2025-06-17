@@ -2,17 +2,17 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-!!!!!!!!!!!! NO BACKWARDS COMPATIBILITY !!!!!!!!!!!!!!!!!!!
-!!!!!!!!!!!! NO BACKWARDS COMPATIBILITY !!!!!!!!!!!!!!!!!!!
-!!!!!!!!!!!! NO BACKWARDS COMPATIBILITY !!!!!!!!!!!!!!!!!!!
-!!!!!!!!!!!! NO BACKWARDS COMPATIBILITY !!!!!!!!!!!!!!!!!!!
-!!!!!!!!!!!! NO BACKWARDS COMPATIBILITY !!!!!!!!!!!!!!!!!!!
-!!!!!!!!!!!! NO BACKWARDS COMPATIBILITY !!!!!!!!!!!!!!!!!!!
-!!!!!!!!!!!! NO BACKWARDS COMPATIBILITY !!!!!!!!!!!!!!!!!!!
-!!!!!!!!!!!! NO BACKWARDS COMPATIBILITY !!!!!!!!!!!!!!!!!!!
-!!!!!!!!!!!! NO BACKWARDS COMPATIBILITY !!!!!!!!!!!!!!!!!!!
-!!!!!!!!!!!! NO BACKWARDS COMPATIBILITY !!!!!!!!!!!!!!!!!!!
-!!!!!!!!!!!! NO BACKWARDS COMPATIBILITY !!!!!!!!!!!!!!!!!!!
+!!!!!!!!!!!! NO BACKWARDS COMPATIBILITY !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+!!!!!!!!!!!! NO BACKWARDS COMPATIBILITY !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+!!!!!!!!!!!! NO BACKWARDS COMPATIBILITY !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+!!!!!!!!!!!! NO BACKWARDS COMPATIBILITY !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+!!!!!!!!!!!! NO BACKWARDS COMPATIBILITY !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+!!!!!!!!!!!! NO BACKWARDS COMPATIBILITY !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+!!!!!!!!!!!! NO BACKWARDS COMPATIBILITY !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+!!!!!!!!!!!! NO BACKWARDS COMPATIBILITY !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+!!!!!!!!!!!! NO BACKWARDS COMPATIBILITY !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+!!!!!!!!!!!! NO BACKWARDS COMPATIBILITY !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+!!!!!!!!!!!! NO BACKWARDS COMPATIBILITY !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 
 ## Project Overview
 
@@ -37,6 +37,7 @@ breeze-rustle is a high-performance Rust library with Python bindings that provi
 - Create the simplest possible thing that could possibly work
 - Use Uuid::now_v7 not v4
 - Do NOT `#[ignore]` tests because they may download a model, it's totally allowed to access the internet. We have to install packages to run the build anyway, they come from the internet
+- Use rustfmt, do NOT run `cargo fmt`
 
 ## Development Commands
 

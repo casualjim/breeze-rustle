@@ -7,6 +7,7 @@ use crate::config::{Config, default_max_chunk_size};
 use crate::embeddings::{EmbeddingProvider, factory::create_embedding_provider};
 use crate::indexer::Indexer;
 use crate::models::CodeDocument;
+use crate::search::SearchResult;
 
 pub struct App {
   config: Config,
@@ -94,6 +95,27 @@ impl App {
 
     // Run the indexing
     indexer.index(path).await
+  }
+
+  /// Search the indexed codebase
+  #[instrument(skip(self), fields(query_len = query.len(), limit = limit))]
+  pub async fn search(
+    &self,
+    query: &str,
+    limit: usize,
+  ) -> Result<Vec<SearchResult>, Box<dyn std::error::Error + Send + Sync>> {
+    info!("Searching codebase");
+
+    // Perform hybrid search
+    let results = crate::search::hybrid_search(
+      self.table.clone(),
+      self.embedding_provider.clone(),
+      query,
+      limit,
+    )
+    .await?;
+
+    Ok(results)
   }
 }
 

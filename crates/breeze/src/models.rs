@@ -55,12 +55,12 @@ impl CodeDocument {
       Field::new("file_size", DataType::UInt64, false),
       Field::new(
         "last_modified",
-        DataType::Timestamp(TimeUnit::Nanosecond, None),
+        DataType::Timestamp(TimeUnit::Microsecond, None),
         false,
       ),
       Field::new(
         "indexed_at",
-        DataType::Timestamp(TimeUnit::Nanosecond, None),
+        DataType::Timestamp(TimeUnit::Microsecond, None),
         false,
       ),
     ];
@@ -102,8 +102,8 @@ impl CodeDocument {
     .map_err(|e| lancedb::Error::Arrow { source: e })?;
 
     let file_size_array = UInt64Array::from(vec![0u64]);
-    let last_modified_array = TimestampNanosecondArray::from(vec![0i64]);
-    let indexed_at_array = TimestampNanosecondArray::from(vec![0i64]);
+    let last_modified_array = arrow::array::TimestampMicrosecondArray::from(vec![0i64]);
+    let indexed_at_array = arrow::array::TimestampMicrosecondArray::from(vec![0i64]);
 
     let batch = RecordBatch::try_new(
       schema.clone(),
@@ -144,16 +144,43 @@ impl CodeDocument {
   ) -> lancedb::Result<lancedb::Table> {
     // Try to open the table first
     match connection.open_table(table_name).execute().await {
-      Ok(table) => Ok(table),
+      Ok(table) => {
+        // Table exists, ensure FTS index is created
+        Self::ensure_fts_index(&table).await;
+        Ok(table)
+      }
       Err(e) => {
         // Check if it's a table not found error
         match &e {
           lancedb::Error::TableNotFound { .. } => {
             // Create the table
-            Self::create_table(connection, table_name, embedding_dim).await
+            let table = Self::create_table(connection, table_name, embedding_dim).await?;
+            // Create FTS index on new table
+            Self::ensure_fts_index(&table).await;
+            Ok(table)
           }
           _ => Err(e), // Propagate other errors
         }
+      }
+    }
+  }
+
+  /// Ensure FTS index exists on the content field
+  async fn ensure_fts_index(table: &lancedb::Table) {
+    use lancedb::index::Index;
+    use tracing::debug;
+
+    // Try to create FTS index - this will fail if it already exists
+    match table
+      .create_index(&["content"], Index::FTS(Default::default()))
+      .execute()
+      .await
+    {
+      Ok(_) => {
+        debug!("Created FTS index on content field");
+      }
+      Err(e) => {
+        debug!("FTS index might already exist or creation failed: {}", e);
       }
     }
   }
@@ -281,15 +308,11 @@ impl lancedb::arrow::IntoArrow for CodeDocument {
 
     let file_size_array = UInt64Array::from(vec![self.file_size]);
 
-    // Convert timestamps
-    let last_modified_ns = self
-      .last_modified
-      .and_utc()
-      .timestamp_nanos_opt()
-      .unwrap_or(0);
-    let indexed_at_ns = self.indexed_at.and_utc().timestamp_nanos_opt().unwrap_or(0);
-    let last_modified_array = TimestampNanosecondArray::from(vec![last_modified_ns]);
-    let indexed_at_array = TimestampNanosecondArray::from(vec![indexed_at_ns]);
+    // Convert timestamps to microseconds
+    let last_modified_us = self.last_modified.and_utc().timestamp_micros();
+    let indexed_at_us = self.indexed_at.and_utc().timestamp_micros();
+    let last_modified_array = arrow::array::TimestampMicrosecondArray::from(vec![last_modified_us]);
+    let indexed_at_array = arrow::array::TimestampMicrosecondArray::from(vec![indexed_at_us]);
 
     // Create the record batch
     let batch = RecordBatch::try_new(
