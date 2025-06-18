@@ -4,7 +4,7 @@
   "description": "High-performance semantic code chunking with tree-sitter",
   "private": true,
   "dependencies": {
-    "@kumos/tree-sitter-parsers": "*"
+    "@kumos/tree-sitter-parsers": "^0.1.2"
   },
   "scripts": {
     "postinstall": "echo 'Tree-sitter parsers installed at:' && npx @kumos/tree-sitter-parsers"
