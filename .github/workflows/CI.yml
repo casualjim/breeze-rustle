@@ -83,13 +83,13 @@ jobs:
 
       - name: Run Rust tests (breeze-grammars)
         run: |
-          cargo nextest run -p breeze-grammars --no-build
+          cargo nextest run -p breeze-grammars
       - name: Run Rust tests (breeze-chunkers)
         run: |
-          cargo nextest run -p breeze-chunkers --no-build
+          cargo nextest run -p breeze-chunkers
       - name: Run Rust tests (breeze)
         run: |
-          cargo nextest run -p breeze --no-build --status-level all --failure-output immediate --success-output immediate
+          cargo nextest run -p breeze --status-level all --failure-output immediate --success-output immediate
 
       - name: Build Python package (Linux)
         if: runner.os == 'Linux'
