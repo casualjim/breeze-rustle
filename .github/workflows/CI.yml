@@ -56,6 +56,13 @@ jobs:
         with:
           tool: nextest
 
+      - name: Install sccache
+        uses: mozilla-actions/sccache-action@v0.0.3
+
+      - name: Configure sccache
+        run: |
+          echo "SCCACHE_GHA_ENABLED=true" >> $GITHUB_ENV
+          echo "RUSTC_WRAPPER=sccache" >> $GITHUB_ENV
 
       - name: Install Node.js dependencies in breeze-napi
         run: |
@@ -79,7 +86,7 @@ jobs:
         run: |
           cargo test --no-run -p breeze-grammars
           cargo test --no-run -p breeze-chunkers
-          cargo test --no-run -p breeze
+          cargo test -j 1 --no-run -p breeze
 
       - name: Run Rust tests (breeze-grammars)
         run: |
