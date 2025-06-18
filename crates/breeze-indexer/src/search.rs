@@ -9,12 +9,13 @@ use lancedb::Table;
 use lancedb::index::scalar::FullTextSearchQuery;
 use lancedb::query::{ExecutableQuery, QueryBase};
 use lancedb::rerankers::rrf;
+use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
 use tracing::info;
 
 use crate::embeddings::EmbeddingProvider;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SearchResult {
   pub id: String,
   pub file_path: String,

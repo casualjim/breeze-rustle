@@ -72,6 +72,7 @@ impl<'a> Indexer<'a> {
     };
 
     let chunk_stream = walk_project(path.to_path_buf(), walk_options);
+    // Use same batch size as local models for consistency
     let result = self.index_stream(chunk_stream, 256).await?;
 
     let elapsed = start_time.elapsed();
@@ -1117,6 +1118,7 @@ async fn sink_task(
 #[cfg(test)]
 mod tests {
   use super::*;
+  use crate::config::Config;
   use breeze_chunkers::{ChunkError, ChunkMetadata, ProjectChunk, SemanticChunk};
   use futures_util::stream;
   use tempfile::tempdir;
@@ -1194,12 +1196,9 @@ mod tests {
   async fn create_test_embedding_provider() -> (Arc<dyn EmbeddingProvider>, usize) {
     use crate::embeddings::local::LocalEmbeddingProvider;
 
-    let provider = LocalEmbeddingProvider::new(
-      "test-model".to_string(),
-      2, // small batch size for tests
-    )
-    .await
-    .unwrap();
+    let provider = LocalEmbeddingProvider::new("test-model".to_string())
+      .await
+      .unwrap();
 
     let dim = provider.embedding_dim();
     (Arc::new(provider), dim)
@@ -1211,7 +1210,7 @@ mod tests {
       .with_env_filter("breeze=debug")
       .try_init();
 
-    let config = Config::test();
+    let (_temp_dir, config) = Config::test();
 
     // Create embedding provider for tests
     let (embedding_provider, embedding_dim) = create_test_embedding_provider().await;
@@ -1387,7 +1386,7 @@ mod tests {
 
   #[tokio::test]
   async fn test_pipeline_error_handling() {
-    let config = Config::test();
+    let (_temp_dir, config) = Config::test();
     // Create embedding provider for tests
     let (embedding_provider, embedding_dim) = create_test_embedding_provider().await;
 
@@ -1439,7 +1438,7 @@ mod tests {
 
     // Start indexing in a task
     let index_handle = tokio::spawn(async move {
-      let config = Config::test();
+      let (_temp_dir, config) = Config::test();
 
       // Create embedding provider for tests
       let (embedding_provider, embedding_dim) = create_test_embedding_provider().await;
@@ -1474,7 +1473,7 @@ mod tests {
 
   #[tokio::test]
   async fn test_pipeline_batch_accumulation() {
-    let config = Config::test();
+    let (_temp_dir, config) = Config::test();
     // Create embedding provider for tests
     let (embedding_provider, embedding_dim) = create_test_embedding_provider().await;
 
@@ -1513,7 +1512,7 @@ mod tests {
 
   #[tokio::test]
   async fn test_pipeline_empty_stream() {
-    let config = Config::test();
+    let (_temp_dir, config) = Config::test();
     // Create embedding provider for tests
     let (embedding_provider, embedding_dim) = create_test_embedding_provider().await;
 
@@ -1541,7 +1540,7 @@ mod tests {
 
   #[tokio::test]
   async fn test_pipeline_eof_only_files() {
-    let config = Config::test();
+    let (_temp_dir, config) = Config::test();
     // Create embedding provider for tests
     let (embedding_provider, embedding_dim) = create_test_embedding_provider().await;
 
@@ -1576,7 +1575,7 @@ mod tests {
 
   #[tokio::test]
   async fn test_pipeline_single_file_multiple_chunks() {
-    let config = Config::test();
+    let (_temp_dir, config) = Config::test();
     // Create embedding provider for tests
     let (embedding_provider, embedding_dim) = create_test_embedding_provider().await;
 
@@ -1616,7 +1615,7 @@ mod tests {
       .with_env_filter("breeze=debug")
       .try_init();
 
-    let config = Config::test();
+    let (_temp_dir, config) = Config::test();
     // Create embedding provider for tests
     let (embedding_provider, embedding_dim) = create_test_embedding_provider().await;
 
@@ -1663,7 +1662,7 @@ mod tests {
       .with_env_filter("breeze=debug,breeze_chunkers=debug")
       .try_init();
 
-    let config = Config::test();
+    let (_temp_dir, config) = Config::test();
 
     info!("Loading embedder model: {}", config.model);
     // Create embedding provider for tests

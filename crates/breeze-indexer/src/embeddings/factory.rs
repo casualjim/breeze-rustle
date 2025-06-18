@@ -8,9 +8,9 @@ use crate::config::{Config, EmbeddingProvider as EmbeddingProviderType};
 pub async fn create_embedding_provider(
   config: &Config,
 ) -> Result<Box<dyn EmbeddingProvider>, Box<dyn std::error::Error>> {
-  match config.embedding_provider {
+  match &config.embedding_provider {
     EmbeddingProviderType::Local => {
-      let provider = LocalEmbeddingProvider::new(config.model.clone(), config.batch_size).await?;
+      let provider = LocalEmbeddingProvider::new(config.model.clone()).await?;
       Ok(Box::new(provider))
     }
     EmbeddingProviderType::Voyage => {
@@ -29,12 +29,7 @@ pub async fn create_embedding_provider(
         VoyageEmbeddingProvider::new(voyage_config, config.embedding_workers, chunk_size).await?;
       Ok(Box::new(provider))
     }
-    EmbeddingProviderType::OpenAILike => {
-      let provider_name = config
-        .openai_provider
-        .as_ref()
-        .ok_or("OpenAI provider name must be specified with openai_provider")?;
-
+    EmbeddingProviderType::OpenAILike(provider_name) => {
       let openai_config = config.openai_providers.get(provider_name).ok_or_else(|| {
         format!(
           "OpenAI provider '{}' not found in openai_providers",

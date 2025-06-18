@@ -5,7 +5,7 @@ use crate::pipeline::FileAccumulator;
 use breeze_chunkers::Chunk;
 
 /// Build a document from accumulated file chunks using weighted average
-pub async fn build_document_from_accumulator(
+pub(crate) async fn build_document_from_accumulator(
   accumulator: FileAccumulator,
   embedding_dim: usize,
 ) -> Option<CodeDocument> {

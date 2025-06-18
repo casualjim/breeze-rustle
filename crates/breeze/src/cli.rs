@@ -1,5 +1,5 @@
-use crate::aiproviders::voyage::{EmbeddingModel as VoyageModel, Tier as VoyageTier};
 use crate::config::EmbeddingProvider;
+use breeze_indexer::aiproviders::voyage::{EmbeddingModel as VoyageModel, Tier as VoyageTier};
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 
@@ -58,10 +58,6 @@ pub enum Commands {
     /// Number of files to process in parallel (overrides config)
     #[arg(long, env = "BREEZE_MAX_PARALLEL_FILES")]
     max_parallel_files: Option<usize>,
-
-    /// Batch size for embedding operations (overrides config)
-    #[arg(long, env = "BREEZE_BATCH_SIZE")]
-    batch_size: Option<usize>,
   },
 
   /// Search indexed codebase
@@ -97,12 +93,37 @@ pub enum Commands {
   },
 
   /// Debug utilities
+  #[cfg(feature = "perfprofiling")]
   Debug {
     #[command(subcommand)]
     command: DebugCommands,
   },
+
+  /// Run as MCP server
+  Mcp {
+    /// Server mode: stdio or http
+    #[arg(value_enum, default_value = "stdio")]
+    mode: McpMode,
+
+    /// Port for HTTP server (default: 3000)
+    #[arg(short, long, default_value = "3000")]
+    port: u16,
+
+    /// Host for HTTP server (default: 127.0.0.1)
+    #[arg(long, default_value = "127.0.0.1")]
+    host: String,
+  },
 }
 
+#[derive(Clone, clap::ValueEnum)]
+pub enum McpMode {
+  /// Standard input/output mode
+  Stdio,
+  /// HTTP server mode with SSE
+  Http,
+}
+
+#[cfg(feature = "perfprofiling")]
 #[derive(Subcommand)]
 pub enum DebugCommands {
   /// Chunk a directory and show statistics
@@ -135,7 +156,7 @@ impl Cli {
 }
 
 /// Format search results for display
-pub fn format_results(results: &[crate::search::SearchResult], show_full_content: bool) -> String {
+pub fn format_results(results: &[breeze_indexer::SearchResult], show_full_content: bool) -> String {
   let mut output = String::new();
 
   for (idx, result) in results.iter().enumerate() {

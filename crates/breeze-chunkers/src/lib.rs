@@ -9,6 +9,8 @@ mod chunker;
 mod grammar_loader;
 mod languages;
 mod metadata_extractor;
+
+#[cfg(feature = "perfprofiling")]
 pub mod performance;
 mod types;
 mod walker;

@@ -120,9 +120,10 @@ impl InnerChunker {
                 }
             };
 
-            // Extract tokens if using HuggingFace tokenizer
+            // Extract tokens if using HuggingFace or Tiktoken tokenizer
             let tokens = match &chunker.chunk_sizer {
                 ConcreteSizer::HuggingFace(tokenizer) => {
+                  #[cfg(feature = "perfprofiling")]
                     let _timer = crate::performance::TokenizerTimer::new(
                         language.clone(),
                         chunk_text.len() as u64
@@ -131,7 +132,17 @@ impl InnerChunker {
                         .map(|encoding| encoding.get_ids().to_vec())
                         .ok()
                 }
-                _ => None,
+                ConcreteSizer::Tiktoken(tiktoken) => {
+                    #[cfg(feature = "perfprofiling")]
+                    let _timer = crate::performance::TokenizerTimer::new(
+                        language.clone(),
+                        chunk_text.len() as u64
+                    );
+                    // Tiktoken returns Vec<usize>, we need Vec<u32>
+                    tiktoken.encode_ordinary(chunk_text)
+                        .into()
+                }
+                ConcreteSizer::Characters(_) => None,
             };
 
             yield Chunk::Semantic(SemanticChunk {
@@ -154,9 +165,11 @@ impl InnerChunker {
     let ts_language: tree_sitter::Language = language_fn.into();
 
     // Parse the content once upfront with timing
+    #[cfg(feature = "perfprofiling")]
     let file_size = content.len() as u64;
 
     // Time just the tree-sitter parsing
+    #[cfg(feature = "perfprofiling")]
     let parse_start = std::time::Instant::now();
     let mut parser = tree_sitter::Parser::new();
     parser
@@ -166,9 +179,11 @@ impl InnerChunker {
     let tree = parser
       .parse(content, None)
       .ok_or_else(|| ChunkError::ParseError("Failed to parse content".to_string()))?;
+    #[cfg(feature = "perfprofiling")]
     let parse_duration = parse_start.elapsed();
 
     // Record parser timing
+    #[cfg(feature = "perfprofiling")]
     crate::performance::get_tracker().record(
       language.to_string(),
       file_size,
@@ -177,6 +192,7 @@ impl InnerChunker {
     );
 
     // Time the chunking/querying phase
+    #[cfg(feature = "perfprofiling")]
     let chunk_start = std::time::Instant::now();
     // Create config and splitter with our chunk sizer
     let config = ChunkConfig::new(self.max_chunk_size).with_sizer(&self.chunk_sizer);
@@ -185,9 +201,11 @@ impl InnerChunker {
 
     // Get base chunks with indices
     let chunks: Vec<_> = splitter.chunk_indices(content).collect();
+    #[cfg(feature = "perfprofiling")]
     let chunk_duration = chunk_start.elapsed();
 
     // Record chunking timing
+    #[cfg(feature = "perfprofiling")]
     crate::performance::get_tracker().record(
       language.to_string(),
       file_size,
@@ -231,14 +249,19 @@ impl InnerChunker {
                 references: vec![],
             };
 
-            // Extract tokens if using HuggingFace tokenizer
+            // Extract tokens if using HuggingFace or Tiktoken tokenizer
             let tokens = match &chunker.chunk_sizer {
                 ConcreteSizer::HuggingFace(tokenizer) => {
                     tokenizer.encode(chunk_text, false)
                         .map(|encoding| encoding.get_ids().to_vec())
                         .ok()
                 }
-                _ => None,
+                ConcreteSizer::Tiktoken(tiktoken) => {
+                    // Tiktoken returns Vec<usize>, we need Vec<u32>
+                    tiktoken.encode_ordinary(chunk_text)
+                        .into()
+                }
+                ConcreteSizer::Characters(_) => None,
             };
 
             yield Chunk::Text(SemanticChunk {

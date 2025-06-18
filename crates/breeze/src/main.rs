@@ -1,4 +1,6 @@
-use breeze::cli::{Cli, Commands, DebugCommands};
+#[cfg(feature = "perfprofiling")]
+use breeze::cli::DebugCommands;
+use breeze::cli::{Cli, Commands, McpMode};
 use tracing::{error, info, warn};
 
 fn main() {
@@ -55,7 +57,9 @@ async fn async_main() {
       },
       _ => {
         // No config file found, use defaults
-        breeze::Config::default()
+        let mut cfg = breeze::Config::default();
+        cfg.apply_env_overrides();
+        cfg
       }
     }
   };
@@ -72,29 +76,28 @@ async fn async_main() {
       max_chunk_size,
       max_file_size,
       max_parallel_files,
-      batch_size,
     } => {
       // Apply CLI/env overrides (clap has already handled env vars and parsing)
       if let Some(db) = database {
-        config.database_path = db;
+        config.indexer.database_path = db;
       }
 
       if let Some(provider) = embedding_provider {
-        config.embedding_provider = provider;
+        config.indexer.embedding_provider = provider;
       }
 
       if let Some(m) = model {
-        config.model = m;
+        config.indexer.model = m;
       }
 
       // Ensure voyage config exists if using voyage provider
-      if config.embedding_provider == breeze::config::EmbeddingProvider::Voyage
-        && config.voyage.is_none()
+      if config.indexer.embedding_provider == breeze::config::EmbeddingProvider::Voyage
+        && config.indexer.voyage.is_none()
       {
-        config.voyage = Some(breeze::config::VoyageConfig {
+        config.indexer.voyage = Some(breeze_indexer::config::VoyageConfig {
           api_key: String::new(),
-          tier: breeze::aiproviders::voyage::Tier::Free,
-          model: breeze::aiproviders::voyage::EmbeddingModel::VoyageCode3,
+          tier: breeze_indexer::aiproviders::voyage::Tier::Free,
+          model: breeze_indexer::aiproviders::voyage::EmbeddingModel::VoyageCode3,
         });
       }
 
@@ -102,34 +105,31 @@ async fn async_main() {
       let api_key = voyage_api_key.or_else(|| std::env::var("BREEZE_VOYAGE_API_KEY").ok());
 
       if let Some(api_key) = api_key {
-        if let Some(ref mut voyage) = config.voyage {
+        if let Some(ref mut voyage) = config.indexer.voyage {
           voyage.api_key = api_key;
         }
       }
 
       if let Some(tier) = voyage_tier {
-        if let Some(ref mut voyage) = config.voyage {
+        if let Some(ref mut voyage) = config.indexer.voyage {
           voyage.tier = tier;
         }
       }
 
       if let Some(model) = voyage_model {
-        if let Some(ref mut voyage) = config.voyage {
+        if let Some(ref mut voyage) = config.indexer.voyage {
           voyage.model = model;
         }
       }
 
       if let Some(size) = max_chunk_size {
-        config.max_chunk_size = size;
+        config.indexer.max_chunk_size = size;
       }
       if let Some(size) = max_file_size {
-        config.max_file_size = Some(size);
+        config.indexer.max_file_size = Some(size);
       }
       if let Some(parallel) = max_parallel_files {
-        config.max_parallel_files = parallel;
-      }
-      if let Some(batch) = batch_size {
-        config.batch_size = batch;
+        config.indexer.max_parallel_files = parallel;
       }
 
       info!("Starting indexing of: {}", path.display());
@@ -160,7 +160,7 @@ async fn async_main() {
     } => {
       // Apply CLI overrides
       if let Some(db) = database {
-        config.database_path = db;
+        config.indexer.database_path = db;
       }
 
       info!("Starting search for: \"{}\"", query);
@@ -244,6 +244,7 @@ async fn async_main() {
       }
     }
 
+    #[cfg(feature = "perfprofiling")]
     Commands::Debug { command } => match command {
       DebugCommands::ChunkDirectory {
         path,
@@ -289,6 +290,7 @@ async fn async_main() {
         );
 
         let file_chunk_counts = Arc::new(Mutex::new(BTreeMap::<String, usize>::new()));
+        #[cfg(feature = "perfprofiling")]
         let file_start_times = Arc::new(Mutex::new(BTreeMap::<String, std::time::Instant>::new()));
         let total_chunks = Arc::new(std::sync::atomic::AtomicUsize::new(0));
 
@@ -298,6 +300,7 @@ async fn async_main() {
         chunker
           .map(|chunk_result| {
             let file_chunk_counts = Arc::clone(&file_chunk_counts);
+            #[cfg(feature = "perfprofiling")]
             let file_start_times = Arc::clone(&file_start_times);
             let total_chunks = Arc::clone(&total_chunks);
 
@@ -307,6 +310,7 @@ async fn async_main() {
                   let file_path = project_chunk.file_path.clone();
 
                   // Track the first time we see a chunk from this file
+                  #[cfg(feature = "perfprofiling")]
                   {
                     let mut start_times = file_start_times.lock().await;
                     start_times
@@ -321,35 +325,38 @@ async fn async_main() {
                   } = &project_chunk.chunk
                   {
                     // Record the file processing time
-                    let start_time = {
-                      let mut start_times = file_start_times.lock().await;
-                      start_times.remove(eof_path)
-                    };
-
-                    if let Some(start_time) = start_time {
-                      let duration = start_time.elapsed();
-                      let file_size = tokio::fs::metadata(eof_path)
-                        .await
-                        .map(|m| m.len())
-                        .unwrap_or(0);
-
-                      // Detect language from the file path
-                      let language = if let Ok(Some(detection)) =
-                        hyperpolyglot::detect(std::path::Path::new(eof_path))
-                      {
-                        detection.language().to_string()
-                      } else {
-                        "unknown".to_string()
+                    #[cfg(feature = "perfprofiling")]
+                    {
+                      let start_time = {
+                        let mut start_times = file_start_times.lock().await;
+                        start_times.remove(eof_path)
                       };
 
-                      // Record to performance tracker
-                      breeze_chunkers::performance::get_tracker().record_file_processing(
-                        eof_path.clone(),
-                        language,
-                        file_size,
-                        duration,
-                        "chunking_complete",
-                      );
+                      if let Some(start_time) = start_time {
+                        let duration = start_time.elapsed();
+                        let file_size = tokio::fs::metadata(eof_path)
+                          .await
+                          .map(|m| m.len())
+                          .unwrap_or(0);
+
+                        // Detect language from the file path
+                        let language = if let Ok(Some(detection)) =
+                          hyperpolyglot::detect(std::path::Path::new(eof_path))
+                        {
+                          detection.language().to_string()
+                        } else {
+                          "unknown".to_string()
+                        };
+
+                        // Record to performance tracker
+                        breeze_chunkers::performance::get_tracker().record_file_processing(
+                          eof_path.clone(),
+                          language,
+                          file_size,
+                          duration,
+                          "chunking_complete",
+                        );
+                      }
                     }
                   }
 
@@ -397,5 +404,34 @@ async fn async_main() {
         }
       }
     },
+
+    Commands::Mcp { mode, port, host } => {
+      use breeze::mcp::BreezeMcpServer;
+
+      info!("Starting MCP server with configuration: {:?}", config);
+
+      match BreezeMcpServer::new(config).await {
+        Ok(server) => match mode {
+          McpMode::Stdio => {
+            info!("Running MCP server in STDIO mode");
+            if let Err(e) = server.run_stdio().await {
+              error!("MCP server error: {}", e);
+              std::process::exit(1);
+            }
+          }
+          McpMode::Http => {
+            info!("Running MCP server in HTTP mode on {}:{}", host, port);
+            if let Err(e) = server.run_http(&host, port).await {
+              error!("MCP server error: {}", e);
+              std::process::exit(1);
+            }
+          }
+        },
+        Err(e) => {
+          error!("Failed to initialize MCP server: {}", e);
+          std::process::exit(1);
+        }
+      }
+    }
   }
 }

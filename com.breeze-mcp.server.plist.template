@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.breeze-mcp.server</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/ivan/.cargo/bin/breeze</string>
+        <string>mcp</string>
+        <string>http</string>
+        <string>--port</string>
+        <string>9483</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>{{WORKING_DIR}}</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/Users/ivan/.cargo/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin</string>
+        <key>RUST_LOG</key>
+        <string>error</string>
+        <key>HF_HUB_DISABLE_PROGRESS_BARS</key>
+        <string>1</string>
+    </dict>
+
+    <key>StandardOutPath</key>
+    <string>{{LOG_DIR}}/breeze-mcp.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>{{LOG_DIR}}/breeze-mcp.error.log</string>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>KeepAlive</key>
+    <dict>
+        <key>SuccessfulExit</key>
+        <false/>
+    </dict>
+
+    <key>ThrottleInterval</key>
+    <integer>30</integer>
+</dict>
+</plist>

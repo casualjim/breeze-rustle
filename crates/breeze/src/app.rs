@@ -4,13 +4,16 @@ use tokio::sync::RwLock;
 use tracing::{debug, info, instrument};
 
 use crate::config::{Config, default_max_chunk_size};
-use crate::embeddings::{EmbeddingProvider, factory::create_embedding_provider};
-use crate::indexer::Indexer;
-use crate::models::CodeDocument;
-use crate::search::SearchResult;
+use breeze_indexer::{
+  Indexer, SearchResult,
+  embeddings::{EmbeddingProvider, factory::create_embedding_provider},
+  models::CodeDocument,
+};
+
+const TABLE_NAME: &str = "code_files";
 
 pub struct App {
-  config: Config,
+  indexer_config: breeze_indexer::config::Config,
   embedding_provider: Arc<dyn EmbeddingProvider>,
   embedding_dim: usize,
   table: Arc<RwLock<lancedb::Table>>,
@@ -18,17 +21,18 @@ pub struct App {
 
 impl App {
   /// Create a new App instance with the given configuration
-  #[instrument(skip(config), fields(database_path = %config.database_path.display(), model = %config.model, table_name = %config.table_name))]
+  #[instrument(skip(config), fields(database_path = %config.indexer.database_path.display(), model = %config.indexer.model, table_name = TABLE_NAME))]
   pub async fn new(config: Config) -> Result<Self, Box<dyn std::error::Error>> {
     info!("Initializing Breeze app");
 
     // Create LanceDB connection
     debug!(
       "Connecting to LanceDB at: {}",
-      config.database_path.display()
+      config.indexer.database_path.display()
     );
     let connection = lancedb::connect(
       config
+        .indexer
         .database_path
         .to_str()
         .ok_or("Invalid database path")?,
@@ -40,19 +44,20 @@ impl App {
     // Create embedding provider based on configuration
     info!(
       "Creating embedding provider: {:?}",
-      config.embedding_provider
+      config.indexer.embedding_provider
     );
-    let embedding_provider = create_embedding_provider(&config).await?;
+    let breeze_indexer_config = config.indexer.clone();
+    let embedding_provider = create_embedding_provider(&breeze_indexer_config).await?;
     let embedding_dim = embedding_provider.embedding_dim();
 
     // Adjust max chunk size based on provider's context length if not explicitly set
     let context_length = embedding_provider.context_length();
-    if config.max_chunk_size == default_max_chunk_size() {
+    if config.indexer.max_chunk_size == default_max_chunk_size() {
       // Auto-adjust chunk size to 90% of context length
       let recommended_chunk_size = (context_length * 90) / 100;
       info!(
         "Auto-adjusting max_chunk_size from {} to {} based on model context length",
-        config.max_chunk_size, recommended_chunk_size
+        config.indexer.max_chunk_size, recommended_chunk_size
       );
       // Note: We can't modify config here as it's borrowed, but we can log the recommendation
     }
@@ -67,13 +72,13 @@ impl App {
     // Ensure table exists
     debug!(
       "Ensuring table '{}' exists with embedding dimension {}",
-      config.table_name, embedding_dim
+      TABLE_NAME, embedding_dim
     );
-    let table = CodeDocument::ensure_table(&connection, &config.table_name, embedding_dim).await?;
+    let table = CodeDocument::ensure_table(&connection, TABLE_NAME, embedding_dim).await?;
     info!("Table ready");
 
     Ok(Self {
-      config: config.clone(),
+      indexer_config: breeze_indexer_config,
       embedding_provider,
       embedding_dim,
       table: Arc::new(RwLock::new(table)),
@@ -87,7 +92,7 @@ impl App {
   ) -> Result<usize, Box<dyn std::error::Error + Send + Sync>> {
     // Create an indexer with our resources
     let indexer = Indexer::new(
-      &self.config,
+      &self.indexer_config,
       self.embedding_provider.clone(),
       self.embedding_dim,
       self.table.clone(),
@@ -107,7 +112,7 @@ impl App {
     info!("Searching codebase");
 
     // Perform hybrid search
-    let results = crate::search::hybrid_search(
+    let results = breeze_indexer::search::hybrid_search(
       self.table.clone(),
       self.embedding_provider.clone(),
       query,
@@ -127,12 +132,8 @@ mod tests {
   #[tokio::test]
   #[ignore] // Ignore for now since we need a real model
   async fn test_app_index() {
-    // Create test config
-    let mut config = Config::default();
-
-    // Use temp directory for database
-    let temp_db = tempdir().unwrap();
-    config.database_path = temp_db.path().to_path_buf();
+    // Create test config with temp directory for database
+    let (_temp_dir, config) = Config::test();
 
     // Create app
     let app = App::new(config).await.unwrap();

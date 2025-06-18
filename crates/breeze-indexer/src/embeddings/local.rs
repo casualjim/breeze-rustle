@@ -107,10 +107,7 @@ pub struct LocalEmbeddingProvider {
 }
 
 impl LocalEmbeddingProvider {
-  pub async fn new(
-    model_name: String,
-    batch_size: usize,
-  ) -> Result<Self, Box<dyn std::error::Error>> {
+  pub async fn new(model_name: String) -> Result<Self, Box<dyn std::error::Error>> {
     // Ensure ONNX runtime is initialized
     crate::ensure_ort_initialized()?;
 
@@ -131,7 +128,7 @@ impl LocalEmbeddingProvider {
     Ok(Self {
       embedder: Arc::new(embedder),
       embedding_dim,
-      batch_size,
+      batch_size: 256, // Large batch size for CPU-based local models
       model_name,
     })
   }

@@ -30,8 +30,10 @@ impl VoyageEmbeddingProvider {
 
     // Load HuggingFace tokenizer for this model
     let repo_id = format!("voyageai/{}", config.model.api_name());
+    tracing::debug!("Loading tokenizer for Voyage model from: {}", repo_id);
     let tokenizer = Tokenizer::from_pretrained(&repo_id, None)
       .map_err(|e| format!("Failed to load tokenizer for {}: {}", repo_id, e))?;
+    tracing::info!("Successfully loaded Voyage tokenizer");
 
     Ok(Self {
       client: Arc::new(client),
@@ -56,14 +58,23 @@ impl EmbeddingProvider for VoyageEmbeddingProvider {
       truncation: Some(true),
     };
 
-    // Use pre-computed token counts if available, otherwise count tokens
+    // Calculate token counts - use pre-computed if available (from indexing),
+    // otherwise tokenize on the fly (for search queries)
     let estimated_tokens: u32 = inputs
       .iter()
       .map(|input| {
         if let Some(count) = input.token_count {
           count as u32
         } else {
-          unreachable!("Token count should be provided by batching strategy")
+          // This happens for search queries - tokenize on the fly
+          match self.tokenizer.encode(input.text, false) {
+            Ok(encoding) => encoding.len() as u32,
+            Err(e) => {
+              tracing::warn!("Failed to tokenize input: {}", e);
+              // Rough estimate: ~4 chars per token
+              (input.text.len() / 4) as u32
+            }
+          }
         }
       })
       .sum();

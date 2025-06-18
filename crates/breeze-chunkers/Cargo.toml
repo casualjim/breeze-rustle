@@ -1,45 +1,39 @@
 [package]
 name = "breeze-chunkers"
-version = "0.1.0"
-edition = "2024"
+version.workspace = true
+edition.workspace = true
+
+[features]
+default = []
+perfprofiling = []
 
 [dependencies]
-async-stream = "0.3"        # Async stream macros
+async-stream.workspace = true
+blake3.workspace = true
 
-# Hashing
-blake3 = "1.5"
 breeze-grammars = { path = "../breeze-grammars" }
 
-# Work-stealing channels
-flume = "0.11"
-
-# Performance tracking
 dashmap = "6.1"
-futures = "0.3"             # Async streams
-hyperpolyglot = "0.1.7"     # Language detection
+flume.workspace = true
+futures.workspace = true
+hyperpolyglot = "0.1.7"
 
-# Project walker
-ignore = "0.4"              # Gitignore-aware traversal
-infer = "0.19.0"            # File type detection
-serde = { version = "1", features = ["derive"] }
+ignore = { version = "0.4", features = ["simd-accel"] }
+infer = "0.19.0"
+serde.workspace = true
 text-splitter = { workspace = true }
 
-# Error handling
 thiserror = "2.0"
 tiktoken-rs = { workspace = true }
 
-# Tokenization
-tokenizers = { workspace = true }
+tokenizers.workspace = true
 
-tokio = { version = "1", features = ["rt", "macros", "fs", "sync"] }
-tokio-stream = "0.1"        # Async streaming
+tokio.workspace = true
+tokio-stream.workspace = true
 
-# Logging
-tracing = { workspace = true }
-# Tree-sitter parsers (individual crates for all languages)
-
-tree-sitter = { workspace = true }
-tree-sitter-language = { workspace = true }
+tracing.workspace = true
+tree-sitter.workspace = true
+tree-sitter-language.workspace = true
 
 [dev-dependencies]
 tempfile = "3.11"          # Temporary file handling

@@ -25,6 +25,25 @@ exclude = [
 version = "0.1.0"
 
 [workspace.dependencies]
+anyhow = "1.0"
+arrow = { version = "55", features = ["prettyprint", "chrono-tz", "canonical_extension_types"] }
+async-stream = "0.3"
+async-trait = "0.1"
+
+blake3 = "1.8"
+bytes = "1"
+chrono = "0.4"
+flume = "0.11"
+futures = "0.3"
+futures-util = "0.3"
+lancedb = "0.20"
+num_cpus = "1"
+
+pin-project-lite = "0.2"
+
+reqwest = { version = "0.12", features = ["json", "stream"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1"
 # Text splitting - the main crate we'll use
 text-splitter = { version = "0.27", features = [
   "code",
@@ -34,14 +53,19 @@ text-splitter = { version = "0.27", features = [
 tiktoken-rs = "0.7"
 
 # Tokenization
-tokenizers = { version = "0.21", features = ["http"] }
+tokenizers = { version = "0.21", default-features = false, features = ["esaxx_fast", "http", "onig"] }
 
 tokio = { version = "1", features = ["rt", "macros", "fs", "sync"] }
+tokio-stream = "0.1"
+tokio-util = "0.7"
+
 tracing = "0.1.41"
 
 # Tree-sitter parsers (individual crates for all languages)
 tree-sitter = "0.25"
 tree-sitter-language = "0.1.5"
+
+uuid = { version = "1.11", features = ["v7", "serde", "zerocopy"] }
 
 [profile.dev]
 rpath = true
