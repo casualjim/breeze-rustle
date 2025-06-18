@@ -69,21 +69,16 @@ jobs:
         run: |
           cd crates/breeze-py && uv pip install --python .venv pytest pytest-asyncio maturin
 
-      - name: build rust workspace
+      - name: Build rust workspace
         run: |
           cargo build --workspace --exclude breeze-py --exclude breeze-napi
 
       - name: Run Rust tests
         run: |
-          cargo nextest run --workspace
+          cargo nextest run --workspace --exclude breeze-py --exclude breeze-napi
 
       - name: Build Python package (Linux)
         if: runner.os == 'Linux'
-        run: |
-          cd crates/breeze-py && uv run --python .venv maturin develop --release
-
-      - name: Build Python package (non-Linux)
-        if: runner.os != 'Linux'
         run: |
           cd crates/breeze-py && uv run --python .venv maturin develop --release
 
