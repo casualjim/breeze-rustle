@@ -82,6 +82,18 @@ jobs:
         run: |
           cargo test --no-run -p breeze-grammars
           cargo test --no-run -p breeze-chunkers
+          # Build dependencies first by using a dummy source
+          cd crates/breeze
+          mv src src.bak
+          mkdir src
+          echo 'fn main() {}' > src/main.rs
+          echo 'pub fn dummy() {}' > src/lib.rs
+          cargo build --lib --bins
+          rm -rf src
+          mv src.bak src
+          cd ../..
+          sleep 2
+          # Now build the actual tests with limited parallelism
           cargo test -j 1 --no-run -p breeze
 
       - name: Run Rust tests (breeze-grammars)
