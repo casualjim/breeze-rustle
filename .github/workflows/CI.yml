@@ -51,13 +51,13 @@ jobs:
         with:
           tool: nextest
 
-      - name: Install sccache
-        uses: mozilla-actions/sccache-action@v0.0.3
+      # - name: Install sccache
+      #   uses: mozilla-actions/sccache-action@v0.0.3
 
-      - name: Configure sccache
-        run: |
-          echo "SCCACHE_GHA_ENABLED=true" >> $GITHUB_ENV
-          echo "RUSTC_WRAPPER=sccache" >> $GITHUB_ENV
+      # - name: Configure sccache
+      #   run: |
+      #     echo "SCCACHE_GHA_ENABLED=true" >> $GITHUB_ENV
+      #     echo "RUSTC_WRAPPER=sccache" >> $GITHUB_ENV
 
       - name: Install Node.js dependencies in breeze-napi
         run: |
@@ -77,15 +77,19 @@ jobs:
         run: |
           cd crates/breeze-py && uv pip install --python .venv pytest pytest-asyncio maturin
 
+      - name: Build all tests
+        run: |
+          cargo test --no-run --workspace --exclude breeze-py --exclude breeze-napi
+
       - name: Run Rust tests (breeze-grammars)
         run: |
-          cargo nextest run -p breeze-grammars
+          cargo nextest run -p breeze-grammars --no-build
       - name: Run Rust tests (breeze-chunkers)
         run: |
-          cargo nextest run -p breeze-chunkers
+          cargo nextest run -p breeze-chunkers --no-build
       - name: Run Rust tests (breeze)
         run: |
-          cargo nextest run -p breeze
+          cargo nextest run -p breeze --no-build --status-level all --failure-output immediate --success-output immediate
 
       - name: Build Python package (Linux)
         if: runner.os == 'Linux'
