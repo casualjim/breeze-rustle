@@ -1233,13 +1233,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "breeze-lancedb"
-version = "0.1.0"
-dependencies = [
- "lancedb",
-]
-
-[[package]]
 name = "breeze-napi"
 version = "0.1.0"
 dependencies = [
