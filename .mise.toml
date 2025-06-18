@@ -1,0 +1,5 @@
+[tools]
+rust = { version = "1.84.0", components = "rust-src,llvm-tools", profile = "default" }
+just = "1"
+"aqua:cargo-bins/cargo-binstall" = "1"
+mkcert = "latest"

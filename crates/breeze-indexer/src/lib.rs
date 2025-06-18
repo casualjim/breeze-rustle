@@ -1,30 +1,23 @@
+// Internal modules (not exported)
 pub mod aiproviders;
-pub mod config;
-pub mod converter;
-pub mod document_builder;
-pub mod embeddings;
-pub mod indexer;
-pub mod models;
-pub mod pipeline;
+mod bulk_indexer;
+mod converter;
+mod document_builder;
+mod embeddings;
+mod models;
+mod pipeline;
 mod reqwestx;
-pub mod search;
-pub mod sinks;
+mod sinks;
 
-// Re-export main types
-pub use indexer::Indexer;
-pub use models::CodeDocument;
+// Public modules
+mod config;
+mod indexer;
+mod search;
+
+// Re-export only what's needed for the public API
+pub use config::{Config, EmbeddingProvider};
+pub use indexer::{Indexer, IndexerError};
 pub use search::{SearchResult, hybrid_search};
-
-// Re-export embedding types
-pub use embeddings::{EmbeddingInput, EmbeddingProvider};
-
-// Re-export config types for breeze CLI
-pub use config::{
-  Config, EmbeddingProvider as ConfigEmbeddingProvider, OpenAILikeConfig, VoyageConfig,
-};
-
-// Re-export voyage types for CLI
-pub use aiproviders::voyage::{EmbeddingModel as VoyageModel, Tier as VoyageTier};
 
 // Global ONNX runtime initialization to prevent multiple initialization issues
 use small_ctor::ctor;

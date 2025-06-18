@@ -225,46 +225,6 @@ fn default_max_concurrent_requests() -> usize {
   50
 }
 
-// Keep the separate IndexerConfig for when you want just indexing without embeddings
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct IndexerConfig {
-  /// Maximum size of a chunk in tokens
-  pub max_chunk_size: usize,
-
-  /// Maximum file size to process (in bytes)
-  pub max_file_size: Option<u64>,
-
-  /// Maximum number of files to process in parallel
-  pub max_parallel_files: usize,
-
-  /// Number of threads to use for processing large files
-  pub large_file_threads: Option<usize>,
-
-  /// Number of concurrent embedding workers (for remote providers)
-  pub embedding_workers: usize,
-}
-
-impl Default for IndexerConfig {
-  fn default() -> Self {
-    Self {
-      max_chunk_size: 512,
-      max_file_size: Some(10 * 1024 * 1024), // 10MB
-      max_parallel_files: 4,
-      large_file_threads: Some(4),
-      embedding_workers: 3,
-    }
-  }
-}
-
-impl IndexerConfig {
-  /// Calculate optimal chunk size based on embedding provider context length
-  pub fn optimal_chunk_size(&self, context_length: usize) -> usize {
-    // Use 90% of context length or configured max, whichever is smaller
-    let optimal = (context_length * 90) / 100;
-    self.max_chunk_size.min(optimal)
-  }
-}
-
 #[cfg(test)]
 mod tests {
   use super::*;
@@ -410,34 +370,5 @@ mod tests {
       EmbeddingProvider::from_str("custom-provider").unwrap(),
       EmbeddingProvider::OpenAILike("custom-provider".to_string())
     );
-  }
-
-  #[test]
-  fn test_indexer_config_defaults() {
-    let config = IndexerConfig::default();
-    assert_eq!(config.max_chunk_size, 512);
-    assert_eq!(config.max_file_size, Some(10 * 1024 * 1024));
-    assert_eq!(config.max_parallel_files, 4);
-    assert_eq!(config.large_file_threads, Some(4));
-    assert_eq!(config.embedding_workers, 3);
-  }
-
-  #[test]
-  fn test_indexer_config_optimal_chunk_size() {
-    let config = IndexerConfig::default();
-
-    // Test with small context length
-    assert_eq!(config.optimal_chunk_size(1000), 512);
-
-    // Test with large context length
-    assert_eq!(config.optimal_chunk_size(8192), 512);
-
-    // Test with custom max_chunk_size
-    let config = IndexerConfig {
-      max_chunk_size: 2048,
-      ..Default::default()
-    };
-    assert_eq!(config.optimal_chunk_size(8192), 2048);
-    assert_eq!(config.optimal_chunk_size(2000), 1800);
   }
 }

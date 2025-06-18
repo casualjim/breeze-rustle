@@ -86,6 +86,14 @@ impl EmbeddingProvider for VoyageEmbeddingProvider {
       .await
       .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?;
 
+    // Log usage information
+    tracing::debug!(
+      "Voyage API call completed. Model: {}, Total tokens used: {}, Estimated tokens: {}",
+      response.model,
+      response.usage.total_tokens,
+      estimated_tokens
+    );
+
     // Extract embeddings in order
     let mut embeddings = vec![vec![]; response.data.len()];
     for data in response.data {

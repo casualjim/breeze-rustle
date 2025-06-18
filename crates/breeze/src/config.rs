@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
 // Re-export for convenience
-pub use breeze_indexer::ConfigEmbeddingProvider as EmbeddingProvider;
+pub use breeze_indexer::EmbeddingProvider;
 
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
 pub struct Config {
@@ -252,7 +252,6 @@ embedding_workers = 4
 #[cfg(test)]
 mod tests {
   use super::*;
-  use breeze_indexer::{VoyageModel, VoyageTier};
   use tempfile::tempdir;
 
   #[test]
@@ -284,97 +283,5 @@ mod tests {
 
     let loaded = Config::from_file(&config_path).unwrap();
     assert_eq!(config.indexer.model, loaded.indexer.model);
-  }
-
-  #[test]
-  fn test_optimal_chunk_size_voyage_tiers() {
-    // Test Free tier
-    let mut config = Config {
-      indexer: breeze_indexer::Config {
-        embedding_provider: EmbeddingProvider::Voyage,
-        voyage: Some(breeze_indexer::VoyageConfig {
-          api_key: "test".to_string(),
-          tier: VoyageTier::Free,
-          model: VoyageModel::VoyageCode3,
-        }),
-        max_chunk_size: default_max_chunk_size(), // Use default to trigger calculation
-        ..breeze_indexer::Config::default()
-      },
-    };
-    assert_eq!(
-      config.indexer.optimal_chunk_size(),
-      2048,
-      "Free tier should use 2k chunks"
-    );
-
-    // Test Tier 1
-    config.indexer.voyage.as_mut().unwrap().tier = VoyageTier::Tier1;
-    assert_eq!(
-      config.indexer.optimal_chunk_size(),
-      4096,
-      "Tier 1 should use 4k chunks"
-    );
-
-    // Test Tier 2
-    config.indexer.voyage.as_mut().unwrap().tier = VoyageTier::Tier2;
-    assert_eq!(
-      config.indexer.optimal_chunk_size(),
-      8000,
-      "Tier 2 should use 8k chunks"
-    );
-
-    // Test Tier 3
-    config.indexer.voyage.as_mut().unwrap().tier = VoyageTier::Tier3;
-    assert_eq!(
-      config.indexer.optimal_chunk_size(),
-      16384,
-      "Tier 3 should use 16k chunks"
-    );
-
-    // Test with voyage-law-2 (16k context)
-    config.indexer.voyage.as_mut().unwrap().model = VoyageModel::VoyageLaw2;
-    config.indexer.voyage.as_mut().unwrap().tier = VoyageTier::Tier3;
-    assert_eq!(
-      config.indexer.optimal_chunk_size(),
-      12800,
-      "Tier 3 with 16k model should cap at 80% of context"
-    );
-  }
-
-  #[test]
-  fn test_optimal_chunk_size_user_override() {
-    let config = Config {
-      indexer: breeze_indexer::Config {
-        embedding_provider: EmbeddingProvider::Voyage,
-        voyage: Some(breeze_indexer::VoyageConfig {
-          api_key: "test".to_string(),
-          tier: VoyageTier::Free,
-          model: VoyageModel::VoyageCode3,
-        }),
-        max_chunk_size: 1000, // User-specified value
-        ..breeze_indexer::Config::default()
-      },
-    };
-    assert_eq!(
-      config.indexer.optimal_chunk_size(),
-      1000,
-      "Should respect user override"
-    );
-  }
-
-  #[test]
-  fn test_optimal_chunk_size_local_provider() {
-    let config = Config {
-      indexer: breeze_indexer::Config {
-        embedding_provider: EmbeddingProvider::Local,
-        max_chunk_size: 1024,
-        ..breeze_indexer::Config::default()
-      },
-    };
-    assert_eq!(
-      config.indexer.optimal_chunk_size(),
-      1024,
-      "Local provider should use configured size"
-    );
   }
 }

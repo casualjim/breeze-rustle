@@ -4,9 +4,9 @@ pub mod models;
 pub mod types;
 
 use async_trait::async_trait;
-pub use error::{Error, ErrorCode};
-pub use models::{EmbeddingModel, RerankingModel};
-pub use types::{EmbeddingResult, FileContent, Tier};
+pub use error::Error;
+pub use models::EmbeddingModel;
+pub use types::Tier;
 
 // Re-export only what's needed for the public API
 pub use client::{Config, EmbeddingRequest, EmbeddingResponse, RerankRequest, RerankResponse};

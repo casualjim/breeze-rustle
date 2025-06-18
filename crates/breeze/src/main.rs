@@ -94,11 +94,10 @@ async fn async_main() {
       if config.indexer.embedding_provider == breeze::config::EmbeddingProvider::Voyage
         && config.indexer.voyage.is_none()
       {
-        config.indexer.voyage = Some(breeze_indexer::config::VoyageConfig {
-          api_key: String::new(),
-          tier: breeze_indexer::aiproviders::voyage::Tier::Free,
-          model: breeze_indexer::aiproviders::voyage::EmbeddingModel::VoyageCode3,
-        });
+        error!(
+          "Voyage embedding provider selected but no voyage configuration found. Please ensure your config file has a [voyage] section or set the BREEZE_VOYAGE_API_KEY environment variable."
+        );
+        std::process::exit(1);
       }
 
       // Handle voyage-specific overrides

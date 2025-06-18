@@ -1,7 +1,8 @@
 use crate::config::EmbeddingProvider;
-use breeze_indexer::aiproviders::voyage::{EmbeddingModel as VoyageModel, Tier as VoyageTier};
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
+
+use breeze_indexer::aiproviders::voyage::{EmbeddingModel as VoyageModel, Tier as VoyageTier};
 
 #[derive(Parser)]
 #[command(name = "breeze")]

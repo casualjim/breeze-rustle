@@ -238,8 +238,7 @@ impl OrtBertEmbedder {
         };
 
         let embeddings = model_guard.run(inputs)?;
-        println!("Output keys: {:?}", embeddings.keys().collect::<Vec<_>>());
-        println!("Looking for output: {}", output_name);
+
         let embeddings: ndarray::ArrayViewD<f32> =
           embeddings[output_name.as_str()].try_extract_array()?;
 
