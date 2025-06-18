@@ -60,6 +60,15 @@ jobs:
         with:
           tool: cargo-zigbuild
 
+      - name: Install ONNX Runtime (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          wget https://github.com/microsoft/onnxruntime/releases/download/v1.22.0/onnxruntime-linux-x64-1.22.0.tgz
+          tar -xzf onnxruntime-linux-x64-1.22.0.tgz
+          sudo cp onnxruntime-linux-x64-1.22.0/lib/libonnxruntime.so* /usr/local/lib/
+          sudo ldconfig
+          rm -rf onnxruntime-linux-x64-1.22.0*
+
       - name: Install Node.js dependencies in breeze-napi
         run: |
           cd crates/breeze-napi && npm install
@@ -105,6 +114,8 @@ jobs:
       - name: Run Rust tests (breeze)
         run: |
           cargo nextest run -p breeze --status-level all --failure-output immediate --success-output immediate
+        env:
+          LD_LIBRARY_PATH: /usr/local/lib:${{ env.LD_LIBRARY_PATH }}
 
       - name: Build Python package (Linux)
         if: runner.os == 'Linux'
