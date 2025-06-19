@@ -21,16 +21,19 @@ pub trait BatchingStrategy: Send + Sync {
 }
 
 /// Simple batching strategy for local providers
+#[cfg(any(feature = "local-embeddings", test))]
 pub struct LocalBatchingStrategy {
   batch_size: usize,
 }
 
+#[cfg(any(feature = "local-embeddings", test))]
 impl LocalBatchingStrategy {
   pub fn new(batch_size: usize) -> Self {
     Self { batch_size }
   }
 }
 
+#[cfg(any(feature = "local-embeddings", test))]
 #[async_trait]
 impl BatchingStrategy for LocalBatchingStrategy {
   async fn prepare_batches(&self, chunks: Vec<(usize, ProjectChunk)>) -> Vec<EmbeddingBatch> {

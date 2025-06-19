@@ -1194,16 +1194,64 @@ mod tests {
     }
   }
 
+  // Mock embedding provider for tests
+  struct MockEmbeddingProvider {
+    embedding_dim: usize,
+  }
+
+  impl MockEmbeddingProvider {
+    fn new(embedding_dim: usize) -> Self {
+      Self { embedding_dim }
+    }
+  }
+
+  #[async_trait::async_trait]
+  impl EmbeddingProvider for MockEmbeddingProvider {
+    async fn embed(
+      &self,
+      inputs: &[crate::embeddings::EmbeddingInput<'_>],
+    ) -> Result<Vec<Vec<f32>>, Box<dyn std::error::Error + Send + Sync>> {
+      Ok(
+        inputs
+          .iter()
+          .map(|input| {
+            // Generate a deterministic embedding based on text content
+            let mut embedding = vec![0.0; self.embedding_dim];
+            let hash = blake3::hash(input.text.as_bytes());
+            let hash_bytes = hash.as_bytes();
+            for (i, &byte) in hash_bytes.iter().enumerate() {
+              if i < self.embedding_dim {
+                embedding[i] = (byte as f32) / 255.0;
+              }
+            }
+            embedding
+          })
+          .collect(),
+      )
+    }
+
+    fn embedding_dim(&self) -> usize {
+      self.embedding_dim
+    }
+
+    fn context_length(&self) -> usize {
+      8192 // Mock context length
+    }
+
+    fn create_batching_strategy(&self) -> Box<dyn crate::embeddings::batching::BatchingStrategy> {
+      Box::new(crate::embeddings::batching::LocalBatchingStrategy::new(256))
+    }
+
+    fn tokenizer(&self) -> Option<Arc<tokenizers::Tokenizer>> {
+      None // Mock provider doesn't use a tokenizer
+    }
+  }
+
   // Helper function to create test embedding provider
   async fn create_test_embedding_provider() -> (Arc<dyn EmbeddingProvider>, usize) {
-    use crate::embeddings::local::LocalEmbeddingProvider;
-
-    let provider = LocalEmbeddingProvider::new("test-model".to_string())
-      .await
-      .unwrap();
-
-    let dim = provider.embedding_dim();
-    (Arc::new(provider), dim)
+    let embedding_dim = 384; // Standard test embedding dimension
+    let provider = MockEmbeddingProvider::new(embedding_dim);
+    (Arc::new(provider), embedding_dim)
   }
 
   #[tokio::test]

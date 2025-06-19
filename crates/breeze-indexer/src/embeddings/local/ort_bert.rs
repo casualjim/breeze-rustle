@@ -19,6 +19,7 @@ use ort::execution_providers::CUDAExecutionProvider;
 use ort::execution_providers::CoreMLExecutionProvider;
 #[cfg(any(feature = "cuda", feature = "metal"))]
 use ort::execution_providers::ExecutionProvider;
+
 use ort::session::Session;
 use ort::session::builder::GraphOptimizationLevel;
 use tokenizers::{PaddingParams, Tokenizer, TruncationParams};

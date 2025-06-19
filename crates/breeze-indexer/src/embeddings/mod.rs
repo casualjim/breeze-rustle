@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 pub mod batching;
 pub mod factory;
+#[cfg(feature = "local-embeddings")]
 pub mod local;
 pub mod openailike;
 pub mod voyage;

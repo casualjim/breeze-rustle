@@ -4,7 +4,8 @@ version.workspace = true
 edition.workspace = true
 
 [features]
-default = ["ort"]
+default = []
+local-embeddings = ["ort"]
 cuda = ["candle-core/cuda", "candle-nn/cuda", "candle-transformers/cuda", "ort/cuda"]
 cudnn = ["candle-core/cudnn"]
 flash-attn = ["cuda", "candle-transformers/flash-attn", "dep:candle-flash-attn"]

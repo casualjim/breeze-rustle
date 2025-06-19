@@ -20,11 +20,15 @@ pub use indexer::{Indexer, IndexerError};
 pub use search::{SearchResult, hybrid_search};
 
 // Global ONNX runtime initialization to prevent multiple initialization issues
+#[cfg(feature = "local-embeddings")]
 use small_ctor::ctor;
+#[cfg(feature = "local-embeddings")]
 use std::sync::OnceLock;
 
+#[cfg(feature = "local-embeddings")]
 static ORT_INIT_RESULT: OnceLock<Result<(), String>> = OnceLock::new();
 
+#[cfg(feature = "local-embeddings")]
 #[ctor]
 unsafe fn init_onnx_runtime() {
   // Set ONNX runtime to quiet mode
@@ -45,6 +49,7 @@ unsafe fn init_onnx_runtime() {
 }
 
 // Ensures ONNX runtime is initialized, can be called multiple times safely
+#[cfg(feature = "local-embeddings")]
 pub fn ensure_ort_initialized() -> Result<(), Box<dyn std::error::Error>> {
   match ORT_INIT_RESULT.get() {
     Some(Ok(())) => Ok(()),
@@ -54,4 +59,9 @@ pub fn ensure_ort_initialized() -> Result<(), Box<dyn std::error::Error>> {
       Err("ONNX Runtime initialization not completed".into())
     }
   }
+}
+
+#[cfg(not(feature = "local-embeddings"))]
+pub fn ensure_ort_initialized() -> Result<(), Box<dyn std::error::Error>> {
+  Err("Local embeddings support not enabled. Enable the 'local-embeddings' feature to use local embedding models.".into())
 }

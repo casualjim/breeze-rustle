@@ -1,6 +1,7 @@
+#[cfg(feature = "local-embeddings")]
+use super::local::LocalEmbeddingProvider;
 use super::{
-  EmbeddingProvider, local::LocalEmbeddingProvider, openailike::OpenAILikeEmbeddingProvider,
-  voyage::VoyageEmbeddingProvider,
+  EmbeddingProvider, openailike::OpenAILikeEmbeddingProvider, voyage::VoyageEmbeddingProvider,
 };
 use crate::config::{Config, EmbeddingProvider as EmbeddingProviderType};
 
@@ -10,8 +11,15 @@ pub async fn create_embedding_provider(
 ) -> Result<Box<dyn EmbeddingProvider>, Box<dyn std::error::Error>> {
   match &config.embedding_provider {
     EmbeddingProviderType::Local => {
-      let provider = LocalEmbeddingProvider::new(config.model.clone()).await?;
-      Ok(Box::new(provider))
+      #[cfg(feature = "local-embeddings")]
+      {
+        let provider = LocalEmbeddingProvider::new(config.model.clone()).await?;
+        Ok(Box::new(provider))
+      }
+      #[cfg(not(feature = "local-embeddings"))]
+      {
+        Err("Local embeddings support not enabled. Enable the 'local-embeddings' feature to use local embedding models.".into())
+      }
     }
     EmbeddingProviderType::Voyage => {
       let voyage_config = config

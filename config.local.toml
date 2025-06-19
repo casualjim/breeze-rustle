@@ -43,13 +43,13 @@ batch_size = 256 # Number of chunks to collect in a batch betfore sending to the
 
 [embeddings]
 # The selected embedding provider, from the providers defined below
-# embedding_provider = "local" | "openai" | "ollama"  | "llamacpp"| "voyage" | "cohere" | "my-provider"
+# provider = "local" | "openai" | "ollama"  | "llamacpp"| "voyage" | "cohere" | "my-provider"
 provider = "voyage"  # Default embedding provider, can be overridden in indexer
 workers = 10  # Number of concurrent embedding requests
 
-[embeddings.local]
-model = "ibm-granite/granite-embedding-125m-english"  # Local model for embeddings
-tokenizer = "characters"
+# [embeddings.local]
+# model = "ibm-granite/granite-embedding-125m-english"  # Local model for embeddings
+# tokenizer = "characters"
 # Optional: Override if auto-detection fails
 # context_length = 512
 # embedding_dim = 384

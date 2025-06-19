@@ -5,6 +5,7 @@ edition = "2024"
 
 [features]
 default = []
+local-embeddings = ["breeze-indexer/local-embeddings"]
 cuda = ["breeze-indexer/cuda"]
 cudnn = ["breeze-indexer/cudnn"]
 flash-attn = ["breeze-indexer/flash-attn"]

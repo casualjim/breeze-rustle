@@ -45,7 +45,11 @@ fn main() {
   rustls::crypto::aws_lc_rs::default_provider()
     .install_default()
     .expect("Failed to install AWS LC crypto provider");
-  breeze::ensure_ort_initialized().expect("Failed to initialize ONNX runtime");
+
+  #[cfg(feature = "local-embeddings")]
+  {
+    breeze::ensure_ort_initialized().expect("Failed to initialize ONNX runtime");
+  }
   let _log_guard = breeze::init_logging(env!("CARGO_PKG_NAME"));
 
   let rt = tokio::runtime::Builder::new_multi_thread()
