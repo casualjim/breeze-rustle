@@ -9,6 +9,10 @@ on:
   pull_request:
   workflow_dispatch:
 
+concurrency:
+  group: ${{ github.head_ref || github.run_id }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 
@@ -116,7 +120,7 @@ jobs:
 
       - name: Build Python package
         run: |
-          cd crates/breeze-py && uv run --python .venv maturin develop --release --zig
+          cd crates/breeze-py && uv run --python .venv maturin develop --release
 
       - name: Run Python tests
         run: |
