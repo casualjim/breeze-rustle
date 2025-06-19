@@ -159,17 +159,8 @@ fn use_npm_parsers(parser_lib_path: &Path, out_path: &Path) {
   let lib_name = parser_lib_path.file_stem().unwrap().to_str().unwrap();
   let lib_name = lib_name.strip_prefix("lib").unwrap_or(lib_name);
 
-  // On Windows, we need special handling for the parser library
-  if cfg!(target_os = "windows") {
-    // Use whole-archive to ensure all symbols are included but allow duplicates
-    println!(
-      "cargo:rustc-link-arg=/WHOLEARCHIVE:{}",
-      parser_lib_path.display()
-    );
-    println!("cargo:rustc-link-arg=/FORCE:MULTIPLE");
-  } else {
-    println!("cargo:rustc-link-lib=static={}", lib_name);
-  }
+  // Link the static library
+  println!("cargo:rustc-link-lib=static={}", lib_name);
   
   println!(
     "cargo:rustc-link-search=native={}",
@@ -181,6 +172,9 @@ fn use_npm_parsers(parser_lib_path: &Path, out_path: &Path) {
     println!("cargo:rustc-link-lib=c++");
   } else if cfg!(target_os = "linux") {
     println!("cargo:rustc-link-lib=stdc++");
+  } else if cfg!(target_os = "windows") {
+    // Windows: Handle the bsearch symbol conflict from perl scanner
+    println!("cargo:rustc-link-arg=/FORCE:MULTIPLE");
   }
 
   // Check if there's a metadata file alongside the library
