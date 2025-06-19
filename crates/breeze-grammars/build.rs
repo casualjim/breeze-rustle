@@ -173,8 +173,11 @@ fn use_npm_parsers(parser_lib_path: &Path, out_path: &Path) {
   } else if cfg!(target_os = "linux") {
     println!("cargo:rustc-link-lib=stdc++");
   } else if cfg!(target_os = "windows") {
-    // Windows: Handle the bsearch symbol conflict from perl scanner
+    // Windows: The perl scanner defines bsearch which conflicts with CRT
+    // We need to use the MSVC linker flags to handle this
     println!("cargo:rustc-link-arg=/FORCE:MULTIPLE");
+    println!("cargo:rustc-link-arg=/NODEFAULTLIB:ucrt");
+    println!("cargo:rustc-link-arg=ucrt.lib");
   }
 
   // Check if there's a metadata file alongside the library
