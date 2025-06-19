@@ -47,6 +47,7 @@ rustls-pemfile = "2.2.0"
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 tokio = { workspace = true, features = ["signal", "rt-multi-thread"] }
+tokio-util = { workspace = true }
 tower = { version = "0.5.2" }
 tower-http = { version = "0.6.6", features = [
   "fs",
@@ -61,6 +62,8 @@ tower-sessions = { version = "0.14.0" }
 tracing.workspace = true
 
 url = { version = "2", features = ["serde"] }
+
+rmcp = { git = "https://github.com/modelcontextprotocol/rust-sdk", branch = "main", features = ["transport-streamable-http-server-session", "transport-streamable-http-server", "transport-worker", "transport-sse-server"] }
 
 [dev-dependencies]
 axum-test = "17"

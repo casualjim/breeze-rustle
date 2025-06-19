@@ -1,10 +1,50 @@
 #[cfg(feature = "perfprofiling")]
 use breeze::cli::DebugCommands;
-use breeze::cli::{Cli, Commands, McpMode};
+use breeze::cli::{Cli, Commands};
 use std::path::PathBuf;
-use tracing::{error, info};
+use tokio::signal;
+use tokio_util::sync::CancellationToken;
+use tracing::{debug, error, info};
+
+/// Create a cancellation token that triggers on Ctrl+C or SIGTERM
+fn create_shutdown_token() -> (CancellationToken, tokio::task::JoinHandle<()>) {
+  let token = CancellationToken::new();
+  let token_clone = token.clone();
+
+  let handle = tokio::spawn(async move {
+    let ctrl_c = async {
+      signal::ctrl_c()
+        .await
+        .expect("failed to install Ctrl+C handler");
+    };
+
+    #[cfg(unix)]
+    let terminate = async {
+      signal::unix::signal(signal::unix::SignalKind::terminate())
+        .expect("failed to install signal handler")
+        .recv()
+        .await;
+    };
+
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+
+    tokio::select! {
+      _ = ctrl_c => {},
+      _ = terminate => {},
+    }
+
+    info!("Shutdown signal received");
+    token_clone.cancel();
+  });
+
+  (token, handle)
+}
 
 fn main() {
+  rustls::crypto::aws_lc_rs::default_provider()
+    .install_default()
+    .expect("Failed to install AWS LC crypto provider");
   breeze::ensure_ort_initialized().expect("Failed to initialize ONNX runtime");
   let _log_guard = breeze::init_logging(env!("CARGO_PKG_NAME"));
 
@@ -13,12 +53,17 @@ fn main() {
     .build()
     .expect("Failed to create Tokio runtime");
   rt.block_on(async_main());
+
   // Ensure all tasks are completed before exiting
   rt.shutdown_timeout(std::time::Duration::from_secs(10));
+  debug!("Runtime shutdown complete");
 }
 
 async fn async_main() {
   let cli = Cli::parse();
+
+  // Create shutdown token for graceful shutdown
+  let (shutdown_token, signal_handle) = create_shutdown_token();
 
   // Load configuration using config-rs
   let config = match breeze::Config::load(cli.config.clone()) {
@@ -38,20 +83,30 @@ async fn async_main() {
 
   match cli.command {
     Commands::Index { path } => {
-
       info!("Starting indexing of: {}", path.display());
       info!("Using configuration: {:?}", config);
 
       match breeze::App::new(config).await {
-        Ok(app) => match app.index(&path).await {
-          Ok(_) => {
-            info!("Indexing completed successfully!");
+        Ok(app) => {
+          let cancel_token = shutdown_token.clone();
+          tokio::select! {
+            result = app.index(&path, Some(cancel_token)) => {
+              match result {
+                Ok(_) => {
+                  info!("Indexing completed successfully!");
+                }
+                Err(e) => {
+                  error!("Indexing failed: {}", e);
+                  std::process::exit(1);
+                }
+              }
+            }
+            _ = shutdown_token.cancelled() => {
+              info!("Indexing cancelled by user");
+              std::process::exit(0);
+            }
           }
-          Err(e) => {
-            error!("Indexing failed: {}", e);
-            std::process::exit(1);
-          }
-        },
+        }
         Err(e) => {
           error!("Failed to initialize app: {}", e);
           std::process::exit(1);
@@ -59,12 +114,7 @@ async fn async_main() {
       }
     }
 
-    Commands::Search {
-      query,
-      limit,
-      full,
-    } => {
-
+    Commands::Search { query, limit, full } => {
       info!("Starting search for: \"{}\"", query);
       info!("Using configuration: {:?}", config);
 
@@ -307,35 +357,6 @@ async fn async_main() {
       }
     },
 
-    Commands::Mcp { mode, port, host } => {
-      use breeze::mcp::BreezeMcpServer;
-
-      info!("Starting MCP server with configuration: {:?}", config);
-
-      match BreezeMcpServer::new(config).await {
-        Ok(server) => match mode {
-          McpMode::Stdio => {
-            info!("Running MCP server in STDIO mode");
-            if let Err(e) = server.run_stdio().await {
-              error!("MCP server error: {}", e);
-              std::process::exit(1);
-            }
-          }
-          McpMode::Http => {
-            info!("Running MCP server in HTTP mode on {}:{}", host, port);
-            if let Err(e) = server.run_http(&host, port).await {
-              error!("MCP server error: {}", e);
-              std::process::exit(1);
-            }
-          }
-        },
-        Err(e) => {
-          error!("Failed to initialize MCP server: {}", e);
-          std::process::exit(1);
-        }
-      }
-    }
-
     Commands::Serve => {
       info!(
         "Starting Breeze API server on ports HTTP:{} HTTPS:{}",
@@ -353,21 +374,55 @@ async fn async_main() {
 
       // Create server config from breeze config
       let server_config = breeze_server::Config {
-        domains: config.server.letsencrypt.as_ref().map(|le| le.domains.clone()).unwrap_or_default(),
-        email: config.server.letsencrypt.as_ref().map(|le| le.emails.clone()).unwrap_or_default(),
-        cache: config.server.letsencrypt.as_ref().map(|le| le.cert_dir.clone()),
-        production: config.server.letsencrypt.as_ref().map(|le| le.production).unwrap_or(false),
-        tls_key: config.server.tls.as_ref().map(|tls| PathBuf::from(&tls.tls_key)),
-        tls_cert: config.server.tls.as_ref().map(|tls| PathBuf::from(&tls.tls_cert)),
+        tls_enabled: !config.server.tls.disabled,
+        domains: config
+          .server
+          .tls
+          .letsencrypt
+          .as_ref()
+          .map(|le| le.domains.clone())
+          .unwrap_or_default(),
+        email: config
+          .server
+          .tls
+          .letsencrypt
+          .as_ref()
+          .map(|le| le.emails.clone())
+          .unwrap_or_default(),
+        cache: config
+          .server
+          .tls
+          .letsencrypt
+          .as_ref()
+          .map(|le| le.cert_dir.clone()),
+        production: config
+          .server
+          .tls
+          .letsencrypt
+          .as_ref()
+          .map(|le| le.production)
+          .unwrap_or(false),
+        tls_key: config
+          .server
+          .tls
+          .keypair
+          .as_ref()
+          .map(|kp| PathBuf::from(&kp.tls_key)),
+        tls_cert: config
+          .server
+          .tls
+          .keypair
+          .as_ref()
+          .map(|kp| PathBuf::from(&kp.tls_cert)),
         https_port: config.server.ports.https,
         http_port: config.server.ports.http,
         indexer: indexer_config,
       };
 
       // Run the server
-      match breeze_server::run(server_config).await {
+      match breeze_server::run(server_config, Some(shutdown_token)).await {
         Ok(_) => {
-          info!("Breeze server stopped successfully");
+          debug!("Breeze server stopped successfully");
         }
         Err(e) => {
           error!("Server error: {}", e);
@@ -376,4 +431,9 @@ async fn async_main() {
       }
     }
   }
+
+  // Abort the signal handler task to prevent it from keeping the runtime alive
+  signal_handle.abort();
+
+  debug!("async_main completed");
 }

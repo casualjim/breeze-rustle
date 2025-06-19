@@ -10,7 +10,6 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use tracing::{error, info};
 
-
 use crate::app::{self, AppState};
 
 #[derive(Deserialize)]
@@ -66,7 +65,11 @@ async fn index_project(
       .into_response();
   }
 
-  match state.indexer.index_project(&project_path).await {
+  match state
+    .indexer
+    .index_project(&project_path, Some(state.shutdown_token.clone()))
+    .await
+  {
     Ok(files_indexed) => {
       info!(files_indexed, "Project indexed successfully");
       (

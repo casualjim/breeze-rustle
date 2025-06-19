@@ -2,7 +2,6 @@ mod app;
 pub mod cli;
 pub mod config;
 mod logging;
-pub mod mcp;
 
 pub use app::App;
 pub use config::Config;

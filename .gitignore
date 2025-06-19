@@ -87,3 +87,4 @@ node_modules/
 # Code Index MCP cache directory
 .code_indexer/
 *.pem
+output.map

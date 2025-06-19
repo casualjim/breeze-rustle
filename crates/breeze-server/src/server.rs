@@ -33,6 +33,9 @@ struct Ports {
 
 #[derive(Default, Debug)]
 pub struct Config {
+  /// Enable TLS/HTTPS
+  pub tls_enabled: bool,
+
   /// Path to store LanceDB data
   /// Domains
   pub domains: Vec<String>,
@@ -67,15 +70,28 @@ pub struct Config {
   pub indexer: breeze_indexer::Config,
 }
 
-pub async fn run(args: Config) -> anyhow::Result<()> {
-  let (config, _jh) = make_tls_config(&args).await?;
+pub async fn run(
+  args: Config,
+  shutdown_token: Option<tokio_util::sync::CancellationToken>,
+) -> anyhow::Result<()> {
+  // Extract all needed fields from args first
+  let tls_enabled = args.tls_enabled;
+  let http_port = args.http_port;
+  let https_port = args.https_port;
 
-  // Initialize the indexer
+  // Get TLS config if needed (before moving indexer)
+  let tls_config_result = if tls_enabled {
+    Some(make_tls_config(&args).await?)
+  } else {
+    None
+  };
+
+  // Initialize the indexer (this moves args.indexer)
   let indexer = breeze_indexer::Indexer::new(args.indexer)
     .await
     .map_err(|e| anyhow::anyhow!("Failed to initialize indexer: {}", e))?;
 
-  let state = AppState::new(indexer).await;
+  let state = AppState::new(indexer, shutdown_token.clone()).await;
 
   let metrics = metrics_layer();
 
@@ -89,7 +105,7 @@ pub async fn run(args: Config) -> anyhow::Result<()> {
   // );
 
   let handle = Handle::new();
-  tokio::spawn(graceful_shutdown(handle.clone()));
+  tokio::spawn(graceful_shutdown(handle.clone(), shutdown_token.clone()));
 
   // let session_layer = SessionManagerLayer::new(session_store)
   //   .with_secure(true)
@@ -106,43 +122,67 @@ pub async fn run(args: Config) -> anyhow::Result<()> {
   // let cors_origin: HeaderValue = (&args.cors_origin).parse()?;
 
   use prometheus::Encoder;
-  let app = Router::new().merge(
-    crate::routes::router(state.clone())
-      // .layer(auth_layer)
-      .layer(HelmetLayer::new(Helmet::default()))
-      .layer(OtelInResponseLayer::default())
-      .layer(OtelAxumLayer::default())
-      .route(
-        "/metrics",
-        get(|| async {
-          let mut buffer = Vec::new();
-          let encoder = prometheus::TextEncoder::new();
-          encoder.encode(&prometheus::gather(), &mut buffer).unwrap();
-          // return metrics
-          String::from_utf8(buffer).unwrap()
-        }),
-      )
-      // .layer(session_layer)
-      .layer(metrics)
-      // .layer(
-      //   CorsLayer::new()
-      //     .allow_credentials(true)
-      //     .allow_headers([ACCEPT, CONTENT_TYPE, HeaderName::from_static("csrf-token")])
-      //     .max_age(Duration::from_secs(86400))
-      //     .allow_origin(cors_origin)
-      //     .allow_methods([
-      //       Method::GET,
-      //       Method::POST,
-      //       Method::PUT,
-      //       Method::DELETE,
-      //       Method::OPTIONS,
-      //       Method::HEAD,
-      //       Method::PATCH,
-      //     ]),
-      // )
-      .layer(CompressionLayer::new().quality(tower_http::CompressionLevel::Default))
-      .with_state(state.clone()), // .with_state(pool),
+
+  // Create MCP HTTP service
+  let mcp_http_service =
+    crate::mcp::create_http_service(state.indexer.clone(), state.shutdown_token.clone());
+
+  // Create MCP SSE server and router
+  let bind_addr = SocketAddr::from((Ipv4Addr::UNSPECIFIED, http_port));
+  let (sse_server, sse_router) = crate::mcp::create_sse_server(
+    state.shutdown_token.clone(),
+    "/sse".to_string(),
+    "/message".to_string(),
+    bind_addr,
   );
+
+  // Start the SSE service
+  let sse_service_ct = crate::mcp::start_sse_service(
+    sse_server,
+    state.indexer.clone(),
+    state.shutdown_token.clone(),
+  );
+
+  let app = Router::new()
+    .nest_service("/mcp", mcp_http_service)
+    .nest("/sse", sse_router)
+    .merge(
+      crate::routes::router(state.clone())
+        // .layer(auth_layer)
+        .layer(HelmetLayer::new(Helmet::default()))
+        .layer(OtelInResponseLayer)
+        .layer(OtelAxumLayer::default())
+        .route(
+          "/metrics",
+          get(|| async {
+            let mut buffer = Vec::new();
+            let encoder = prometheus::TextEncoder::new();
+            encoder.encode(&prometheus::gather(), &mut buffer).unwrap();
+            // return metrics
+            String::from_utf8(buffer).unwrap()
+          }),
+        )
+        // .layer(session_layer)
+        .layer(metrics)
+        // .layer(
+        //   CorsLayer::new()
+        //     .allow_credentials(true)
+        //     .allow_headers([ACCEPT, CONTENT_TYPE, HeaderName::from_static("csrf-token")])
+        //     .max_age(Duration::from_secs(86400))
+        //     .allow_origin(cors_origin)
+        //     .allow_methods([
+        //       Method::GET,
+        //       Method::POST,
+        //       Method::PUT,
+        //       Method::DELETE,
+        //       Method::OPTIONS,
+        //       Method::HEAD,
+        //       Method::PATCH,
+        //     ]),
+        // )
+        .layer(CompressionLayer::new().quality(tower_http::CompressionLevel::Default))
+        .with_state(state.clone()), // .with_state(pool),
+    );
   // .nest_service("/static", static_file_handler(state));
 
   // #[cfg(debug_assertions)]
@@ -169,34 +209,84 @@ pub async fn run(args: Config) -> anyhow::Result<()> {
 
   // this will enable us to keep application running during recompile: systemfd --no-pid -s http::8080 -s https::8443 -- cargo watch -x run
   let mut listenfd = ListenFd::from_env();
-  let http_listener = listenfd.take_tcp_listener(0)?.unwrap_or_else(|| {
-    let addr = SocketAddr::from((Ipv4Addr::UNSPECIFIED, args.http_port));
-    TcpListener::bind(addr).expect(format!("failed to bind to {}", addr).as_str())
-  });
-  let https_listener = listenfd.take_tcp_listener(1)?.unwrap_or_else(|| {
-    let addr = SocketAddr::from((Ipv4Addr::UNSPECIFIED, args.https_port));
-    TcpListener::bind(addr).expect(format!("failed to bind to {}", addr).as_str())
-  });
 
-  let ports = Ports {
-    http: args.http_port,
-    https: args.https_port,
-  };
-  // optional: spawn a second server to redirect http requests to this server
-  tokio::spawn(redirect_http_to_https(ports, http_listener));
+  if let Some((config, _jh)) = tls_config_result {
+    // TLS is enabled - set up both HTTP (for redirect) and HTTPS listeners
 
-  // run https server
-  debug!(
-    addr = %https_listener.local_addr().unwrap(),
-    "starting gigglepuff server",
-  );
+    let http_listener = listenfd.take_tcp_listener(0)?.unwrap_or_else(|| {
+      let addr = SocketAddr::from((Ipv4Addr::UNSPECIFIED, http_port));
+      TcpListener::bind(addr).unwrap_or_else(|_| panic!("failed to bind to {}", addr))
+    });
+    let https_listener = listenfd.take_tcp_listener(1)?.unwrap_or_else(|| {
+      let addr = SocketAddr::from((Ipv4Addr::UNSPECIFIED, https_port));
+      TcpListener::bind(addr).unwrap_or_else(|_| panic!("failed to bind to {}", addr))
+    });
 
-  let mut server = axum_server::from_tcp_rustls(https_listener, config).handle(handle);
-  server.http_builder().http2().enable_connect_protocol();
-  server
-    .serve(app.into_make_service_with_connect_info::<SocketAddr>())
-    .await?;
+    let ports = Ports {
+      http: http_port,
+      https: https_port,
+    };
+    // Create a handle for the redirect server
+    let redirect_handle = Handle::new();
+    // Spawn graceful shutdown for redirect server
+    tokio::spawn(graceful_shutdown(
+      redirect_handle.clone(),
+      shutdown_token.clone(),
+    ));
+    // Spawn a server to redirect http requests to https
+    tokio::spawn(redirect_http_to_https(
+      ports,
+      http_listener,
+      redirect_handle,
+    ));
 
+    // run https server
+    debug!(
+      addr = %https_listener.local_addr().unwrap(),
+      "starting HTTPS server",
+    );
+
+    let mut server = axum_server::from_tcp_rustls(https_listener, config).handle(handle.clone());
+    server.http_builder().http2().enable_connect_protocol();
+
+    // Run the server
+    let server_future = server.serve(app.into_make_service_with_connect_info::<SocketAddr>());
+
+    // Wait for server to complete or cancellation token
+    tokio::select! {
+      result = server_future => {
+        // Cancel SSE service when main server stops
+        sse_service_ct.cancel();
+        result?
+      }
+    }
+  } else {
+    // TLS is disabled - run plain HTTP server only
+    let http_listener = listenfd.take_tcp_listener(0)?.unwrap_or_else(|| {
+      let addr = SocketAddr::from((Ipv4Addr::UNSPECIFIED, http_port));
+      TcpListener::bind(addr).unwrap_or_else(|_| panic!("failed to bind to {}", addr))
+    });
+
+    debug!(
+      addr = %http_listener.local_addr().unwrap(),
+      "starting HTTP server (TLS disabled)",
+    );
+
+    let server = axum_server::from_tcp(http_listener)
+      .handle(handle.clone())
+      .serve(app.into_make_service_with_connect_info::<SocketAddr>());
+
+    // Wait for server to complete or cancellation token
+    tokio::select! {
+      result = server => {
+        // Cancel SSE service when main server stops
+        sse_service_ct.cancel();
+        result?
+      }
+    }
+  }
+
+  debug!("Server run function completing");
   Ok(())
 }
 
@@ -265,7 +355,7 @@ async fn make_tls_config(args: &Config) -> anyhow::Result<(RustlsConfig, JoinHan
   Ok((config, jh))
 }
 
-async fn redirect_http_to_https(ports: Ports, listener: TcpListener) {
+async fn redirect_http_to_https(ports: Ports, listener: TcpListener, handle: Handle) {
   fn make_https(host: String, uri: Uri, ports: Ports) -> Result<Uri, BoxError> {
     let mut parts = uri.into_parts();
 
@@ -294,36 +384,51 @@ async fn redirect_http_to_https(ports: Ports, listener: TcpListener) {
   };
 
   tracing::debug!("listening on {}", listener.local_addr().unwrap());
-  axum::serve(
-    tokio::net::TcpListener::from_std(listener).unwrap(),
-    redirect.into_make_service(),
-  )
-  // .with_graceful_shutdown(signal)
-  .await
-  .unwrap();
+
+  let server = axum_server::from_tcp(listener)
+    .handle(handle)
+    .serve(redirect.into_make_service());
+
+  if let Err(e) = server.await {
+    error!("HTTP redirect server error: {}", e);
+  }
+  info!("HTTP redirect server stopped");
 }
 
-async fn graceful_shutdown(handle: Handle) {
-  let ctrl_c = async {
-    signal::ctrl_c()
-      .await
-      .expect("failed to install Ctrl+C handler");
-  };
+async fn graceful_shutdown(
+  handle: Handle,
+  external_token: Option<tokio_util::sync::CancellationToken>,
+) {
+  match external_token {
+    Some(token) => {
+      // Wait only for the external token - signals are handled elsewhere
+      token.cancelled().await;
+      info!("Shutdown requested via external token");
+    }
+    None => {
+      // Only set up signal handlers if no external token is provided
+      let ctrl_c = async {
+        signal::ctrl_c()
+          .await
+          .expect("failed to install Ctrl+C handler");
+      };
 
-  #[cfg(unix)]
-  let terminate = async {
-    signal::unix::signal(signal::unix::SignalKind::terminate())
-      .expect("failed to install signal handler")
-      .recv()
-      .await;
-  };
+      #[cfg(unix)]
+      let terminate = async {
+        signal::unix::signal(signal::unix::SignalKind::terminate())
+          .expect("failed to install signal handler")
+          .recv()
+          .await;
+      };
 
-  #[cfg(not(unix))]
-  let terminate = std::future::pending::<()>();
+      #[cfg(not(unix))]
+      let terminate = std::future::pending::<()>();
 
-  tokio::select! {
-      _ = ctrl_c => {},
-      _ = terminate => {},
+      tokio::select! {
+        _ = ctrl_c => {},
+        _ = terminate => {},
+      }
+    }
   }
 
   info!("waiting for connections to close");

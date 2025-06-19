@@ -43,6 +43,7 @@ impl<'a> BulkIndexer<'a> {
   pub async fn index(
     &self,
     path: &Path,
+    cancel_token: Option<CancellationToken>,
   ) -> Result<usize, Box<dyn std::error::Error + Send + Sync>> {
     let start_time = Instant::now();
     info!(path = %path.display(), "Starting channel-based indexing");
@@ -73,7 +74,7 @@ impl<'a> BulkIndexer<'a> {
 
     let chunk_stream = walk_project(path.to_path_buf(), walk_options);
     // Use same batch size as local models for consistency
-    let result = self.index_stream(chunk_stream, 256).await?;
+    let result = self.index_stream(chunk_stream, 256, cancel_token).await?;
 
     let elapsed = start_time.elapsed();
     info!(
@@ -93,6 +94,7 @@ impl<'a> BulkIndexer<'a> {
     > + Send
     + 'static,
     max_batch_size: usize,
+    external_cancel_token: Option<CancellationToken>,
   ) -> Result<usize, Box<dyn std::error::Error + Send + Sync>> {
     let embedding_dim = self.embedding_dim;
 
@@ -103,7 +105,7 @@ impl<'a> BulkIndexer<'a> {
 
     // Progress tracking and cancellation
     let stats = IndexingStats::new();
-    let cancel_token = CancellationToken::new();
+    let cancel_token = external_cancel_token.unwrap_or_default();
 
     // Start pipeline stages with cancellation support
     // we start this with in the reverse order of execution
@@ -1247,7 +1249,7 @@ mod tests {
 
     let chunk_stream = stream::iter(chunks);
 
-    let count = indexer.index_stream(chunk_stream, 2).await.unwrap();
+    let count = indexer.index_stream(chunk_stream, 2, None).await.unwrap();
 
     assert_eq!(count, 2, "Should have indexed 2 documents");
   }
@@ -1416,7 +1418,7 @@ mod tests {
     ];
 
     let chunk_stream = stream::iter(chunks);
-    let count = indexer.index_stream(chunk_stream, 10).await.unwrap();
+    let count = indexer.index_stream(chunk_stream, 10, None).await.unwrap();
 
     // Should still process valid files despite error
     assert_eq!(count, 2, "Should have indexed 2 documents despite error");
@@ -1458,7 +1460,7 @@ mod tests {
         embedding_dim,
         Arc::new(RwLock::new(table)),
       );
-      indexer.index_stream(chunk_stream, 5).await
+      indexer.index_stream(chunk_stream, 5, None).await
     });
 
     // Give it time to process the first chunks
@@ -1505,7 +1507,7 @@ mod tests {
     chunks.push(Ok(create_test_chunk("bigfile.rs", "", true)));
 
     let chunk_stream = stream::iter(chunks);
-    let count = indexer.index_stream(chunk_stream, 3).await.unwrap(); // batch size 3
+    let count = indexer.index_stream(chunk_stream, 3, None).await.unwrap(); // batch size 3
 
     assert_eq!(count, 1, "Should have indexed 1 document with many chunks");
   }
@@ -1533,7 +1535,7 @@ mod tests {
     );
 
     let chunk_stream = stream::iter(vec![] as Vec<Result<ProjectChunk, ChunkError>>);
-    let count = indexer.index_stream(chunk_stream, 10).await.unwrap();
+    let count = indexer.index_stream(chunk_stream, 10, None).await.unwrap();
 
     assert_eq!(count, 0, "Should handle empty stream gracefully");
   }
@@ -1567,7 +1569,7 @@ mod tests {
     ];
 
     let chunk_stream = stream::iter(chunks);
-    let count = indexer.index_stream(chunk_stream, 10).await.unwrap();
+    let count = indexer.index_stream(chunk_stream, 10, None).await.unwrap();
 
     // Empty files should not create documents
     assert_eq!(count, 0, "Should not index empty files");
@@ -1604,7 +1606,7 @@ mod tests {
     ];
 
     let chunk_stream = stream::iter(chunks);
-    let count = indexer.index_stream(chunk_stream, 2).await.unwrap(); // batch size 2
+    let count = indexer.index_stream(chunk_stream, 2, None).await.unwrap(); // batch size 2
 
     assert_eq!(count, 1, "Should have indexed 1 document with 3 chunks");
   }
@@ -1650,7 +1652,7 @@ mod tests {
     }
 
     let chunk_stream = stream::iter(chunks);
-    let count = indexer.index_stream(chunk_stream, 10).await.unwrap();
+    let count = indexer.index_stream(chunk_stream, 10, None).await.unwrap();
 
     assert_eq!(count, 101, "Should have indexed 101 documents");
   }
@@ -1701,7 +1703,7 @@ def goodbye():
     info!("Created test file: {}", test_file.display());
 
     info!("Starting indexing...");
-    let count = indexer.index(test_dir.path()).await.unwrap();
+    let count = indexer.index(test_dir.path(), None).await.unwrap();
     info!("Indexing completed, document count: {}", count);
     assert_eq!(count, 1);
   }

@@ -24,11 +24,8 @@ perfprofiling = [
 
 [dependencies]
 anyhow.workspace = true
-arrow.workspace = true
 
 # Embedding providers
-async-stream.workspace = true
-async-trait.workspace = true
 breeze-chunkers = { path = "../breeze-chunkers" }
 breeze-indexer = { path = "../breeze-indexer" }
 breeze-server = { path = "../breeze-server" }
@@ -39,48 +36,26 @@ chrono.workspace = true
 clap = { version = "4.5", features = ["derive", "env"] }
 config = "0.15"
 console-subscriber = "0.4.1"
+
 dirs = "6.0"
-flume.workspace = true
-futures.workspace = true
-futures-util.workspace = true
-http = "1.2"
+
 human-units = { version = "0.3.0", features = ["serde", "si-units"] }
 
 hyperpolyglot = { version = "0.1.7", optional = true }     # Language detection
 ignore = { version = "0.4.23", features = ["simd-accel"], optional = true }
 infer = { version = "0.19.0", optional = true }            # File type detection
 
-lancedb.workspace = true
-
-# MCP server
-mcp-protocol-sdk = { version = "0.2", features = ["stdio", "http", "tracing-subscriber"] }
-ndarray = "0.16.1"
-
 num_cpus.workspace = true
-pin-project-lite.workspace = true
-rand = "0.9"
-reqwest.workspace = true
+rustls = { version = "0.23.28", features = ["aws-lc-rs", "brotli", "zlib"] }
+
 serde.workspace = true
-serde_json.workspace = true
-small_ctor = "0.1.2"
-strum = { version = "0.27.1", features = ["derive"] }
 
-# Error handling
-thiserror = "2.0"
-tiktoken-rs = "0.7"
-tokenizers = "0.21"
 tokio = { workspace = true }
-tokio-stream.workspace = true
-
-# Rate limiting and utilities
-tokio-util.workspace = true
+tokio-util = { workspace = true }
 toml = "0.8"
-
 tracing.workspace = true
 tracing-subscriber = { version = "0.3.19", features = ["env-filter", "fmt"] }
-uuid.workspace = true
 
 [dev-dependencies]
 breeze-indexer = { path = "../breeze-indexer", features = ["testing"] }
-tempfile = "3.11"
-wiremock = "0.6"
+tempfile = "3"

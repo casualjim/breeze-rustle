@@ -26,21 +26,32 @@ pub struct Config {
 
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
 pub struct ServerConfig {
-  /// TLS configuration (keypair files)
-  #[serde(skip_serializing_if = "Option::is_none")]
-  pub tls: Option<TlsConfig>,
-
-  /// Let's Encrypt configuration
-  #[serde(skip_serializing_if = "Option::is_none")]
-  pub letsencrypt: Option<LetsEncryptConfig>,
+  /// TLS configuration
+  #[serde(default)]
+  pub tls: TlsConfig,
 
   /// Port configuration
   #[serde(default)]
   pub ports: PortConfig,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
 pub struct TlsConfig {
+  /// Whether TLS is disabled (default: false)
+  #[serde(default)]
+  pub disabled: bool,
+
+  /// TLS configuration using keypair files
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub keypair: Option<TlsKeypair>,
+
+  /// Let's Encrypt configuration
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub letsencrypt: Option<LetsEncryptConfig>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct TlsKeypair {
   pub tls_cert: String,
   pub tls_key: String,
 }
@@ -145,7 +156,8 @@ pub struct LocalEmbeddingsConfig {
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct VoyageConfig {
-  pub api_key: String,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub api_key: Option<String>,
   pub tier: String,
   pub model: String,
   #[serde(skip_serializing_if = "Option::is_none")]
@@ -311,8 +323,19 @@ impl Config {
       .voyage
       .as_ref()
       .map(|v| -> anyhow::Result<VoyageClientConfig> {
+        // Get API key from config or environment variable
+        let api_key = v
+          .api_key
+          .clone()
+          .or_else(|| std::env::var("VOYAGE_API_KEY").ok())
+          .ok_or_else(|| {
+            anyhow::anyhow!(
+              "Voyage API key not found in config or VOYAGE_API_KEY environment variable"
+            )
+          })?;
+
         Ok(VoyageClientConfig {
-          api_key: v.api_key.clone(),
+          api_key,
           tier: v
             .tier
             .parse()
@@ -343,11 +366,17 @@ impl Config {
           ));
         };
 
+        // Get API key from config or environment variable
+        let api_key = config.api_key.clone().or_else(|| {
+          let env_var = format!("{}_API_KEY", name.to_uppercase());
+          std::env::var(&env_var).ok()
+        });
+
         openai_providers.insert(
           name.clone(),
           breeze_indexer::OpenAILikeConfig {
             api_base: api_base.clone(),
-            api_key: config.api_key.clone(),
+            api_key,
             model: config.model.clone(),
             embedding_dim: config.embedding_dim.ok_or_else(|| {
               anyhow::anyhow!("embedding_dim is required for provider '{}'", name)
@@ -443,9 +472,12 @@ mod tests {
 
     if example_path.exists() {
       let config = Config::load(Some(example_path)).expect("Failed to parse example config");
-      
+
       // Debug: print the providers map
-      eprintln!("Providers in map: {:?}", config.embeddings.providers.keys().collect::<Vec<_>>());
+      eprintln!(
+        "Providers in map: {:?}",
+        config.embeddings.providers.keys().collect::<Vec<_>>()
+      );
 
       // Verify key fields from the example
       assert_eq!(config.db_dir, PathBuf::from("./embeddings.db"));
@@ -474,17 +506,17 @@ mod tests {
   #[test]
   fn test_size_parsing() {
     use human_units::Size;
-    
-    // Test that "5M" works 
+
+    // Test that "5M" works
     let size: Size = "5M".parse().expect("Should parse 5M");
     assert_eq!(*size, 5 * 1024 * 1024); // M is 1024-based in human-units
-    
+
     // Test with serde
     #[derive(Debug, serde::Deserialize)]
     struct TestConfig {
       file_size: Option<Size>,
     }
-    
+
     let toml_str = r#"file_size = "5M""#;
     let config: TestConfig = toml::from_str(toml_str).expect("Should deserialize");
     assert_eq!(config.file_size.map(|s| *s), Some(5 * 1024 * 1024));
@@ -496,11 +528,25 @@ mod tests {
     let config_path = dir.path().join("test_config.toml");
 
     // Create a config with various settings
-    let mut config = Config::default();
-    config.db_dir = PathBuf::from("./test.db");
-    config.embeddings.provider = "voyage".to_string();
-    config.indexer.limits.file_size = Some("1M".parse().expect("Invalid size"));
-    config.indexer.workers.batch_size = 512;
+    let config = Config {
+      db_dir: PathBuf::from("./test.db"),
+      embeddings: EmbeddingsConfig {
+        provider: "voyage".to_string(),
+        ..Default::default()
+      },
+      indexer: IndexerConfig {
+        limits: IndexerLimits {
+          file_size: Some("1M".parse().expect("Invalid size")),
+          ..Default::default()
+        },
+        workers: IndexerWorkers {
+          batch_size: 512,
+          ..Default::default()
+        },
+        ..Default::default()
+      },
+      ..Default::default()
+    };
 
     // Save and reload
     config.save_to_file(&config_path).unwrap();

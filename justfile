@@ -7,9 +7,12 @@ default:
 
 # Install all development dependencies
 install:
-    cargo install cargo-nextest
-    cargo install flamegraph
-    cargo install cargo-zigbuild
+    cargo install --locked cargo-binstall
+    cargo binstall cargo-nextest
+    cargo binstall flamegraph
+    cargo binstall cargo-zigbuild
+    cargo binstall cargo-bloat
+    cargo binstall cargo-tree
 
     uv venv --python 3.12
     uv sync --extra dev

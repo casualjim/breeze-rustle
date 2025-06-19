@@ -9,31 +9,31 @@ perfprofiling = []
 
 [dependencies]
 async-stream.workspace = true
-blake3.workspace = true
 
+blake3.workspace = true
 breeze-grammars = { path = "../breeze-grammars" }
 
 dashmap = "6.1"
+
 flume.workspace = true
 futures.workspace = true
+
 hyperpolyglot = "0.1.7"
 
 ignore = { version = "0.4", features = ["simd-accel"] }
 infer = "0.19.0"
-serde.workspace = true
-text-splitter = { workspace = true }
 
+serde.workspace = true
+
+text-splitter = { workspace = true }
 thiserror = "2.0"
 tiktoken-rs = { workspace = true }
-
 tokenizers.workspace = true
-
 tokio.workspace = true
 tokio-stream.workspace = true
-
 tracing.workspace = true
 tree-sitter.workspace = true
 tree-sitter-language.workspace = true
 
 [dev-dependencies]
-tempfile = "3.11"          # Temporary file handling
+tempfile = "3"          # Temporary file handling

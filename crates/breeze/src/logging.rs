@@ -1,7 +1,6 @@
 use tracing::Subscriber;
 use tracing_subscriber::{
-  EnvFilter, Layer, fmt::format::FmtSpan, layer::SubscriberExt, registry::LookupSpan,
-  util::SubscriberInitExt,
+  EnvFilter, Layer, layer::SubscriberExt, registry::LookupSpan, util::SubscriberInitExt,
 };
 
 pub fn init(app_name: &str) -> anyhow::Result<()> {
@@ -10,7 +9,6 @@ pub fn init(app_name: &str) -> anyhow::Result<()> {
       "info,{app_name}=debug"
     )))
     .with(build_logger_text())
-    .with(console_subscriber::spawn())
     .init();
   Ok(())
 }
@@ -20,14 +18,7 @@ where
   S: Subscriber + for<'a> LookupSpan<'a>,
 {
   // if cfg!(debug_assertions) {
-  Box::new(
-    tracing_subscriber::fmt::layer()
-      .pretty()
-      .with_line_number(true)
-      .with_thread_names(true)
-      .with_span_events(FmtSpan::NEW | FmtSpan::CLOSE)
-      .with_timer(tracing_subscriber::fmt::time::time()),
-  )
+  Box::new(tracing_subscriber::fmt::layer().compact().without_time())
   // } else {
   //   Box::new(
   //     tracing_subscriber::fmt::layer()

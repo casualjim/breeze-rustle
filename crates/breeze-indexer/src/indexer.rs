@@ -223,7 +223,11 @@ impl Indexer {
   }
 
   /// Index an entire project
-  pub async fn index_project(&self, project_path: &Path) -> Result<usize, IndexerError> {
+  pub async fn index_project(
+    &self,
+    project_path: &Path,
+    cancel_token: Option<tokio_util::sync::CancellationToken>,
+  ) -> Result<usize, IndexerError> {
     info!(path = %project_path.display(), "Indexing project");
 
     // Use BulkIndexer for efficient project indexing
@@ -235,7 +239,7 @@ impl Indexer {
     );
 
     bulk_indexer
-      .index(project_path)
+      .index(project_path, cancel_token)
       .await
       .map_err(|e| IndexerError::IO(format!("Failed to index project: {}", e)))
   }

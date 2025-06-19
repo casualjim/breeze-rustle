@@ -20,7 +20,6 @@ pub enum Commands {
   Index {
     /// Path to the codebase to index
     path: PathBuf,
-
   },
 
   /// Search indexed codebase
@@ -58,31 +57,8 @@ pub enum Commands {
     command: DebugCommands,
   },
 
-  /// Run as MCP server
-  Mcp {
-    /// Server mode: stdio or http
-    #[arg(value_enum, default_value = "stdio")]
-    mode: McpMode,
-
-    /// Port for HTTP server (default: 3000)
-    #[arg(short, long, default_value = "3000")]
-    port: u16,
-
-    /// Host for HTTP server (default: 127.0.0.1)
-    #[arg(long, default_value = "127.0.0.1")]
-    host: String,
-  },
-
   /// Run the API server (uses config file for all settings)
   Serve,
-}
-
-#[derive(Clone, clap::ValueEnum)]
-pub enum McpMode {
-  /// Standard input/output mode
-  Stdio,
-  /// HTTP server mode with SSE
-  Http,
 }
 
 #[cfg(feature = "perfprofiling")]

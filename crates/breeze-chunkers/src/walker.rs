@@ -314,12 +314,6 @@ async fn process_with_dual_pools(
 
         match work_item {
           Some((path, size)) => {
-            debug!(
-              "Small file worker {} processing: {} ({} bytes)",
-              i,
-              path.display(),
-              size
-            );
             total_size_processed += size;
 
             let mut stream = Box::pin(process_file(&path, chunker.clone()));

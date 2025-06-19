@@ -10,19 +10,21 @@ http = 8080  # HTTP port
 https = 8443  # HTTPS port
 
 [server.tls]
-disabled = false  # Enable TLS
+disabled = true
 
 # use keypair files, this does not support automatic cert rotation atm
 [server.tls.keypair]
-tls_cert = "server.crt"  # Path to the TLS certificate
-tls_key = "server.key"  # Path to the TLS private key
+# disabled = false   # Disable TLS
+tls_cert = "breeze.local.wagyu.icu+3.pem"  # Path to the TLS certificate
+tls_key = "breeze.local.wagyu.icu+3-key.pem"  # Path to the TLS private key
 
 # Or use letsencrypt over http-01 challenge
-# [server.tls.letsencrypt]
+# [server.letsencrypt]
 # domains = ["example.com", "www.example.com"]  # List of domains for TLS
 # emails = ["someone@example.com"]  # List of contacts for TLS
 # production = true  # Use production Let's Encrypt servers
 # cert_dir = "./certs"  # Directory to store certificates
+
 
 
 [indexer]
@@ -41,9 +43,9 @@ batch_size = 256 # Number of chunks to collect in a batch betfore sending to the
 
 [embeddings]
 # The selected embedding provider, from the providers defined below
-# embedding_provider = "local" | "openai" | "ollama" | "voyage" | "cohere" | "my-provider"
-provider = "ollama"  # Default embedding provider, can be overridden in indexer
-workers = 4  # Number of concurrent embedding requests
+# embedding_provider = "local" | "openai" | "ollama"  | "llamacpp"| "voyage" | "cohere" | "my-provider"
+provider = "voyage"  # Default embedding provider, can be overridden in indexer
+workers = 10  # Number of concurrent embedding requests
 
 [embeddings.local]
 model = "ibm-granite/granite-embedding-125m-english"  # Local model for embeddings
@@ -69,17 +71,32 @@ tokenizer = "characters"
 # max_concurrent_requests = 50
 
 [embeddings.ollama]
-model = "nomic-embed-text:latest"  # Ollama model for embeddings
+model = "nomic-embed-text"  # Ollama model for embeddings
 api_base = "http://localhost:11434/v1"  # Ollama API base URL
 # Optional: Override if auto-detection fails
-# context_length = 8192
-# embedding_dim = 768
-# max_batch_size = 512  # Local servers might need smaller batches
+context_length = 8192
+embedding_dim = 768
+max_batch_size = 30  # Local servers might need smaller batches
+tokenizer = "hf:nomic-ai/nomic-embed-text-v1.5"  # huggingface tokenizer for Ollama model
 
 # Rate limiting for the provider
-# requests_per_minute = 3000
-# tokens_per_minute = 1000000
-# max_concurrent_requests = 50
+requests_per_minute = 3000
+tokens_per_minute = 1_000_000
+max_concurrent_requests = 15
+
+[embeddings.llamacpp]
+model = "nomic-embed-text-v2-moe"  # llama.cpp model for embeddings
+api_base = "http://voltaire:8080/v1"  # llama.cpp API base URL
+# Optional: Override if auto-detection fails
+context_length = 4096
+embedding_dim = 768
+max_batch_size = 50  # Local servers might need smaller batches
+tokenizer = "hf:nomic-ai/nomic-embed-text-v2-moe"  # huggingface tokenizer for llama.cpp model
+
+# Rate limiting for the provider
+requests_per_minute = 3000
+tokens_per_minute = 1_000_000
+max_concurrent_requests = 15
 
 [embeddings.voyage]
 # api_key = "${VOYAGE_API_KEY}"  # Set your Voyage API key in the environment
