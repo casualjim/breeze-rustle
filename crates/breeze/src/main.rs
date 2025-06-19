@@ -1,7 +1,8 @@
 #[cfg(feature = "perfprofiling")]
 use breeze::cli::DebugCommands;
 use breeze::cli::{Cli, Commands, McpMode};
-use tracing::{error, info, warn};
+use std::path::PathBuf;
+use tracing::{error, info};
 
 fn main() {
   breeze::ensure_ort_initialized().expect("Failed to initialize ONNX runtime");
@@ -19,117 +20,24 @@ fn main() {
 async fn async_main() {
   let cli = Cli::parse();
 
-  // Load configuration
-  let mut config = if let Some(config_path) = &cli.config {
-    // User specified a config path explicitly
-    match breeze::Config::from_file(config_path) {
-      Ok(cfg) => {
-        info!("Loaded configuration from: {}", config_path.display());
-        cfg
+  // Load configuration using config-rs
+  let config = match breeze::Config::load(cli.config.clone()) {
+    Ok(cfg) => {
+      if let Some(path) = &cli.config {
+        info!("Loaded configuration with file: {}", path.display());
+      } else {
+        info!("Loaded configuration from defaults and environment");
       }
-      Err(e) => {
-        warn!(
-          "Failed to load config from {}: {}",
-          config_path.display(),
-          e
-        );
-        info!("Using default configuration");
-        breeze::Config::default()
-      }
+      cfg
     }
-  } else {
-    // No config specified, try default location
-    match breeze::Config::default_config_path() {
-      Ok(default_path) if default_path.exists() => match breeze::Config::from_file(&default_path) {
-        Ok(cfg) => {
-          info!("Loaded configuration from: {}", default_path.display());
-          cfg
-        }
-        Err(e) => {
-          warn!(
-            "Failed to load config from {}: {}",
-            default_path.display(),
-            e
-          );
-          info!("Using default configuration");
-          breeze::Config::default()
-        }
-      },
-      _ => {
-        // No config file found, use defaults
-        let mut cfg = breeze::Config::default();
-        cfg.apply_env_overrides();
-        cfg
-      }
+    Err(e) => {
+      error!("Failed to load configuration: {}", e);
+      std::process::exit(1);
     }
   };
 
   match cli.command {
-    Commands::Index {
-      path,
-      database,
-      embedding_provider,
-      model,
-      voyage_api_key,
-      voyage_tier,
-      voyage_model,
-      max_chunk_size,
-      max_file_size,
-      max_parallel_files,
-    } => {
-      // Apply CLI/env overrides (clap has already handled env vars and parsing)
-      if let Some(db) = database {
-        config.indexer.database_path = db;
-      }
-
-      if let Some(provider) = embedding_provider {
-        config.indexer.embedding_provider = provider;
-      }
-
-      if let Some(m) = model {
-        config.indexer.model = m;
-      }
-
-      // Ensure voyage config exists if using voyage provider
-      if config.indexer.embedding_provider == breeze::config::EmbeddingProvider::Voyage
-        && config.indexer.voyage.is_none()
-      {
-        error!(
-          "Voyage embedding provider selected but no voyage configuration found. Please ensure your config file has a [voyage] section or set the BREEZE_VOYAGE_API_KEY environment variable."
-        );
-        std::process::exit(1);
-      }
-
-      // Handle voyage-specific overrides
-      let api_key = voyage_api_key.or_else(|| std::env::var("BREEZE_VOYAGE_API_KEY").ok());
-
-      if let Some(api_key) = api_key {
-        if let Some(ref mut voyage) = config.indexer.voyage {
-          voyage.api_key = api_key;
-        }
-      }
-
-      if let Some(tier) = voyage_tier {
-        if let Some(ref mut voyage) = config.indexer.voyage {
-          voyage.tier = tier;
-        }
-      }
-
-      if let Some(model) = voyage_model {
-        if let Some(ref mut voyage) = config.indexer.voyage {
-          voyage.model = model;
-        }
-      }
-
-      if let Some(size) = max_chunk_size {
-        config.indexer.max_chunk_size = size;
-      }
-      if let Some(size) = max_file_size {
-        config.indexer.max_file_size = Some(size);
-      }
-      if let Some(parallel) = max_parallel_files {
-        config.indexer.max_parallel_files = parallel;
-      }
+    Commands::Index { path } => {
 
       info!("Starting indexing of: {}", path.display());
       info!("Using configuration: {:?}", config);
@@ -153,14 +61,9 @@ async fn async_main() {
 
     Commands::Search {
       query,
-      database,
       limit,
       full,
     } => {
-      // Apply CLI overrides
-      if let Some(db) = database {
-        config.indexer.database_path = db;
-      }
 
       info!("Starting search for: \"{}\"", query);
       info!("Using configuration: {:?}", config);
@@ -428,6 +331,46 @@ async fn async_main() {
         },
         Err(e) => {
           error!("Failed to initialize MCP server: {}", e);
+          std::process::exit(1);
+        }
+      }
+    }
+
+    Commands::Serve => {
+      info!(
+        "Starting Breeze API server on ports HTTP:{} HTTPS:{}",
+        config.server.ports.http, config.server.ports.https
+      );
+
+      // Convert indexer config
+      let indexer_config = match config.to_indexer_config() {
+        Ok(cfg) => cfg,
+        Err(e) => {
+          error!("Failed to convert indexer config: {}", e);
+          std::process::exit(1);
+        }
+      };
+
+      // Create server config from breeze config
+      let server_config = breeze_server::Config {
+        domains: config.server.letsencrypt.as_ref().map(|le| le.domains.clone()).unwrap_or_default(),
+        email: config.server.letsencrypt.as_ref().map(|le| le.emails.clone()).unwrap_or_default(),
+        cache: config.server.letsencrypt.as_ref().map(|le| le.cert_dir.clone()),
+        production: config.server.letsencrypt.as_ref().map(|le| le.production).unwrap_or(false),
+        tls_key: config.server.tls.as_ref().map(|tls| PathBuf::from(&tls.tls_key)),
+        tls_cert: config.server.tls.as_ref().map(|tls| PathBuf::from(&tls.tls_cert)),
+        https_port: config.server.ports.https,
+        http_port: config.server.ports.http,
+        indexer: indexer_config,
+      };
+
+      // Run the server
+      match breeze_server::run(server_config).await {
+        Ok(_) => {
+          info!("Breeze server stopped successfully");
+        }
+        Err(e) => {
+          error!("Server error: {}", e);
           std::process::exit(1);
         }
       }

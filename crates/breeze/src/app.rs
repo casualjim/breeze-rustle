@@ -10,15 +10,16 @@ pub struct App {
 
 impl App {
   /// Create a new App instance with the given configuration
-  #[instrument(skip(config), fields(database_path = %config.indexer.database_path.display(), model = %config.indexer.model))]
+  #[instrument(skip(config), fields(database_path = %config.db_dir.display()))]
   pub async fn new(config: Config) -> Result<Self, Box<dyn std::error::Error>> {
     info!("Initializing Breeze app");
 
     // Convert the config to breeze_indexer::Config
-    let indexer_config = config.indexer.clone();
-    
+    let indexer_config = config.to_indexer_config()?;
+
     // Create the indexer using the facade
-    let indexer = Indexer::new(indexer_config).await
+    let indexer = Indexer::new(indexer_config)
+      .await
       .map_err(|e| format!("Failed to create indexer: {}", e))?;
 
     Ok(Self { indexer })
@@ -30,7 +31,10 @@ impl App {
     path: &Path,
   ) -> Result<usize, Box<dyn std::error::Error + Send + Sync>> {
     // Use the facade to index the project
-    self.indexer.index_project(path).await
+    self
+      .indexer
+      .index_project(path)
+      .await
       .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)
   }
 
@@ -44,21 +48,28 @@ impl App {
     info!("Searching codebase");
 
     // Use the facade to search
-    self.indexer.search(query, limit).await
+    self
+      .indexer
+      .search(query, limit)
+      .await
       .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)
   }
 }
 
 #[cfg(test)]
 mod tests {
+  
   use super::*;
   use tempfile::tempdir;
 
   #[tokio::test]
-  #[ignore] // Ignore for now since we need a real model
   async fn test_app_index() {
     // Create test config with temp directory for database
-    let (_temp_dir, config) = Config::test();
+    let (_temp_dir, indexer_config) = breeze_indexer::Config::test();
+    let config = Config {
+      db_dir: indexer_config.database_path.clone(),
+      ..Default::default()
+    };
 
     // Create app
     let app = App::new(config).await.unwrap();

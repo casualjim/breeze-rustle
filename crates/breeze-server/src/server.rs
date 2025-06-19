@@ -6,11 +6,8 @@ use std::{
 };
 
 use axum::{
-  BoxError, Router,
-  extract::Request as AxumRequest,
-  handler::HandlerWithoutStateExt as _,
-  response::Redirect,
-  routing::get,
+  BoxError, Router, extract::Request as AxumRequest, handler::HandlerWithoutStateExt as _,
+  response::Redirect, routing::get,
 };
 
 use axum_helmet::{Helmet, HelmetLayer};
@@ -18,17 +15,11 @@ use axum_otel_metrics::{HttpMetricsLayer, HttpMetricsLayerBuilder};
 use axum_server::{Handle, tls_rustls::RustlsConfig};
 use axum_tracing_opentelemetry::middleware::{OtelAxumLayer, OtelInResponseLayer};
 use futures::StreamExt;
-use http::{
-  StatusCode, Uri,
-};
+use http::{StatusCode, Uri};
 use listenfd::ListenFd;
 use rustls::ServerConfig;
 use rustls_acme::{AcmeConfig, caches::DirCache};
-use tokio::{
-  signal,
-  task::JoinHandle,
-  time::sleep,
-};
+use tokio::{signal, task::JoinHandle, time::sleep};
 use tower_http::compression::CompressionLayer;
 use tracing::{debug, error, info};
 
@@ -43,10 +34,6 @@ struct Ports {
 #[derive(Default, Debug)]
 pub struct Config {
   /// Path to store LanceDB data
-  pub lance_db_path: Option<PathBuf>,
-
-  /// Embedding model to use
-  pub embedding_model: Option<String>,
   /// Domains
   pub domains: Vec<String>,
 
@@ -76,24 +63,15 @@ pub struct Config {
 
   /// The port to listen on for unecrypted traffic
   pub http_port: u16,
+
+  pub indexer: breeze_indexer::Config,
 }
 
 pub async fn run(args: Config) -> anyhow::Result<()> {
-  // Create indexer config
-  let indexer_config = breeze_indexer::Config {
-    database_path: args
-      .lance_db_path
-      .clone()
-      .unwrap_or_else(|| PathBuf::from("./breeze-index")),
-    model: args
-      .embedding_model
-      .clone()
-      .unwrap_or_else(|| "sentence-transformers/all-MiniLM-L6-v2".to_string()),
-    ..Default::default()
-  };
+  let (config, _jh) = make_tls_config(&args).await?;
 
   // Initialize the indexer
-  let indexer = breeze_indexer::Indexer::new(indexer_config)
+  let indexer = breeze_indexer::Indexer::new(args.indexer)
     .await
     .map_err(|e| anyhow::anyhow!("Failed to initialize indexer: {}", e))?;
 
@@ -117,8 +95,6 @@ pub async fn run(args: Config) -> anyhow::Result<()> {
   //   .with_secure(true)
   //   .with_http_only(true)
   //   .with_same_site(tower_sessions::cookie::SameSite::Lax);
-
-  let (config, _jh) = make_tls_config(&args).await?;
 
   // let backend = Backend::new(
   //   state.pool().clone(),

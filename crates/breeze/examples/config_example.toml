@@ -3,34 +3,52 @@
 # Database configuration
 db_dir = "./embeddings.db"
 
+[server]
+
+# use keypair files, this does not support automatic cert rotation atm
+[server.tls]
+tls_cert = "server.crt"  # Path to the TLS certificate
+tls_key = "server.key"  # Path to the TLS private key
+
+# Or use letsencrypt over http-01 challenge
+# [server.letsencrypt]
+# domains = ["example.com", "www.example.com"]  # List of domains for TLS
+# emails = ["someone@example.com"]  # List of contacts for TLS
+# production = true  # Use production Let's Encrypt servers
+# cert_dir = "./certs"  # Directory to store certificates
+
+[server.ports]
+http = 8080  # HTTP port
+https = 8443  # HTTPS port
+
 
 [indexer]
-# Processing configuration
-max_file_size = 5242880  # 5MB - files larger than this are skipped
-max_parallel_files = 8   # Number of files to process concurrently
-
-# embedding_provider = "local" | "openai" | "ollama" | "voyage" | "cohere"  # Choose your embedding provider
-embedding_provider = "ollama"
-
-# Optional: Override the automatic chunk size calculation
-# By default, chunk size is calculated as 80% of the model's context length
-# max_chunk_size = 512  # Maximum tokens per chunk
-
 # Optional: Number of overlapping tokens between chunks (helps preserve context)
 # chunk_overlap = 0.1
 
-# Optional: Number of concurrent workers for embedding (for remote providers)
-# embedding_workers = 4
+[indexer.limits]
+file_size = "5M"  # 5M - files larger than this are skipped
+# Optional: Override the automatic chunk size calculation
+# max_chunk_size = 512  # Maximum tokens per chunk
 
-# Optional: Number of threads for processing large files
-# large_file_threads = 4
+[indexer.workers]
+small_file = 8   # Number of files to process concurrently
+large_file = 4  # Number of large files to process concurrently
+batch_size = 256 # Number of chunks to collect in a batch betfore sending to the embeddings workers
 
+[embeddings]
+# The selected embedding provider, from the providers defined below
+# embedding_provider = "local" | "openai" | "ollama" | "voyage" | "cohere" | "my-provider"
+provider = "ollama"  # Default embedding provider, can be overridden in indexer
+workers = 4  # Number of concurrent embedding requests
 
 [embeddings.local]
 model = "ibm-granite/granite-embedding-125m-english"  # Local model for embeddings
+tokenizer = "characters"
 # Optional: Override if auto-detection fails
 # context_length = 512
 # embedding_dim = 384
+
 
 [embeddings.openai]
 model = "text-embedding-ada-002"
@@ -42,7 +60,7 @@ model = "text-embedding-ada-002"
 # embedding_dim = 1536
 # max_batch_size = 2048  # OpenAI allows large batches
 
-# Rate limiting (optional - has sensible defaults)
+# Rate limiting for the provider
 # requests_per_minute = 3000
 # tokens_per_minute = 1000000
 # max_concurrent_requests = 50
@@ -54,6 +72,11 @@ api_base = "http://localhost:11434/v1"  # Ollama API base URL
 # context_length = 8192
 # embedding_dim = 768
 # max_batch_size = 512  # Local servers might need smaller batches
+
+# Rate limiting for the provider
+# requests_per_minute = 3000
+# tokens_per_minute = 1000000
+# max_concurrent_requests = 50
 
 [embeddings.voyage]
 api_key = "${VOYAGE_API_KEY}"  # Set your Voyage API key in the environment
@@ -74,6 +97,23 @@ api_base = "https://api.cohere.com/v1"
 model = "embed-english-v3.0"
 # Optional: API key can also be set via COHERE_API_KEY env var
 # api_key = "..."
-# input_type = "search_document"  # "search_document" | "search_query"
 # context_length = 512
 # embedding_dim = 1024
+
+# Rate limiting for the provider
+# requests_per_minute = 3000
+# tokens_per_minute = 1000000
+# max_concurrent_requests = 50
+
+[embeddings.my-provider]
+api_base = "https://api.myprovider.com/v1"
+model = "my-embedding-model"
+# Optional: API key can also be set via MY_PROVIDER_API_KEY env var
+# api_key = "..."
+# context_length = 512
+# embedding_dim = 1024
+
+# Rate limiting for the provider
+# requests_per_minute = 3000
+# tokens_per_minute = 1000000
+# max_concurrent_requests = 50

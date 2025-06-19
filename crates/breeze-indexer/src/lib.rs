@@ -15,7 +15,7 @@ mod indexer;
 mod search;
 
 // Re-export only what's needed for the public API
-pub use config::{Config, EmbeddingProvider};
+pub use config::*;
 pub use indexer::{Indexer, IndexerError};
 pub use search::{SearchResult, hybrid_search};
 

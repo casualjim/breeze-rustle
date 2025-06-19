@@ -4,23 +4,17 @@ version = "0.1.0"
 edition = "2024"
 
 [features]
-default = ["ort"]
-cuda = ["candle-core/cuda", "candle-nn/cuda", "candle-transformers/cuda", "ort/cuda"]
-cudnn = ["candle-core/cudnn"]
-flash-attn = ["cuda", "candle-transformers/flash-attn", "dep:candle-flash-attn"]
+default = []
+cuda = ["breeze-indexer/cuda"]
+cudnn = ["breeze-indexer/cudnn"]
+flash-attn = ["breeze-indexer/flash-attn"]
 mkl = [
-    "dep:intel-mkl-src",
-    "candle-nn/mkl",
-    "candle-transformers/mkl",
-    "candle-core/mkl",
+    "breeze-indexer/mkl",
 ]
 accelerate = [
-    "dep:accelerate-src",
-    "candle-core/accelerate",
-    "candle-nn/accelerate",
-    "candle-transformers/accelerate",
+    "breeze-indexer/accelerate",
 ]
-metal = ["candle-core/metal", "candle-nn/metal", "ort/coreml"]
+metal = ["breeze-indexer/metal"]
 perfprofiling = [
     "dep:hyperpolyglot",
     "dep:ignore",
@@ -28,27 +22,17 @@ perfprofiling = [
     "breeze-chunkers/perfprofiling",
 ] # only used during development to debug performance issues, not generally useful
 
-[target.'cfg(not(target_os = "macos"))'.dependencies]
-ort = { version = "=2.0.0-rc.10", features = ["load-dynamic", "half"], optional = true }
-[target.'cfg(target_os = "macos")'.dependencies]
-ort = { version = "=2.0.0-rc.10", features = ["half", "coreml"], optional = true }
-
 [dependencies]
-accelerate-src = { version = "0.3.2", optional = true }
 anyhow.workspace = true
 arrow.workspace = true
 
 # Embedding providers
 async-stream.workspace = true
 async-trait.workspace = true
-blake3.workspace = true
 breeze-chunkers = { path = "../breeze-chunkers" }
 breeze-indexer = { path = "../breeze-indexer" }
+breeze-server = { path = "../breeze-server" }
 bytes.workspace = true
-candle-core = "0.9.1"
-candle-flash-attn = { version = "0.9.1", optional = true }
-candle-nn = "0.9.1"
-candle-transformers = { version = "0.9.1" }
 chrono.workspace = true
 
 # Configuration and CLI
@@ -59,14 +43,13 @@ dirs = "6.0"
 flume.workspace = true
 futures.workspace = true
 futures-util.workspace = true
-hf-hub = { version = "0.4.2", features = ["rustls-tls", "tokio", "ureq"], default-features = false }
 http = "1.2"
+human-units = { version = "0.3.0", features = ["serde", "si-units"] }
 
 hyperpolyglot = { version = "0.1.7", optional = true }     # Language detection
 ignore = { version = "0.4.23", features = ["simd-accel"], optional = true }
 infer = { version = "0.19.0", optional = true }            # File type detection
 
-intel-mkl-src = { version = "0.8.1", optional = true }
 lancedb.workspace = true
 
 # MCP server

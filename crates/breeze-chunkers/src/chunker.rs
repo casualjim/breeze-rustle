@@ -23,17 +23,12 @@ impl ChunkSizer for ConcreteSizer {
   }
 }
 
-// Simple chunker that creates a new splitter for each request
-#[derive(Clone)]
-pub struct InnerChunker {
-  max_chunk_size: usize,
-  chunk_sizer: ConcreteSizer,
-}
+impl TryFrom<Tokenizer> for ConcreteSizer {
+  type Error = ChunkError;
 
-impl InnerChunker {
-  pub fn new(max_chunk_size: usize, tokenizer_type: Tokenizer) -> Result<Self, ChunkError> {
-    let chunk_sizer = match tokenizer_type {
-      Tokenizer::Characters => ConcreteSizer::Characters(text_splitter::Characters),
+  fn try_from(value: Tokenizer) -> Result<Self, Self::Error> {
+    match value {
+      Tokenizer::Characters => Ok(ConcreteSizer::Characters(text_splitter::Characters)),
       Tokenizer::Tiktoken(encoding) => {
         let tiktoken = match encoding.as_str() {
           "cl100k_base" => tiktoken_rs::cl100k_base(),
@@ -49,18 +44,31 @@ impl InnerChunker {
           }
         }
         .map_err(|e| ChunkError::ParseError(format!("Failed to create tiktoken: {}", e)))?;
-        ConcreteSizer::Tiktoken(tiktoken)
+        Ok(ConcreteSizer::Tiktoken(tiktoken))
       }
-      Tokenizer::PreloadedTiktoken(tiktoken) => ConcreteSizer::Tiktoken(
+      Tokenizer::PreloadedTiktoken(tiktoken) => Ok(ConcreteSizer::Tiktoken(
         std::sync::Arc::try_unwrap(tiktoken).unwrap_or_else(|arc| (*arc).clone()),
-      ),
+      )),
       Tokenizer::HuggingFace(model) => {
         let tokenizer = tokenizers::tokenizer::Tokenizer::from_pretrained(&model, None)
           .map_err(|e| ChunkError::ParseError(format!("Failed to load HF tokenizer: {}", e)))?;
-        ConcreteSizer::HuggingFace(std::sync::Arc::new(tokenizer))
+        Ok(ConcreteSizer::HuggingFace(std::sync::Arc::new(tokenizer)))
       }
-      Tokenizer::PreloadedHuggingFace(tokenizer) => ConcreteSizer::HuggingFace(tokenizer),
-    };
+      Tokenizer::PreloadedHuggingFace(tokenizer) => Ok(ConcreteSizer::HuggingFace(tokenizer)),
+    }
+  }
+}
+
+// Simple chunker that creates a new splitter for each request
+#[derive(Clone)]
+pub struct InnerChunker {
+  max_chunk_size: usize,
+  chunk_sizer: ConcreteSizer,
+}
+
+impl InnerChunker {
+  pub fn new(max_chunk_size: usize, tokenizer_type: Tokenizer) -> Result<Self, ChunkError> {
+    let chunk_sizer = tokenizer_type.try_into()?;
 
     Ok(Self {
       max_chunk_size,

@@ -1,3 +1,5 @@
+use std::{fmt::Display, str::FromStr};
+
 use serde::{Deserialize, Serialize};
 
 /// Text embedding models from Voyage AI
@@ -24,6 +26,38 @@ pub enum EmbeddingModel {
   Voyage3Large,
   /// 1024 dimensions, 32k context, 128 batch
   VoyageMultiModal3,
+}
+
+impl AsRef<str> for EmbeddingModel {
+  fn as_ref(&self) -> &str {
+    self.api_name()
+  }
+}
+
+impl Display for EmbeddingModel {
+  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    write!(f, "{}", self.api_name())
+  }
+}
+
+impl FromStr for EmbeddingModel {
+  type Err = String;
+
+  fn from_str(s: &str) -> Result<Self, Self::Err> {
+    match s {
+      "voyage-3" => Ok(Self::Voyage3),
+      "voyage-3.5" => Ok(Self::Voyage35),
+      "voyage-3-lite" => Ok(Self::Voyage3Lite),
+      "voyage-3.5-lite" => Ok(Self::Voyage35Lite),
+      "voyage-code-3" => Ok(Self::VoyageCode3),
+      "voyage-finance-2" => Ok(Self::VoyageFinance2),
+      "voyage-law-2" => Ok(Self::VoyageLaw2),
+      "voyage-multilingual-2" => Ok(Self::VoyageMultilingual2),
+      "voyage-3-large" => Ok(Self::Voyage3Large),
+      "voyage-multimodal-3" => Ok(Self::VoyageMultiModal3),
+      _ => Err(format!("Unknown embedding model: {}", s)),
+    }
+  }
 }
 
 impl EmbeddingModel {
@@ -118,34 +152,26 @@ impl RerankingModel {
   }
 }
 
-impl std::fmt::Display for EmbeddingModel {
+impl std::fmt::Display for RerankingModel {
   fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
     write!(f, "{}", self.api_name())
   }
 }
 
-impl AsRef<str> for EmbeddingModel {
+impl AsRef<str> for RerankingModel {
   fn as_ref(&self) -> &str {
     self.api_name()
   }
 }
 
-impl std::str::FromStr for EmbeddingModel {
+impl std::str::FromStr for RerankingModel {
   type Err = String;
 
   fn from_str(s: &str) -> Result<Self, Self::Err> {
     match s {
-      "voyage-3" => Ok(Self::Voyage3),
-      "voyage-3.5" => Ok(Self::Voyage35),
-      "voyage-3-lite" => Ok(Self::Voyage3Lite),
-      "voyage-3.5-lite" => Ok(Self::Voyage35Lite),
-      "voyage-code-3" => Ok(Self::VoyageCode3),
-      "voyage-finance-2" => Ok(Self::VoyageFinance2),
-      "voyage-law-2" => Ok(Self::VoyageLaw2),
-      "voyage-multilingual-2" => Ok(Self::VoyageMultilingual2),
-      "voyage-3-large" => Ok(Self::Voyage3Large),
-      "voyage-multimodal-3" => Ok(Self::VoyageMultiModal3),
-      _ => Err(format!("Unknown embedding model: {}", s)),
+      "rerank-2" => Ok(Self::Rerank2),
+      "rerank-2-lite" => Ok(Self::Rerank2Lite),
+      _ => Err(format!("Unknown reranking model: {}", s)),
     }
   }
 }

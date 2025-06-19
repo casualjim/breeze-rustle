@@ -1,8 +1,5 @@
-use crate::config::EmbeddingProvider;
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
-
-use breeze_indexer::aiproviders::voyage::{EmbeddingModel as VoyageModel, Tier as VoyageTier};
 
 #[derive(Parser)]
 #[command(name = "breeze")]
@@ -24,51 +21,12 @@ pub enum Commands {
     /// Path to the codebase to index
     path: PathBuf,
 
-    /// Database path (overrides config)
-    #[arg(short, long, env = "BREEZE_DATABASE_PATH")]
-    database: Option<PathBuf>,
-
-    /// Embedding provider: local or voyage (overrides config)
-    #[arg(short = 'p', long, env = "BREEZE_EMBEDDING_PROVIDER")]
-    embedding_provider: Option<EmbeddingProvider>,
-
-    /// Model to use for embeddings (overrides config)
-    #[arg(short, long, env = "BREEZE_MODEL")]
-    model: Option<String>,
-
-    /// Voyage API key (overrides config/env)
-    #[arg(long, env = "VOYAGE_API_KEY", alias = "breeze-voyage-api-key")]
-    voyage_api_key: Option<String>,
-
-    /// Voyage tier: free, tier1, tier2, tier3 (overrides config)
-    #[arg(long, env = "BREEZE_VOYAGE_TIER")]
-    voyage_tier: Option<VoyageTier>,
-
-    /// Voyage model: voyage-3, voyage-3-lite, voyage-code-3 (overrides config)
-    #[arg(long, env = "BREEZE_VOYAGE_MODEL")]
-    voyage_model: Option<VoyageModel>,
-
-    /// Maximum chunk size in tokens (overrides config)
-    #[arg(long, env = "BREEZE_MAX_CHUNK_SIZE")]
-    max_chunk_size: Option<usize>,
-
-    /// Maximum file size in bytes (overrides config)
-    #[arg(long, env = "BREEZE_MAX_FILE_SIZE")]
-    max_file_size: Option<u64>,
-
-    /// Number of files to process in parallel (overrides config)
-    #[arg(long, env = "BREEZE_MAX_PARALLEL_FILES")]
-    max_parallel_files: Option<usize>,
   },
 
   /// Search indexed codebase
   Search {
     /// Search query
     query: String,
-
-    /// Database path (overrides config)
-    #[arg(short, long)]
-    database: Option<PathBuf>,
 
     /// Number of results to return
     #[arg(short = 'n', long, default_value = "10")]
@@ -114,6 +72,9 @@ pub enum Commands {
     #[arg(long, default_value = "127.0.0.1")]
     host: String,
   },
+
+  /// Run the API server (uses config file for all settings)
+  Serve,
 }
 
 #[derive(Clone, clap::ValueEnum)]

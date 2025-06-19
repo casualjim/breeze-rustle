@@ -1,18 +1,241 @@
+use breeze_indexer::aiproviders::voyage::EmbeddingModel as VoyageEmbeddingModel;
+use breeze_indexer::{EmbeddingProvider, VoyageConfig as VoyageClientConfig};
+use human_units::Size;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::path::PathBuf;
 
-// Re-export for convenience
-pub use breeze_indexer::EmbeddingProvider;
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct Config {
+  /// Database directory
+  #[serde(default = "default_db_dir")]
+  pub db_dir: PathBuf,
+
+  /// Server configuration
+  #[serde(default)]
+  pub server: ServerConfig,
+
+  /// Indexer configuration
+  #[serde(default)]
+  pub indexer: IndexerConfig,
+
+  /// Embeddings configuration
+  #[serde(default)]
+  pub embeddings: EmbeddingsConfig,
+}
 
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
-pub struct Config {
-  /// Indexer configuration (embedding provider, model, etc.)
-  #[serde(flatten)]
-  pub indexer: breeze_indexer::Config,
+pub struct ServerConfig {
+  /// TLS configuration (keypair files)
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub tls: Option<TlsConfig>,
+
+  /// Let's Encrypt configuration
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub letsencrypt: Option<LetsEncryptConfig>,
+
+  /// Port configuration
+  #[serde(default)]
+  pub ports: PortConfig,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct TlsConfig {
+  pub tls_cert: String,
+  pub tls_key: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct LetsEncryptConfig {
+  pub domains: Vec<String>,
+  pub emails: Vec<String>,
+  #[serde(default = "default_true")]
+  pub production: bool,
+  #[serde(default = "default_cert_dir")]
+  pub cert_dir: PathBuf,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
+pub struct PortConfig {
+  #[serde(default = "default_http_port")]
+  pub http: u16,
+  #[serde(default = "default_https_port")]
+  pub https: u16,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
+pub struct IndexerConfig {
+  /// Chunk overlap as a ratio (0.0 to 1.0)
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub chunk_overlap: Option<f32>,
+
+  /// Indexer limits
+  #[serde(default)]
+  pub limits: IndexerLimits,
+
+  /// Worker configuration
+  #[serde(default)]
+  pub workers: IndexerWorkers,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
+pub struct IndexerLimits {
+  /// Maximum file size (e.g., "5mb", "100kb")
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub file_size: Option<Size>,
+
+  /// Maximum chunk size in tokens
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub max_chunk_size: Option<usize>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct IndexerWorkers {
+  #[serde(default = "default_small_file_workers")]
+  pub small_file: usize,
+
+  #[serde(default = "default_large_file_workers")]
+  pub large_file: usize,
+
+  #[serde(default = "default_batch_size")]
+  pub batch_size: usize,
+}
+
+impl Default for IndexerWorkers {
+  fn default() -> Self {
+    Self {
+      small_file: default_small_file_workers(),
+      large_file: default_large_file_workers(),
+      batch_size: default_batch_size(),
+    }
+  }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct EmbeddingsConfig {
+  /// Selected embedding provider
+  #[serde(default = "default_provider")]
+  pub provider: String,
+
+  /// Number of concurrent embedding workers
+  #[serde(default = "default_embedding_workers")]
+  pub workers: usize,
+
+  /// Local embeddings configuration
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub local: Option<LocalEmbeddingsConfig>,
+  /// Voyage configuration
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub voyage: Option<VoyageConfig>,
+  /// Additional providers (catch-all for custom providers)
+  #[serde(flatten, default)]
+  pub providers: HashMap<String, ProviderConfig>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct LocalEmbeddingsConfig {
+  pub model: String,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub tokenizer: Option<String>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub context_length: Option<usize>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub embedding_dim: Option<usize>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct VoyageConfig {
+  pub api_key: String,
+  pub tier: String,
+  pub model: String,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub context_length: Option<usize>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub embedding_dim: Option<usize>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub max_batch_size: Option<usize>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct ProviderConfig {
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub api_base: Option<String>,
+  pub model: String,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub api_key: Option<String>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub tokenizer: Option<String>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub context_length: Option<usize>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub embedding_dim: Option<usize>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub max_batch_size: Option<usize>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub requests_per_minute: Option<u32>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub tokens_per_minute: Option<u32>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub max_concurrent_requests: Option<usize>,
+}
+
+// Default functions
+fn default_true() -> bool {
+  true
+}
+fn default_cert_dir() -> PathBuf {
+  PathBuf::from("./certs")
+}
+fn default_http_port() -> u16 {
+  8080
+}
+fn default_https_port() -> u16 {
+  8443
+}
+fn default_small_file_workers() -> usize {
+  num_cpus::get()
+}
+fn default_large_file_workers() -> usize {
+  4
+}
+fn default_batch_size() -> usize {
+  256
+}
+fn default_db_dir() -> PathBuf {
+  PathBuf::from("./embeddings.db")
+}
+fn default_provider() -> String {
+  "local".to_string()
+}
+fn default_embedding_workers() -> usize {
+  4
 }
 
 pub fn default_max_chunk_size() -> usize {
   512
+}
+
+impl Default for EmbeddingsConfig {
+  fn default() -> Self {
+    Self {
+      provider: default_provider(),
+      workers: default_embedding_workers(),
+      local: None,
+      voyage: None,
+      providers: HashMap::new(),
+    }
+  }
+}
+
+impl Default for Config {
+  fn default() -> Self {
+    Self {
+      db_dir: default_db_dir(),
+      server: ServerConfig::default(),
+      indexer: IndexerConfig::default(),
+      embeddings: EmbeddingsConfig::default(),
+    }
+  }
 }
 
 impl Config {
@@ -37,48 +260,28 @@ impl Config {
     Ok(data_dir)
   }
 
-  pub fn from_file<P: AsRef<std::path::Path>>(path: P) -> anyhow::Result<Self> {
-    let content = std::fs::read_to_string(path)?;
-    let mut config: Self = toml::from_str(&content)?;
+  /// Load configuration using config-rs with layered sources
+  pub fn load(config_path: Option<PathBuf>) -> anyhow::Result<Self> {
+    let mut builder = config::Config::builder();
 
-    // Apply environment variable overrides for API keys
-    config.apply_env_overrides();
+    // 1. Start with defaults
+    builder = builder.add_source(config::Config::try_from(&Self::default())?);
 
+    // 2. Add config file (uses provided path or default)
+    let config_file = config_path.unwrap_or_else(|| {
+      Self::default_config_path().unwrap_or_else(|_| PathBuf::from(".breeze.toml"))
+    });
+    builder = builder.add_source(config::File::from(config_file).required(false));
+
+    // 3. Add environment variables with BREEZE_ prefix
+    builder = builder.add_source(
+      config::Environment::with_prefix("BREEZE")
+        .separator("_")
+        .ignore_empty(true),
+    );
+
+    let config: Self = builder.build()?.try_deserialize()?;
     Ok(config)
-  }
-
-  /// Apply environment variable overrides for API keys and other sensitive settings
-  pub fn apply_env_overrides(&mut self) {
-    // Handle Voyage API key from environment
-    if self.indexer.embedding_provider == EmbeddingProvider::Voyage {
-      if let Some(ref mut voyage) = self.indexer.voyage {
-        if voyage.api_key.is_empty() {
-          if let Ok(api_key) =
-            std::env::var("VOYAGE_API_KEY").or_else(|_| std::env::var("BREEZE_VOYAGE_API_KEY"))
-          {
-            voyage.api_key = api_key;
-          }
-        }
-      }
-    }
-
-    // Handle OpenAI-like API keys from environment
-    if matches!(
-      self.indexer.embedding_provider,
-      EmbeddingProvider::OpenAILike(_)
-    ) {
-      for (provider_name, provider_config) in &mut self.indexer.openai_providers {
-        if provider_config.api_key.is_none() {
-          // Try provider-specific env var first, then generic OPENAI_API_KEY
-          let env_var_name = format!("{}_API_KEY", provider_name.to_uppercase());
-          if let Ok(api_key) =
-            std::env::var(&env_var_name).or_else(|_| std::env::var("OPENAI_API_KEY"))
-          {
-            provider_config.api_key = Some(api_key);
-          }
-        }
-      }
-    }
   }
 
   pub fn save_to_file<P: AsRef<std::path::Path>>(&self, path: P) -> anyhow::Result<()> {
@@ -87,165 +290,115 @@ impl Config {
     Ok(())
   }
 
-  /// Load config from default location or return default
-  pub fn load_from_default_or_fallback() -> Self {
-    let mut config = match Self::default_config_path() {
-      Ok(default_path) if default_path.exists() => {
-        Self::from_file(&default_path).unwrap_or_else(|_| Self::default())
-      }
-      _ => Self::default(),
-    };
-
-    // Apply env overrides even if using default config
-    config.apply_env_overrides();
-    config
-  }
-
   /// Generate a default configuration with helpful comments
   pub fn generate_commented_config() -> String {
-    format!(
-      r#"# Breeze Configuration File
-#
-# This configuration file controls how breeze indexes and searches your codebase.
-# You can override any of these settings via command-line arguments or environment variables.
-#
-# Command-line arguments take precedence over environment variables, which take precedence
-# over this config file.
-
-# Embedding provider to use: "local", "voyage", or "openailike"
-# - "local": Uses local ONNX models (no API required, runs on your machine)
-# - "voyage": Uses Voyage AI's API (requires API key)
-# - "openailike": Uses any OpenAI-compatible API (configurable endpoints)
-# Default: "local"
-# Environment variable: BREEZE_EMBEDDING_PROVIDER
-embedding_provider = "local"
-
-# Model to use for local embeddings
-# This should be a HuggingFace model ID that has ONNX exports available
-# Popular options:
-# - "sentence-transformers/all-MiniLM-L6-v2" (default, fast, good quality)
-# - "BAAI/bge-small-en-v1.5" (small, efficient)
-# - "thenlper/gte-large" (larger, better quality)
-# Default: "sentence-transformers/all-MiniLM-L6-v2"
-# Environment variable: BREEZE_MODEL
-model = "sentence-transformers/all-MiniLM-L6-v2"
-
-# Maximum chunk size in tokens
-# Files are split into chunks no larger than this to fit within embedding model limits
-# Smaller chunks = more granular search, but more storage and slower indexing
-# Larger chunks = better context, but might miss specific details
-# Default: 512
-# Environment variable: BREEZE_MAX_CHUNK_SIZE
-max_chunk_size = 512
-
-# Maximum file size in bytes to process
-# Files larger than this are skipped during indexing
-# Set to null to process files of any size
-# Default: 5242880 (5MB)
-# Environment variable: BREEZE_MAX_FILE_SIZE
-max_file_size = 5242880
-
-# Number of files to process in parallel during indexing
-# Higher values speed up indexing but use more memory
-# Default: number of CPU cores
-# Environment variable: BREEZE_MAX_PARALLEL_FILES
-max_parallel_files = {}
-
-# Number of threads dedicated to processing large files
-# Large files are processed in parallel chunks using this many threads
-# Default: 4
-large_file_threads = 4
-
-# Number of concurrent workers for remote embedding providers
-# Only applies to voyage and openailike providers
-# Default: 4
-# Environment variable: BREEZE_EMBEDDING_WORKERS
-embedding_workers = 4
-
-# ============================================================================
-# Voyage AI Configuration
-# ============================================================================
-# Uncomment and configure this section if using embedding_provider = "voyage"
-
-# [voyage]
-# # Your Voyage AI API key
-# # Get one at: https://dash.voyageai.com
-# # Can also be set via VOYAGE_API_KEY or BREEZE_VOYAGE_API_KEY environment variable
-# api_key = "your-api-key-here"
-#
-# # Subscription tier: "free", "tier1", "tier2", or "tier3"
-# # This affects rate limits and chunk size optimization
-# # Default: "free"
-# # Environment variable: BREEZE_VOYAGE_TIER
-# tier = "free"
-#
-# # Voyage model to use
-# # Options:
-# # - "voyage-3" (best general-purpose)
-# # - "voyage-3-lite" (faster, lower cost)
-# # - "voyage-code-3" (optimized for code, recommended)
-# # - "voyage-finance-2" (finance documents)
-# # - "voyage-law-2" (legal documents)
-# # - "voyage-multilingual-2" (multiple languages)
-# # Default: "voyage-code-3"
-# # Environment variable: BREEZE_VOYAGE_MODEL
-# model = "voyage-code-3"
-
-# ============================================================================
-# OpenAI-like Provider Configuration
-# ============================================================================
-# Configure any OpenAI-compatible embedding API (OpenAI, llama.cpp, Ollama, etc.)
-# You can define multiple providers and switch between them
-
-# # Example: OpenAI
-# [openai_providers.openai]
-# api_base = "https://api.openai.com/v1"
-# api_key = "sk-..."  # Or set via OPENAI_API_KEY environment variable
-# model = "text-embedding-3-small"
-# embedding_dim = 1536
-# context_length = 8191
-# max_batch_size = 2048
-# requests_per_minute = 3000
-# tokens_per_minute = 1000000
-# max_concurrent_requests = 50
-#
-# [openai_providers.openai.tokenizer]
-# type = "tiktoken"
-# encoding = "cl100k_base"
-
-# # Example: Local llama.cpp server
-# [openai_providers.local]
-# api_base = "http://localhost:8080/v1"
-# # No API key needed for local server
-# model = "nomic-embed-text"
-# embedding_dim = 768
-# context_length = 8192
-# max_batch_size = 512
-# requests_per_minute = 10000  # High limit for local server
-# tokens_per_minute = 10000000
-# max_concurrent_requests = 50
-#
-# [openai_providers.local.tokenizer]
-# type = "huggingface"
-# model_id = "nomic-ai/nomic-embed-text-v1.5"
-
-# # Select which provider to use (must match a key in openai_providers)
-# # Only needed when embedding_provider = "openailike"
-# openai_provider = "openai"
-"#,
-      num_cpus::get()
-    )
+    todo!("Implement commented config generation");
   }
 
-  /// Create a config suitable for tests with a small, fast model
-  /// Returns both a TempDir (for cleanup) and a Config with database_path inside that tempdir
-  #[cfg(test)]
-  pub fn test() -> (tempfile::TempDir, Self) {
-    let (temp_dir, indexer_config) = breeze_indexer::Config::test();
-    let config = Self {
-      indexer: indexer_config,
+  /// Convert to breeze_indexer::Config for compatibility
+  pub fn to_indexer_config(&self) -> anyhow::Result<breeze_indexer::Config> {
+    // Determine embedding provider
+    let embedding_provider = self
+      .embeddings
+      .provider
+      .as_str()
+      .parse()
+      .map_err(|e| anyhow::anyhow!("Invalid embedding provider: {e}"))?;
+
+    // Convert voyage config if present
+    let voyage = self
+      .embeddings
+      .voyage
+      .as_ref()
+      .map(|v| -> anyhow::Result<VoyageClientConfig> {
+        Ok(VoyageClientConfig {
+          api_key: v.api_key.clone(),
+          tier: v
+            .tier
+            .parse()
+            .map_err(|e| anyhow::anyhow!("Invalid voyage tier: {}", e))?,
+          model: v
+            .model
+            .parse::<VoyageEmbeddingModel>()
+            .map_err(|e| anyhow::anyhow!("Invalid voyage model: {}", e))?,
+        })
+      })
+      .transpose()?;
+
+    // Convert OpenAI-like providers
+    let mut openai_providers = std::collections::HashMap::new();
+
+    // Add providers from the flattened map
+    for (name, config) in &self.embeddings.providers {
+      if let Some(api_base) = &config.api_base {
+        // Parse tokenizer if provided
+        let tokenizer = if let Some(tok_str) = &config.tokenizer {
+          tok_str
+            .parse()
+            .map_err(|e| anyhow::anyhow!("Invalid tokenizer: {}", e))?
+        } else {
+          return Err(anyhow::anyhow!(
+            "tokenizer is required for provider '{}'",
+            name
+          ));
+        };
+
+        openai_providers.insert(
+          name.clone(),
+          breeze_indexer::OpenAILikeConfig {
+            api_base: api_base.clone(),
+            api_key: config.api_key.clone(),
+            model: config.model.clone(),
+            embedding_dim: config.embedding_dim.ok_or_else(|| {
+              anyhow::anyhow!("embedding_dim is required for provider '{}'", name)
+            })?,
+            context_length: config.context_length.ok_or_else(|| {
+              anyhow::anyhow!("context_length is required for provider '{}'", name)
+            })?,
+            max_batch_size: config.max_batch_size.ok_or_else(|| {
+              anyhow::anyhow!("max_batch_size is required for provider '{}'", name)
+            })?,
+            tokenizer,
+            requests_per_minute: config.requests_per_minute.ok_or_else(|| {
+              anyhow::anyhow!("requests_per_minute is required for provider '{}'", name)
+            })?,
+            tokens_per_minute: config.tokens_per_minute.ok_or_else(|| {
+              anyhow::anyhow!("tokens_per_minute is required for provider '{}'", name)
+            })?,
+            max_concurrent_requests: config.max_concurrent_requests.ok_or_else(|| {
+              anyhow::anyhow!(
+                "max_concurrent_requests is required for provider '{}'",
+                name
+              )
+            })?,
+          },
+        );
+      }
+    }
+
+    // Get the selected model
+    let model = match &embedding_provider {
+      EmbeddingProvider::Local => self
+        .embeddings
+        .local
+        .as_ref()
+        .map(|l| l.model.clone())
+        .unwrap_or_else(|| "sentence-transformers/all-MiniLM-L6-v2".to_string()),
+      _ => "".to_string(), // Not used for non-local providers
     };
-    (temp_dir, config)
+
+    Ok(breeze_indexer::Config {
+      database_path: self.db_dir.clone(),
+      embedding_provider,
+      model,
+      voyage,
+      openai_providers,
+      max_chunk_size: self.indexer.limits.max_chunk_size.unwrap_or(512),
+      max_file_size: self.indexer.limits.file_size.as_deref().copied(),
+      max_parallel_files: self.indexer.workers.small_file,
+      large_file_threads: Some(self.indexer.workers.large_file),
+      embedding_workers: self.embeddings.workers,
+    })
   }
 }
 
@@ -257,11 +410,8 @@ mod tests {
   #[test]
   fn test_default_config() {
     let config = Config::default();
-    assert_eq!(
-      config.indexer.model,
-      "sentence-transformers/all-MiniLM-L6-v2"
-    );
-    assert_eq!(config.indexer.max_chunk_size, 512);
+    assert_eq!(config.embeddings.provider, "local");
+    assert_eq!(config.db_dir, PathBuf::from("./embeddings.db"));
   }
 
   #[test]
@@ -270,7 +420,7 @@ mod tests {
     let toml_str = toml::to_string(&config).unwrap();
     let parsed: Config = toml::from_str(&toml_str).unwrap();
 
-    assert_eq!(config.indexer.model, parsed.indexer.model);
+    assert_eq!(config.embeddings.provider, parsed.embeddings.provider);
   }
 
   #[test]
@@ -281,7 +431,88 @@ mod tests {
     let config = Config::default();
     config.save_to_file(&config_path).unwrap();
 
-    let loaded = Config::from_file(&config_path).unwrap();
-    assert_eq!(config.indexer.model, loaded.indexer.model);
+    let loaded = Config::load(Some(config_path)).unwrap();
+    assert_eq!(config.embeddings.provider, loaded.embeddings.provider);
+  }
+
+  #[test]
+  fn test_parse_example_config() {
+    let example_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+      .join("examples")
+      .join("config_example.toml");
+
+    if example_path.exists() {
+      let config = Config::load(Some(example_path)).expect("Failed to parse example config");
+      
+      // Debug: print the providers map
+      eprintln!("Providers in map: {:?}", config.embeddings.providers.keys().collect::<Vec<_>>());
+
+      // Verify key fields from the example
+      assert_eq!(config.db_dir, PathBuf::from("./embeddings.db"));
+      assert_eq!(config.embeddings.provider, "ollama");
+
+      // Check server ports
+      assert_eq!(config.server.ports.http, 8080);
+      assert_eq!(config.server.ports.https, 8443);
+
+      // Check indexer settings
+      assert_eq!(config.indexer.workers.small_file, 8);
+      assert_eq!(config.indexer.workers.large_file, 4);
+      assert_eq!(config.indexer.workers.batch_size, 256);
+
+      // Check embeddings settings
+      assert_eq!(config.embeddings.workers, 4);
+
+      // Verify size parsing (5M = 5 * 1024 * 1024 bytes in human-units)
+      assert_eq!(
+        config.indexer.limits.file_size.as_deref().copied(),
+        Some(5 * 1024 * 1024)
+      );
+    }
+  }
+
+  #[test]
+  fn test_size_parsing() {
+    use human_units::Size;
+    
+    // Test that "5M" works 
+    let size: Size = "5M".parse().expect("Should parse 5M");
+    assert_eq!(*size, 5 * 1024 * 1024); // M is 1024-based in human-units
+    
+    // Test with serde
+    #[derive(Debug, serde::Deserialize)]
+    struct TestConfig {
+      file_size: Option<Size>,
+    }
+    
+    let toml_str = r#"file_size = "5M""#;
+    let config: TestConfig = toml::from_str(toml_str).expect("Should deserialize");
+    assert_eq!(config.file_size.map(|s| *s), Some(5 * 1024 * 1024));
+  }
+
+  #[test]
+  fn test_config_dump_preserves_values() {
+    let dir = tempdir().unwrap();
+    let config_path = dir.path().join("test_config.toml");
+
+    // Create a config with various settings
+    let mut config = Config::default();
+    config.db_dir = PathBuf::from("./test.db");
+    config.embeddings.provider = "voyage".to_string();
+    config.indexer.limits.file_size = Some("1M".parse().expect("Invalid size"));
+    config.indexer.workers.batch_size = 512;
+
+    // Save and reload
+    config.save_to_file(&config_path).unwrap();
+    let loaded = Config::load(Some(config_path)).unwrap();
+
+    // Verify all values preserved
+    assert_eq!(loaded.db_dir, PathBuf::from("./test.db"));
+    assert_eq!(loaded.embeddings.provider, "voyage");
+    assert_eq!(
+      loaded.indexer.limits.file_size.as_deref().copied(),
+      Some(1024 * 1024)
+    );
+    assert_eq!(loaded.indexer.workers.batch_size, 512);
   }
 }

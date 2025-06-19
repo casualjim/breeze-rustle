@@ -1480,19 +1480,14 @@ dependencies = [
 name = "breeze"
 version = "0.1.0"
 dependencies = [
- "accelerate-src",
  "anyhow",
  "arrow",
  "async-stream",
  "async-trait",
- "blake3",
  "breeze-chunkers",
  "breeze-indexer",
+ "breeze-server",
  "bytes 1.10.1",
- "candle-core",
- "candle-flash-attn",
- "candle-nn",
- "candle-transformers",
  "chrono",
  "clap 4.5.40",
  "config",
@@ -1501,17 +1496,15 @@ dependencies = [
  "flume",
  "futures 0.3.31",
  "futures-util",
- "hf-hub",
  "http 1.3.1",
+ "human-units",
  "hyperpolyglot",
  "ignore",
  "infer",
- "intel-mkl-src",
  "lancedb",
  "mcp-protocol-sdk",
  "ndarray",
  "num_cpus",
- "ort",
  "pin-project-lite",
  "rand 0.9.1",
  "reqwest 0.12.20",
@@ -4299,6 +4292,26 @@ name = "httpdate"
 version = "1.0.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "df3b46402a9d5adb4c86a0cf463f42e19994e3ee891101b1841f30a545cb49a9"
+
+[[package]]
+name = "human-units"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4e1d63aab644735cd690c3e7a57f1225fed63099f3201a6dfeed927d52a47fbf"
+dependencies = [
+ "human-units-derive",
+ "serde",
+]
+
+[[package]]
+name = "human-units-derive"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d470ce4e27b263f2e33643caee5176ac9d32c407fae1e1268277d4512b07c3e0"
+dependencies = [
+ "quote",
+ "syn 2.0.101",
+]
 
 [[package]]
 name = "humantime"

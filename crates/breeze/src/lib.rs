@@ -5,7 +5,7 @@ mod logging;
 pub mod mcp;
 
 pub use app::App;
-pub use config::{Config, EmbeddingProvider};
+pub use config::Config;
 pub use logging::init as init_logging;
 
 // Re-export from breeze-indexer

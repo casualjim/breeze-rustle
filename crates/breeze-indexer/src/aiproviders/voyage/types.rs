@@ -12,6 +12,44 @@ pub enum Tier {
   Tier3,
 }
 
+impl std::fmt::Display for Tier {
+  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    match self {
+      Self::Free => write!(f, "Free"),
+      Self::Tier1 => write!(f, "Tier 1"),
+      Self::Tier2 => write!(f, "Tier 2"),
+      Self::Tier3 => write!(f, "Tier 3"),
+    }
+  }
+}
+impl AsRef<str> for Tier {
+  fn as_ref(&self) -> &str {
+    match self {
+      Self::Free => "free",
+      Self::Tier1 => "tier-1",
+      Self::Tier2 => "tier-2",
+      Self::Tier3 => "tier-3",
+    }
+  }
+}
+
+impl FromStr for Tier {
+  type Err = String;
+
+  fn from_str(s: &str) -> Result<Self, Self::Err> {
+    match s.to_lowercase().as_str() {
+      "free" => Ok(Tier::Free),
+      "tier-1" => Ok(Tier::Tier1),
+      "tier-2" => Ok(Tier::Tier2),
+      "tier-3" => Ok(Tier::Tier3),
+      _ => Err(format!(
+        "Invalid tier: {}. Use 'free', 'tier-1', 'tier-2', or 'tier-3'",
+        s
+      )),
+    }
+  }
+}
+
 impl Tier {
   /// Get the multiplier for this tier
   pub fn multiplier(&self) -> u32 {
@@ -46,23 +84,6 @@ impl Tier {
   /// Get a safety margin version of requests per minute (90%)
   pub fn safe_requests_per_minute(&self) -> u32 {
     (self.requests_per_minute() * 9) / 10
-  }
-}
-
-impl FromStr for Tier {
-  type Err = String;
-
-  fn from_str(s: &str) -> Result<Self, Self::Err> {
-    match s.to_lowercase().as_str() {
-      "free" => Ok(Tier::Free),
-      "tier1" => Ok(Tier::Tier1),
-      "tier2" => Ok(Tier::Tier2),
-      "tier3" => Ok(Tier::Tier3),
-      _ => Err(format!(
-        "Invalid tier: {}. Use 'free', 'tier1', 'tier2', or 'tier3'",
-        s
-      )),
-    }
   }
 }
 

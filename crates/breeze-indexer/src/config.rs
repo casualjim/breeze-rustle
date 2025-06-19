@@ -96,10 +96,6 @@ pub struct Config {
   #[serde(default)]
   pub openai_providers: std::collections::HashMap<String, OpenAILikeConfig>,
 
-  /// Selected OpenAI-like provider (must match a key in openai_providers)
-  #[serde(skip_serializing_if = "Option::is_none")]
-  pub openai_provider: Option<String>,
-
   /// Maximum chunk size in tokens
   pub max_chunk_size: usize,
 
@@ -124,7 +120,6 @@ impl Default for Config {
       model: "sentence-transformers/all-MiniLM-L6-v2".to_string(),
       voyage: None,
       openai_providers: std::collections::HashMap::new(),
-      openai_provider: None,
       max_chunk_size: 512,
       max_file_size: Some(5 * 1024 * 1024), // 5MB
       max_parallel_files: num_cpus::get(),
@@ -196,7 +191,6 @@ impl Config {
       model: "test-model".to_string(),
       voyage: None,
       openai_providers: std::collections::HashMap::new(),
-      openai_provider: None,
       max_chunk_size: 512,
       max_file_size: Some(10 * 1024 * 1024),
       max_parallel_files: 4,

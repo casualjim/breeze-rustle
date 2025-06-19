@@ -16,6 +16,7 @@ mod types;
 mod walker;
 
 use std::path::Path;
+use std::str::FromStr;
 use std::sync::Arc;
 
 use futures::stream::BoxStream;
@@ -66,6 +67,25 @@ impl std::fmt::Debug for Tokenizer {
       Tokenizer::PreloadedTiktoken(_) => write!(f, "PreloadedTiktoken"),
       Tokenizer::HuggingFace(model) => write!(f, "HuggingFace({})", model),
       Tokenizer::PreloadedHuggingFace(_) => write!(f, "PreloadedHuggingFace"),
+    }
+  }
+}
+
+impl FromStr for Tokenizer {
+  type Err = String;
+
+  fn from_str(s: &str) -> Result<Self, Self::Err> {
+    match s.to_lowercase().as_str() {
+      "characters" => Ok(Tokenizer::Characters),
+      _ if s.starts_with("tiktoken:") => {
+        let encoding = s["tiktoken:".len()..].to_string();
+        Ok(Tokenizer::Tiktoken(encoding))
+      }
+      _ if s.starts_with("hf:") => {
+        let model_id = s["hf:".len()..].to_string();
+        Ok(Tokenizer::HuggingFace(model_id))
+      }
+      _ => Err(format!("Unknown tokenizer type: {}", s)),
     }
   }
 }
