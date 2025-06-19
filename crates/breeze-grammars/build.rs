@@ -171,7 +171,9 @@ fn use_npm_parsers(parser_lib_path: &Path, out_path: &Path) {
   } else if cfg!(target_os = "linux") {
     println!("cargo:rustc-link-lib=stdc++");
   } else if cfg!(target_os = "windows") {
-    // Windows doesn't need explicit C++ runtime linking with MSVC
+    // Windows: Force ignore duplicate symbols from CRT
+    println!("cargo:rustc-link-arg=/FORCE:MULTIPLE");
+    println!("cargo:rustc-link-arg=/NODEFAULTLIB:libcmt.lib");
   }
 
   // Check if there's a metadata file alongside the library
