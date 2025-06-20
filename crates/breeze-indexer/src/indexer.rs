@@ -238,4 +238,66 @@ impl Indexer {
     .await
     .map_err(|e| IndexerError::Storage(format!("Search failed: {}", e)))
   }
+
+  /// Find a document by file path
+  pub async fn find_by_path(&self, file_path: &str) -> Result<Option<CodeDocument>, IndexerError> {
+    use futures::TryStreamExt;
+    use lancedb::query::{ExecutableQuery, QueryBase};
+
+    let table = self.table.read().await;
+
+    let mut results = table
+      .query()
+      .only_if(format!("file_path = '{}'", file_path))
+      .limit(1)
+      .execute()
+      .await
+      .map_err(|e| IndexerError::Storage(format!("Failed to query by file path: {}", e)))?;
+
+    if let Some(batch) = results
+      .try_next()
+      .await
+      .map_err(|e| IndexerError::Storage(format!("Failed to get result: {}", e)))?
+    {
+      CodeDocument::from_record_batch(&batch, 0)
+        .map(Some)
+        .map_err(|e| IndexerError::Storage(format!("Failed to parse document: {}", e)))
+    } else {
+      Ok(None)
+    }
+  }
+
+  /// Find a document by content hash
+  pub async fn find_by_hash(
+    &self,
+    content_hash: &[u8; 32],
+  ) -> Result<Option<CodeDocument>, IndexerError> {
+    use futures::TryStreamExt;
+    use lancedb::query::{ExecutableQuery, QueryBase};
+
+    let table = self.table.read().await;
+
+    // Convert hash to hex string for query
+    let hash_hex = hex::encode(content_hash);
+
+    let mut results = table
+      .query()
+      .only_if(format!("content_hash = X'{}'", hash_hex))
+      .limit(1)
+      .execute()
+      .await
+      .map_err(|e| IndexerError::Storage(format!("Failed to query by content hash: {}", e)))?;
+
+    if let Some(batch) = results
+      .try_next()
+      .await
+      .map_err(|e| IndexerError::Storage(format!("Failed to get result: {}", e)))?
+    {
+      CodeDocument::from_record_batch(&batch, 0)
+        .map(Some)
+        .map_err(|e| IndexerError::Storage(format!("Failed to parse document: {}", e)))
+    } else {
+      Ok(None)
+    }
+  }
 }

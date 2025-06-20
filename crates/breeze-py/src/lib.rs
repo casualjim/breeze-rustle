@@ -1,6 +1,7 @@
 use breeze_chunkers::{
-  Chunk, ChunkError, ChunkMetadata, Chunker, ChunkerConfig, ProjectChunk, Tokenizer as RustTokenizer,
-  WalkOptions, is_language_supported, supported_languages, walk_project,
+  Chunk, ChunkError, ChunkMetadata, Chunker, ChunkerConfig, ProjectChunk,
+  Tokenizer as RustTokenizer, WalkOptions, is_language_supported, supported_languages,
+  walk_project,
 };
 
 use futures::{Stream, StreamExt};

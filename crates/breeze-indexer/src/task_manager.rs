@@ -304,11 +304,11 @@ impl TaskManager {
       .await?
       .try_collect::<Vec<_>>()
       .await?;
-    
+
     for batch in running_tasks {
       for i in 0..batch.num_rows() {
         let task = Self::record_batch_to_task(&batch, i)?;
-        
+
         if let Some(started_at) = task.started_at {
           let started_micros = started_at.and_utc().timestamp_micros();
           if started_micros < threshold_micros {
@@ -434,12 +434,12 @@ impl TaskManager {
 #[cfg(test)]
 mod tests {
   use super::*;
+  use crate::Config;
   use crate::bulk_indexer::BulkIndexer;
   use crate::embeddings::factory::create_embedding_provider;
   use crate::models::CodeDocument;
-  use crate::Config;
-  use std::sync::atomic::{AtomicUsize, Ordering};
   use std::sync::Mutex;
+  use std::sync::atomic::{AtomicUsize, Ordering};
   use tempfile::TempDir;
   use tokio::time::timeout;
 
@@ -464,7 +464,7 @@ mod tests {
 
     // Use the test config which sets up local embeddings if available
     let (_temp_dir_config, config) = Config::test();
-    
+
     let embedding_provider = create_embedding_provider(&config).await.unwrap();
 
     let bulk_indexer = BulkIndexer::new(
@@ -613,7 +613,7 @@ mod tests {
     // First verify the task exists and is pending
     let initial_task = task_manager.get_task(&task_id).await.unwrap().unwrap();
     assert_eq!(initial_task.status, TaskStatus::Pending);
-    
+
     // Update to running with old timestamp
     {
       let table = task_manager.task_table.write().await;
@@ -774,25 +774,28 @@ mod tests {
     let worker_task_manager = task_manager.clone();
     let worker_shutdown = shutdown_token.clone();
 
-    let worker_handle = tokio::spawn(async move {
-      worker_task_manager.run_worker(worker_shutdown).await
-    });
+    let worker_handle =
+      tokio::spawn(async move { worker_task_manager.run_worker(worker_shutdown).await });
 
     // Wait a bit for task processing
     tokio::time::sleep(Duration::from_secs(2)).await;
 
     // Check task status
     let task = task_manager.get_task(&task_id).await.unwrap().unwrap();
-    
+
     // Task should either be completed or still running (or possibly still pending if worker is slow to start)
     assert!(
-      matches!(task.status, TaskStatus::Completed | TaskStatus::Running | TaskStatus::Pending),
-      "Task status was {:?}", task.status
+      matches!(
+        task.status,
+        TaskStatus::Completed | TaskStatus::Running | TaskStatus::Pending
+      ),
+      "Task status was {:?}",
+      task.status
     );
 
     // Shutdown worker
     shutdown_token.cancel();
-    
+
     // Give worker time to shutdown gracefully
     let _ = timeout(Duration::from_secs(2), worker_handle).await;
   }
@@ -804,9 +807,7 @@ mod tests {
     let shutdown_token = CancellationToken::new();
     let worker_shutdown = shutdown_token.clone();
 
-    let worker_handle = tokio::spawn(async move {
-      task_manager.run_worker(worker_shutdown).await
-    });
+    let worker_handle = tokio::spawn(async move { task_manager.run_worker(worker_shutdown).await });
 
     // Immediately shutdown
     shutdown_token.cancel();
@@ -825,16 +826,16 @@ mod tests {
       .submit_task(std::path::Path::new("/test/first"))
       .await
       .unwrap();
-    
+
     tokio::time::sleep(Duration::from_millis(10)).await;
-    
+
     let task2_id = task_manager
       .submit_task(std::path::Path::new("/test/second"))
       .await
       .unwrap();
-    
+
     tokio::time::sleep(Duration::from_millis(10)).await;
-    
+
     let task3_id = task_manager
       .submit_task(std::path::Path::new("/test/third"))
       .await
@@ -855,7 +856,7 @@ mod tests {
     assert!(no_task.is_none());
   }
 
-  #[tokio::test] 
+  #[tokio::test]
   async fn test_task_error_handling_with_quotes() {
     let (task_manager, _temp_dir) = create_test_task_manager().await;
 

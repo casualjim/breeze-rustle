@@ -52,13 +52,13 @@ pub struct TaskManager {
 impl TaskManager {
     // Submit a new indexing task and return its ID
     pub async fn submit_task(&self, path: String) -> Result<String>;
-    
+
     // Worker loop that processes pending tasks
     pub async fn run_worker(&self, shutdown_token: CancellationToken) -> Result<()>;
-    
+
     // Get task status
     pub async fn get_task(&self, task_id: &str) -> Result<Option<IndexTask>>;
-    
+
     // List recent tasks
     pub async fn list_tasks(&self, limit: usize) -> Result<Vec<IndexTask>>;
 }

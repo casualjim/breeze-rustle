@@ -24,7 +24,8 @@ pub(crate) async fn build_document_from_accumulator(
     match &embedded_chunk.chunk {
       Chunk::Semantic(sc) | Chunk::Text(sc) => {
         // Use actual token count if available, otherwise estimate
-        let token_count = sc.tokens
+        let token_count = sc
+          .tokens
           .as_ref()
           .map(|tokens| tokens.len() as f32)
           .unwrap_or_else(|| (sc.text.len() as f32 / 4.0).max(1.0));

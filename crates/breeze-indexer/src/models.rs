@@ -135,6 +135,9 @@ impl CodeDocument {
       .delete("id = '00000000-0000-0000-0000-000000000000'")
       .await?;
 
+    // Create indices on new table
+    Self::ensure_indices(&table).await;
+
     Ok(table)
   }
 
@@ -147,8 +150,8 @@ impl CodeDocument {
     // Try to open the table first
     match connection.open_table(table_name).execute().await {
       Ok(table) => {
-        // Table exists, ensure FTS index is created
-        Self::ensure_fts_index(&table).await;
+        // Table exists, ensure indices are created
+        Self::ensure_indices(&table).await;
         Ok(table)
       }
       Err(e) => {
@@ -157,8 +160,7 @@ impl CodeDocument {
           lancedb::Error::TableNotFound { .. } => {
             // Create the table
             let table = Self::create_table(connection, table_name, embedding_dim).await?;
-            // Create FTS index on new table
-            Self::ensure_fts_index(&table).await;
+
             Ok(table)
           }
           _ => Err(e), // Propagate other errors
@@ -167,12 +169,12 @@ impl CodeDocument {
     }
   }
 
-  /// Ensure FTS index exists on the content field
-  async fn ensure_fts_index(table: &lancedb::Table) {
+  /// Ensure indices exist on content, file_path, and content_hash fields
+  async fn ensure_indices(table: &lancedb::Table) {
     use lancedb::index::Index;
     use tracing::debug;
 
-    // Try to create FTS index - this will fail if it already exists
+    // Create FTS index on content field for full-text search
     match table
       .create_index(&["content"], Index::FTS(Default::default()))
       .execute()
@@ -182,9 +184,168 @@ impl CodeDocument {
         debug!("Created FTS index on content field");
       }
       Err(e) => {
-        debug!("FTS index might already exist or creation failed: {}", e);
+        debug!(
+          "FTS index on content might already exist or creation failed: {}",
+          e
+        );
       }
     }
+
+    // Create Auto index on file_path for exact match lookups
+    match table
+      .create_index(&["file_path"], Index::Auto)
+      .execute()
+      .await
+    {
+      Ok(_) => {
+        debug!("Created index on file_path field");
+      }
+      Err(e) => {
+        debug!(
+          "Index on file_path might already exist or creation failed: {}",
+          e
+        );
+      }
+    }
+
+    // Create Auto index on content_hash for hash-based lookups
+    match table
+      .create_index(&["content_hash"], Index::Auto)
+      .execute()
+      .await
+    {
+      Ok(_) => {
+        debug!("Created index on content_hash field");
+      }
+      Err(e) => {
+        debug!(
+          "Index on content_hash might already exist or creation failed: {}",
+          e
+        );
+      }
+    }
+  }
+
+  /// Convert a RecordBatch row to CodeDocument
+  pub fn from_record_batch(
+    batch: &arrow::record_batch::RecordBatch,
+    row: usize,
+  ) -> Result<Self, lancedb::Error> {
+    use arrow::array::*;
+
+    if row >= batch.num_rows() {
+      return Err(lancedb::Error::Runtime {
+        message: format!(
+          "Row index {} out of bounds (batch has {} rows)",
+          row,
+          batch.num_rows()
+        ),
+      });
+    }
+
+    let id = batch
+      .column_by_name("id")
+      .and_then(|col| col.as_any().downcast_ref::<StringArray>())
+      .ok_or_else(|| lancedb::Error::Runtime {
+        message: "Missing or invalid id column".to_string(),
+      })?
+      .value(row)
+      .to_string();
+
+    let file_path = batch
+      .column_by_name("file_path")
+      .and_then(|col| col.as_any().downcast_ref::<StringArray>())
+      .ok_or_else(|| lancedb::Error::Runtime {
+        message: "Missing or invalid file_path column".to_string(),
+      })?
+      .value(row)
+      .to_string();
+
+    let content = batch
+      .column_by_name("content")
+      .and_then(|col| col.as_any().downcast_ref::<StringArray>())
+      .ok_or_else(|| lancedb::Error::Runtime {
+        message: "Missing or invalid content column".to_string(),
+      })?
+      .value(row)
+      .to_string();
+
+    let content_hash_arr = batch
+      .column_by_name("content_hash")
+      .and_then(|col| col.as_any().downcast_ref::<FixedSizeBinaryArray>())
+      .ok_or_else(|| lancedb::Error::Runtime {
+        message: "Missing or invalid content_hash column".to_string(),
+      })?;
+
+    let mut content_hash = [0u8; 32];
+    content_hash.copy_from_slice(content_hash_arr.value(row));
+
+    // Extract embedding
+    let embedding_list = batch
+      .column_by_name("content_embedding")
+      .and_then(|col| col.as_any().downcast_ref::<FixedSizeListArray>())
+      .ok_or_else(|| lancedb::Error::Runtime {
+        message: "Missing or invalid content_embedding column".to_string(),
+      })?;
+
+    let embedding_value = embedding_list.value(row);
+    let embedding_values = embedding_value
+      .as_any()
+      .downcast_ref::<Float32Array>()
+      .ok_or_else(|| lancedb::Error::Runtime {
+        message: "Invalid embedding array type".to_string(),
+      })?;
+
+    let content_embedding: Vec<f32> = (0..embedding_values.len())
+      .map(|i| embedding_values.value(i))
+      .collect();
+
+    let file_size = batch
+      .column_by_name("file_size")
+      .and_then(|col| col.as_any().downcast_ref::<UInt64Array>())
+      .ok_or_else(|| lancedb::Error::Runtime {
+        message: "Missing or invalid file_size column".to_string(),
+      })?
+      .value(row);
+
+    let last_modified = batch
+      .column_by_name("last_modified")
+      .and_then(|col| {
+        col
+          .as_any()
+          .downcast_ref::<arrow::array::TimestampMicrosecondArray>()
+      })
+      .ok_or_else(|| lancedb::Error::Runtime {
+        message: "Missing or invalid last_modified column".to_string(),
+      })?
+      .value(row);
+
+    let indexed_at = batch
+      .column_by_name("indexed_at")
+      .and_then(|col| {
+        col
+          .as_any()
+          .downcast_ref::<arrow::array::TimestampMicrosecondArray>()
+      })
+      .ok_or_else(|| lancedb::Error::Runtime {
+        message: "Missing or invalid indexed_at column".to_string(),
+      })?
+      .value(row);
+
+    Ok(Self {
+      id,
+      file_path,
+      content,
+      content_hash,
+      content_embedding,
+      file_size,
+      last_modified: chrono::DateTime::from_timestamp_micros(last_modified)
+        .unwrap_or_default()
+        .naive_utc(),
+      indexed_at: chrono::DateTime::from_timestamp_micros(indexed_at)
+        .unwrap_or_default()
+        .naive_utc(),
+    })
   }
 
   pub fn compute_hash(content: &str) -> [u8; 32] {

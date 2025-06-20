@@ -18,9 +18,9 @@ mod search;
 // Re-export only what's needed for the public API
 pub use config::*;
 pub use indexer::{Indexer, IndexerError};
+pub use models::{IndexTask, TaskStatus};
 pub use search::{SearchResult, hybrid_search};
 pub use task_manager::TaskManager;
-pub use models::{IndexTask, TaskStatus};
 
 // Global ONNX runtime initialization to prevent multiple initialization issues
 #[cfg(feature = "local-embeddings")]

@@ -1,9 +1,7 @@
 use std::sync::Arc;
 
 use anyhow::{Result, anyhow};
-use arrow::array::{
-  FixedSizeBinaryArray, Float32Array, StringArray, TimestampMicrosecondArray, UInt64Array,
-};
+use arrow::array::Float32Array;
 use futures::TryStreamExt;
 use lancedb::Table;
 use lancedb::index::scalar::FullTextSearchQuery;
@@ -14,6 +12,7 @@ use tokio::sync::RwLock;
 use tracing::info;
 
 use crate::embeddings::EmbeddingProvider;
+use crate::models::CodeDocument;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SearchResult {
@@ -73,56 +72,6 @@ pub async fn hybrid_search(
     .await
     .map_err(|e| anyhow!("Error reading results: {}", e))?
   {
-    // Extract all required columns
-    let ids = batch
-      .column_by_name("id")
-      .ok_or_else(|| anyhow!("Missing id column"))?
-      .as_any()
-      .downcast_ref::<StringArray>()
-      .ok_or_else(|| anyhow!("id column is not a StringArray"))?;
-
-    let file_paths = batch
-      .column_by_name("file_path")
-      .ok_or_else(|| anyhow!("Missing file_path column"))?
-      .as_any()
-      .downcast_ref::<StringArray>()
-      .ok_or_else(|| anyhow!("file_path column is not a StringArray"))?;
-
-    let contents = batch
-      .column_by_name("content")
-      .ok_or_else(|| anyhow!("Missing content column"))?
-      .as_any()
-      .downcast_ref::<StringArray>()
-      .ok_or_else(|| anyhow!("content column is not a StringArray"))?;
-
-    let content_hashes = batch
-      .column_by_name("content_hash")
-      .ok_or_else(|| anyhow!("Missing content_hash column"))?
-      .as_any()
-      .downcast_ref::<FixedSizeBinaryArray>()
-      .ok_or_else(|| anyhow!("content_hash column is not a FixedSizeBinaryArray"))?;
-
-    let file_sizes = batch
-      .column_by_name("file_size")
-      .ok_or_else(|| anyhow!("Missing file_size column"))?
-      .as_any()
-      .downcast_ref::<UInt64Array>()
-      .ok_or_else(|| anyhow!("file_size column is not a UInt64Array"))?;
-
-    let last_modifieds = batch
-      .column_by_name("last_modified")
-      .ok_or_else(|| anyhow!("Missing last_modified column"))?
-      .as_any()
-      .downcast_ref::<TimestampMicrosecondArray>()
-      .ok_or_else(|| anyhow!("last_modified column is not a TimestampMicrosecondArray"))?;
-
-    let indexed_ats = batch
-      .column_by_name("indexed_at")
-      .ok_or_else(|| anyhow!("Missing indexed_at column"))?
-      .as_any()
-      .downcast_ref::<TimestampMicrosecondArray>()
-      .ok_or_else(|| anyhow!("indexed_at column is not a TimestampMicrosecondArray"))?;
-
     // Try to get distance scores if available
     let distances = batch
       .column_by_name("_distance")
@@ -130,29 +79,8 @@ pub async fn hybrid_search(
 
     // Process each row
     for row in 0..batch.num_rows() {
-      let id = ids.value(row).to_string();
-      let file_path = file_paths.value(row).to_string();
-      let content = contents.value(row).to_string();
-
-      // Extract content hash
-      let hash_value = content_hashes.value(row);
-      let mut content_hash = [0u8; 32];
-      if hash_value.len() == 32 {
-        content_hash.copy_from_slice(hash_value);
-      }
-
-      let file_size = file_sizes.value(row);
-
-      // Convert timestamps - Arrow TimestampMicrosecondArray stores microseconds since epoch
-      let last_modified_us = last_modifieds.value(row);
-      let last_modified = chrono::DateTime::from_timestamp_micros(last_modified_us)
-        .map(|dt| dt.naive_utc())
-        .unwrap_or_else(|| chrono::Utc::now().naive_utc());
-
-      let indexed_at_us = indexed_ats.value(row);
-      let indexed_at = chrono::DateTime::from_timestamp_micros(indexed_at_us)
-        .map(|dt| dt.naive_utc())
-        .unwrap_or_else(|| chrono::Utc::now().naive_utc());
+      let doc = CodeDocument::from_record_batch(&batch, row)
+        .map_err(|e| anyhow!("Failed to convert row {}: {}", row, e))?;
 
       // Get the actual distance/score if available
       // Note: Lower distance = better match in vector search
@@ -168,14 +96,14 @@ pub async fn hybrid_search(
       };
 
       search_results.push(SearchResult {
-        id,
-        file_path,
-        content,
-        content_hash,
+        id: doc.id,
+        file_path: doc.file_path,
+        content: doc.content,
+        content_hash: doc.content_hash,
         relevance_score,
-        file_size,
-        last_modified,
-        indexed_at,
+        file_size: doc.file_size,
+        last_modified: doc.last_modified,
+        indexed_at: doc.indexed_at,
       });
     }
   }

@@ -9,10 +9,7 @@ pub struct AppState {
 }
 
 impl AppState {
-  pub async fn new(
-    indexer: Arc<Indexer>,
-    shutdown_token: Option<CancellationToken>,
-  ) -> Self {
+  pub async fn new(indexer: Arc<Indexer>, shutdown_token: Option<CancellationToken>) -> Self {
     AppState {
       indexer,
       shutdown_token: shutdown_token.unwrap_or_default(),
