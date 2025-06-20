@@ -52,6 +52,7 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: stable
+          targets: ${{ runner.os == 'Windows' && 'x86_64-pc-windows-gnu' || '' }}
 
       - name: Install uv
         uses: astral-sh/setup-uv@v5
@@ -99,25 +100,25 @@ jobs:
 
       - name: Build all tests
         run: |
-          cargo test --no-run -p breeze-grammars
-          cargo test --no-run -p breeze-chunkers
-          cargo test -j 1 --no-run -p breeze
+          cargo test --no-run -p breeze-grammars ${{ runner.os == 'Windows' && '--target x86_64-pc-windows-gnu' || '' }}
+          cargo test --no-run -p breeze-chunkers ${{ runner.os == 'Windows' && '--target x86_64-pc-windows-gnu' || '' }}
+          cargo test -j 1 --no-run -p breeze ${{ runner.os == 'Windows' && '--target x86_64-pc-windows-gnu' || '' }}
 
       - name: Run Rust tests (breeze-grammars)
         run: |
-          cargo nextest run -p breeze-grammars
+          cargo nextest run -p breeze-grammars ${{ runner.os == 'Windows' && '--target x86_64-pc-windows-gnu' || '' }}
       - name: Run Rust tests (breeze-chunkers)
         run: |
-          cargo nextest run -p breeze-chunkers
+          cargo nextest run -p breeze-chunkers ${{ runner.os == 'Windows' && '--target x86_64-pc-windows-gnu' || '' }}
       - name: Run Rust tests (breeze)
         run: |
-          cargo nextest run -p breeze --status-level all --failure-output immediate --success-output immediate
+          cargo nextest run -p breeze --status-level all --failure-output immediate --success-output immediate ${{ runner.os == 'Windows' && '--target x86_64-pc-windows-gnu' || '' }}
         env:
           LD_LIBRARY_PATH: /usr/local/lib:${{ env.LD_LIBRARY_PATH }}
 
       - name: Build Python package
         run: |
-          cd crates/breeze-py && uv run --python .venv maturin develop --release
+          cd crates/breeze-py && uv run --python .venv maturin develop --release ${{ runner.os == 'Windows' && '--target x86_64-pc-windows-gnu' || '' }}
 
       - name: Run Python tests
         run: |
