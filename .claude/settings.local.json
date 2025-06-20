@@ -41,7 +41,8 @@
       "WebFetch(domain:docs.rs)",
       "mcp__github__search_issues",
       "WebFetch(domain:ort.pyke.io)",
-      "mcp__code-index__set_project_path"
+      "mcp__code-index__set_project_path",
+      "Bash(prefligit run --all-files)"
     ],
     "deny": []
   }

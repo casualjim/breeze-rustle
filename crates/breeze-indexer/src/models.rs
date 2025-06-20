@@ -852,7 +852,7 @@ mod tests {
   #[test]
   fn test_index_task_new() {
     let path = Path::new("/test/project");
-    let task = IndexTask::new(&path);
+    let task = IndexTask::new(path);
 
     assert!(!task.id.is_empty());
     assert_eq!(task.path, path.to_str().unwrap());

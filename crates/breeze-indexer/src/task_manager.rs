@@ -160,10 +160,7 @@ impl TaskManager {
     let start_time = std::time::Instant::now();
     let result = self
       .indexer
-      .index(
-        &std::path::Path::new(&task.path),
-        Some(cancel_token.clone()),
-      )
+      .index(std::path::Path::new(&task.path), Some(cancel_token.clone()))
       .await;
 
     let elapsed = start_time.elapsed();
