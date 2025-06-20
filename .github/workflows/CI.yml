@@ -210,56 +210,63 @@ jobs:
           name: wheels-musllinux-${{ matrix.platform.target }}
           path: crates/breeze-py/dist
 
-  # windows:
-  #   runs-on: ${{ matrix.platform.runner }}
-  #   needs: test
-  #   strategy:
-  #     matrix:
-  #       platform:
-  #         - runner: windows-latest
-  #           target: x64
-  #         - runner: windows-latest
-  #           target: x86
-  #   steps:
-  #     - uses: actions/checkout@v4
-  #     - uses: actions/setup-python@v5
-  #       with:
-  #         python-version: 3.x
-  #         architecture: ${{ matrix.platform.target }}
-  #     - name: Setup Node.js
-  #       uses: actions/setup-node@v4
-  #       with:
-  #         node-version: 20
-  #     - name: Install npm dependencies
-  #       run: npm install
-  #     - name: Install all platform parsers for cross-compilation
-  #       run: |
-  #         npm install --no-save \
-  #           @kumos/tree-sitter-parsers-darwin-arm64 \
-  #           @kumos/tree-sitter-parsers-darwin-x64 \
-  #           @kumos/tree-sitter-parsers-linux-arm64 \
-  #           @kumos/tree-sitter-parsers-linux-arm64-musl \
-  #           @kumos/tree-sitter-parsers-linux-x64 \
-  #           @kumos/tree-sitter-parsers-linux-x64-musl \
-  #           @kumos/tree-sitter-parsers-win32-arm64 \
-  #           @kumos/tree-sitter-parsers-win32-x64
-  #     - name: Install protoc
-  #       uses: arduino/setup-protoc@v3
-  #       with:
-  #         version: "25.x"
-  #         repo-token: ${{ secrets.GITHUB_TOKEN }}
-  #     - name: Build wheels
-  #       uses: PyO3/maturin-action@v1
-  #       with:
-  #         target: ${{ matrix.platform.target }}
-  #         args: --release --out dist
-  #         sccache: ${{ !startsWith(github.ref, 'refs/tags/') }}
-  #         working-directory: crates/breeze-py
-  #     - name: Upload wheels
-  #       uses: actions/upload-artifact@v4
-  #       with:
-  #         name: wheels-windows-${{ matrix.platform.target }}
-  #         path: crates/breeze-py/dist
+  windows:
+    runs-on: ${{ matrix.platform.runner }}
+    needs: test
+    strategy:
+      matrix:
+        platform:
+          - runner: windows-latest
+            target: x86_64-pc-windows-gnu
+            arch: x64
+          - runner: windows-latest
+            target: i686-pc-windows-gnu
+            arch: x86
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: 3.x
+          architecture: ${{ matrix.platform.arch }}
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Install npm dependencies
+        run: npm install
+      - name: Install all platform parsers for cross-compilation
+        run: |
+          npm install --no-save \
+            @kumos/tree-sitter-parsers-darwin-arm64 \
+            @kumos/tree-sitter-parsers-darwin-x64 \
+            @kumos/tree-sitter-parsers-linux-arm64 \
+            @kumos/tree-sitter-parsers-linux-arm64-musl \
+            @kumos/tree-sitter-parsers-linux-x64 \
+            @kumos/tree-sitter-parsers-linux-x64-musl \
+            @kumos/tree-sitter-parsers-win32-arm64 \
+            @kumos/tree-sitter-parsers-win32-x64
+      - name: Install protoc
+        uses: arduino/setup-protoc@v3
+        with:
+          version: "25.x"
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Install Rust GNU toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+          targets: ${{ matrix.platform.target }}
+      - name: Build wheels
+        uses: PyO3/maturin-action@v1
+        with:
+          target: ${{ matrix.platform.target }}
+          args: --release --out dist
+          sccache: ${{ !startsWith(github.ref, 'refs/tags/') }}
+          working-directory: crates/breeze-py
+      - name: Upload wheels
+        uses: actions/upload-artifact@v4
+        with:
+          name: wheels-windows-${{ matrix.platform.arch }}
+          path: crates/breeze-py/dist
 
   macos:
     runs-on: ${{ matrix.platform.runner }}
@@ -342,7 +349,7 @@ jobs:
               strip -x *.node
           - host: windows-latest
             build: npm run build
-            target: x86_64-pc-windows-msvc
+            target: x86_64-pc-windows-gnu
           - host: ubuntu-22.04
             target: x86_64-unknown-linux-gnu
             build: |
