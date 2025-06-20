@@ -129,9 +129,6 @@ profile:
 
 # Release commands
 
-# Prepare for release (run all checks)
-pre-release: fmt check test
-    @echo "All checks passed! Ready for release."
 
 # Tag a new version
 tag version:
