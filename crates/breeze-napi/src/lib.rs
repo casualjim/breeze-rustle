@@ -1,13 +1,13 @@
 use breeze_chunkers::{
-  Chunk as RustChunk, ChunkMetadata, InnerChunker, ProjectChunk as RustProjectChunk,
-  Tokenizer as RustTokenizer, WalkOptions, walk_project as rust_walk_project,
+  walk_project as rust_walk_project, Chunk as RustChunk, ChunkMetadata, Chunker, ChunkerConfig,
+  ProjectChunk as RustProjectChunk, Tokenizer as RustTokenizer, WalkOptions,
 };
 
 use futures::StreamExt;
 use napi::bindgen_prelude::*;
 use napi_derive::napi;
 use std::sync::Arc;
-use tokio::sync::{Mutex, mpsc};
+use tokio::sync::{mpsc, Mutex};
 
 #[napi]
 pub enum TokenizerType {
@@ -221,7 +221,7 @@ impl ProjectChunkIterator {
 
 #[napi]
 pub struct SemanticChunker {
-  inner: Arc<InnerChunker>,
+  inner: Arc<Chunker>,
 }
 
 #[napi]
@@ -235,7 +235,7 @@ impl SemanticChunker {
     let max_chunk_size = max_chunk_size.unwrap_or(1500) as usize;
 
     // Convert JS TokenizerType to Rust Tokenizer
-    let tokenizer_type = match tokenizer_type.unwrap_or(TokenizerType::Characters) {
+    let tokenizer = match tokenizer_type.unwrap_or(TokenizerType::Characters) {
       TokenizerType::Characters => RustTokenizer::Characters,
       TokenizerType::Tiktoken => match tokenizer_name {
         Some(model) => RustTokenizer::Tiktoken(model),
@@ -257,7 +257,12 @@ impl SemanticChunker {
       },
     };
 
-    let inner = InnerChunker::new(max_chunk_size, tokenizer_type).map_err(|e| {
+    let config = ChunkerConfig {
+      max_chunk_size,
+      tokenizer,
+    };
+
+    let inner = Chunker::new(config).map_err(|e| {
       Error::new(
         Status::GenericFailure,
         format!("Failed to create chunker: {}", e),

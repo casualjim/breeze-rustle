@@ -91,7 +91,18 @@ pub async fn run(
     .await
     .map_err(|e| anyhow::anyhow!("Failed to initialize indexer: {}", e))?;
 
-  let state = AppState::new(indexer, shutdown_token.clone()).await;
+  let indexer_arc = Arc::new(indexer);
+
+  // Spawn the task worker
+  let worker_shutdown = shutdown_token.clone().unwrap_or_default();
+  let worker_task_manager = indexer_arc.task_manager();
+  let _worker_handle = tokio::spawn(async move {
+    if let Err(e) = worker_task_manager.run_worker(worker_shutdown).await {
+      error!("Task worker error: {}", e);
+    }
+  });
+
+  let state = AppState::new(indexer_arc, shutdown_token.clone()).await;
 
   let metrics = metrics_layer();
 
@@ -124,8 +135,7 @@ pub async fn run(
   use prometheus::Encoder;
 
   // Create MCP HTTP service
-  let mcp_http_service =
-    crate::mcp::create_http_service(state.indexer.clone(), state.shutdown_token.clone());
+  let mcp_http_service = crate::mcp::create_http_service(state.indexer.clone());
 
   // Create MCP SSE server and router
   let bind_addr = SocketAddr::from((Ipv4Addr::UNSPECIFIED, http_port));
@@ -137,11 +147,7 @@ pub async fn run(
   );
 
   // Start the SSE service
-  let sse_service_ct = crate::mcp::start_sse_service(
-    sse_server,
-    state.indexer.clone(),
-    state.shutdown_token.clone(),
-  );
+  let sse_service_ct = crate::mcp::start_sse_service(sse_server, state.indexer.clone());
 
   let app = Router::new()
     .nest_service("/mcp", mcp_http_service)

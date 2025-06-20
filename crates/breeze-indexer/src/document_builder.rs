@@ -21,16 +21,18 @@ pub(crate) async fn build_document_from_accumulator(
   let mut total_weight = 0.0;
 
   for embedded_chunk in &embedded_chunks {
-    let text = match &embedded_chunk.chunk {
-      Chunk::Semantic(sc) => &sc.text,
-      Chunk::Text(sc) => &sc.text,
+    match &embedded_chunk.chunk {
+      Chunk::Semantic(sc) | Chunk::Text(sc) => {
+        // Use actual token count if available, otherwise estimate
+        let token_count = sc.tokens
+          .as_ref()
+          .map(|tokens| tokens.len() as f32)
+          .unwrap_or_else(|| (sc.text.len() as f32 / 4.0).max(1.0));
+        weights.push(token_count);
+        total_weight += token_count;
+      }
       Chunk::EndOfFile { .. } => continue, // Skip EOF markers
-    };
-
-    // Approximate token count (rough estimate: ~4 chars per token)
-    let token_count = (text.len() as f32 / 4.0).max(1.0);
-    weights.push(token_count);
-    total_weight += token_count;
+    }
   }
 
   // Normalize weights

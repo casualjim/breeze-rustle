@@ -1,5 +1,5 @@
 use breeze_chunkers::{
-  Chunk, ChunkError, ChunkMetadata, InnerChunker, ProjectChunk, Tokenizer as RustTokenizer,
+  Chunk, ChunkError, ChunkMetadata, Chunker, ChunkerConfig, ProjectChunk, Tokenizer as RustTokenizer,
   WalkOptions, is_language_supported, supported_languages, walk_project,
 };
 
@@ -195,7 +195,7 @@ impl From<ProjectChunk> for PyProjectChunk {
 
 #[pyclass]
 pub struct SemanticChunker {
-  inner: Arc<InnerChunker>,
+  inner: Arc<Chunker>,
 }
 
 #[pymethods]
@@ -210,7 +210,7 @@ impl SemanticChunker {
     let max_chunk_size = max_chunk_size.unwrap_or(1500);
 
     // Convert Python TokenizerType to Rust Tokenizer
-    let tokenizer_type = match tokenizer_type.unwrap_or(TokenizerType::Characters) {
+    let tokenizer = match tokenizer_type.unwrap_or(TokenizerType::Characters) {
       TokenizerType::Characters => RustTokenizer::Characters,
       TokenizerType::Tiktoken => match tokenizer_name.clone() {
         Some(model) => RustTokenizer::Tiktoken(model),
@@ -226,7 +226,12 @@ impl SemanticChunker {
       },
     };
 
-    let inner = InnerChunker::new(max_chunk_size, tokenizer_type)
+    let config = ChunkerConfig {
+      max_chunk_size,
+      tokenizer,
+    };
+
+    let inner = Chunker::new(config)
       .map_err(|e| PyRuntimeError::new_err(format!("Failed to create chunker: {}", e)))?;
 
     Ok(Self {

@@ -18,16 +18,16 @@ use crate::models::CodeDocument;
 use crate::pipeline::{ChunkBatch, EmbeddedChunk, EmbeddedChunkWithFile, FileAccumulator};
 use crate::sinks::lancedb_sink::LanceDbSink;
 
-pub struct BulkIndexer<'a> {
-  config: &'a Config,
+pub struct BulkIndexer {
+  config: Arc<Config>,
   embedding_provider: Arc<dyn EmbeddingProvider>,
   embedding_dim: usize,
   table: Arc<RwLock<Table>>,
 }
 
-impl<'a> BulkIndexer<'a> {
+impl BulkIndexer {
   pub fn new(
-    config: &'a Config,
+    config: Arc<Config>,
     embedding_provider: Arc<dyn EmbeddingProvider>,
     embedding_dim: usize,
     table: Arc<RwLock<Table>>,
@@ -1276,7 +1276,7 @@ mod tests {
       .unwrap();
 
     let indexer = BulkIndexer::new(
-      &config,
+      Arc::new(config),
       embedding_provider,
       embedding_dim,
       Arc::new(RwLock::new(table)),
@@ -1450,7 +1450,7 @@ mod tests {
       .unwrap();
 
     let indexer = BulkIndexer::new(
-      &config,
+      Arc::new(config),
       embedding_provider,
       embedding_dim,
       Arc::new(RwLock::new(table)),
@@ -1503,7 +1503,7 @@ mod tests {
         .unwrap();
 
       let indexer = BulkIndexer::new(
-        &config,
+        Arc::new(config),
         embedding_provider,
         embedding_dim,
         Arc::new(RwLock::new(table)),
@@ -1537,7 +1537,7 @@ mod tests {
       .unwrap();
 
     let indexer = BulkIndexer::new(
-      &config,
+      Arc::new(config),
       embedding_provider,
       embedding_dim,
       Arc::new(RwLock::new(table)),
@@ -1576,7 +1576,7 @@ mod tests {
       .unwrap();
 
     let indexer = BulkIndexer::new(
-      &config,
+      Arc::new(config),
       embedding_provider,
       embedding_dim,
       Arc::new(RwLock::new(table)),
@@ -1604,7 +1604,7 @@ mod tests {
       .unwrap();
 
     let indexer = BulkIndexer::new(
-      &config,
+      Arc::new(config),
       embedding_provider,
       embedding_dim,
       Arc::new(RwLock::new(table)),
@@ -1639,7 +1639,7 @@ mod tests {
       .unwrap();
 
     let indexer = BulkIndexer::new(
-      &config,
+      Arc::new(config),
       embedding_provider,
       embedding_dim,
       Arc::new(RwLock::new(table)),
@@ -1679,7 +1679,7 @@ mod tests {
       .unwrap();
 
     let indexer = BulkIndexer::new(
-      &config,
+      Arc::new(config),
       embedding_provider,
       embedding_dim,
       Arc::new(RwLock::new(table)),
@@ -1730,7 +1730,7 @@ mod tests {
       .unwrap();
 
     let indexer = BulkIndexer::new(
-      &config,
+      Arc::new(config),
       embedding_provider,
       embedding_dim,
       Arc::new(RwLock::new(table)),

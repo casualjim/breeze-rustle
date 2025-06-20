@@ -30,7 +30,7 @@
    - Provider-specific batching and rate limiting
    - LanceDB integration for storage
 
-4. **breeze-napi**: Node.js bindings (future)
+4. **breeze-napi**: Node.js bindings
 
 5. **breeze-py**: Python bindings via PyO3
 
@@ -233,15 +233,18 @@ Current performance (kuzu project):
 ## Hybrid Search Design
 
 ### Overview
+
 Implement hybrid search that combines vector similarity search and full-text search (FTS) using LanceDB's capabilities, with results combined using Reciprocal Rank Fusion (RRF).
 
 ### Key Components
+
 1. **HybridSearcher**: Main search implementation that orchestrates both search types
 2. **Vector Search**: Uses our existing embeddings with LanceDB's vector search
 3. **Full-Text Search**: Uses LanceDB's built-in FTS capabilities
 4. **RRF Reranking**: Combines results using reciprocal rank fusion (k=60)
 
 ### Search Flow
+
 1. Execute FTS query with 2x requested limit
 2. Execute vector search with 2x requested limit
 3. Normalize scores from both searches to [0,1] range
@@ -251,6 +254,7 @@ Implement hybrid search that combines vector similarity search and full-text sea
 7. Return top N results
 
 ### Technical Details
+
 - FTS index on `content` field for text search
 - Vector search on `content_embedding` field
 - Score normalization using min-max scaling

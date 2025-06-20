@@ -40,7 +40,8 @@
       "mcp__code-index__find_files",
       "WebFetch(domain:docs.rs)",
       "mcp__github__search_issues",
-      "WebFetch(domain:ort.pyke.io)"
+      "WebFetch(domain:ort.pyke.io)",
+      "mcp__code-index__set_project_path"
     ],
     "deny": []
   }

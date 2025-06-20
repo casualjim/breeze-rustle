@@ -29,12 +29,11 @@ impl App {
   pub async fn index(
     &self,
     path: &Path,
-    cancel_token: Option<tokio_util::sync::CancellationToken>,
-  ) -> Result<usize, Box<dyn std::error::Error + Send + Sync>> {
+  ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
     // Use the facade to index the project
     self
       .indexer
-      .index_project(path, cancel_token)
+      .index_project(path)
       .await
       .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)
   }
@@ -81,7 +80,7 @@ mod tests {
     std::fs::write(&test_file, "def hello_world():\n    print('Hello, world!')").unwrap();
 
     // Index the repository
-    let count = app.index(test_repo.path(), None).await.unwrap();
-    assert_eq!(count, 1);
+    let task_id = app.index(test_repo.path()).await.unwrap();
+    assert!(!task_id.is_empty());
   }
 }

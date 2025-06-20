@@ -92,12 +92,11 @@ async fn async_main() {
 
       match breeze::App::new(config).await {
         Ok(app) => {
-          let cancel_token = shutdown_token.clone();
           tokio::select! {
-            result = app.index(&path, Some(cancel_token)) => {
+            result = app.index(&path) => {
               match result {
-                Ok(_) => {
-                  info!("Indexing completed successfully!");
+                Ok(task_id) => {
+                  info!("Indexing task submitted successfully! Task ID: {}", task_id);
                 }
                 Err(e) => {
                   error!("Indexing failed: {}", e);

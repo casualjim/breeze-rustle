@@ -32,16 +32,12 @@ pub struct IndexFileRequest {
 #[derive(Clone)]
 pub struct BreezeService {
   indexer: Arc<Indexer>,
-  shutdown_token: CancellationToken,
 }
 
 #[tool(tool_box)]
 impl BreezeService {
-  pub fn new(indexer: Arc<Indexer>, shutdown_token: CancellationToken) -> Self {
-    Self {
-      indexer,
-      shutdown_token,
-    }
+  pub fn new(indexer: Arc<Indexer>) -> Self {
+    Self { indexer }
   }
 
   #[tool(description = "Search code using semantic understanding")]
@@ -108,17 +104,13 @@ impl BreezeService {
       ))]));
     }
 
-    match self
-      .indexer
-      .index_project(&project_path, Some(self.shutdown_token.clone()))
-      .await
-    {
-      Ok(files_indexed) => Ok(CallToolResult::success(vec![Content::text(format!(
-        "Successfully indexed {} files in directory: {}",
-        files_indexed, path
+    match self.indexer.index_project(&project_path).await {
+      Ok(task_id) => Ok(CallToolResult::success(vec![Content::text(format!(
+        "Successfully submitted indexing task for directory: {}. Task ID: {}",
+        path, task_id
       ))])),
       Err(e) => Ok(CallToolResult::error(vec![Content::text(format!(
-        "Indexing failed: {}",
+        "Failed to submit indexing task: {}",
         e
       ))])),
     }
@@ -134,7 +126,7 @@ impl BreezeService {
     let file_path = PathBuf::from(&path);
 
     // If content is not provided, check that file exists
-    if content.is_none() && !file_path.exists() {
+    if !file_path.exists() {
       return Ok(CallToolResult::error(vec![Content::text(format!(
         "File '{}' does not exist",
         path
@@ -185,12 +177,9 @@ impl ServerHandler for BreezeService {
 }
 
 /// Create an HTTP streamable MCP service
-pub fn create_http_service(
-  indexer: Arc<Indexer>,
-  shutdown_token: CancellationToken,
-) -> StreamableHttpService<BreezeService> {
+pub fn create_http_service(indexer: Arc<Indexer>) -> StreamableHttpService<BreezeService> {
   StreamableHttpService::new(
-    move || Ok(BreezeService::new(indexer.clone(), shutdown_token.clone())),
+    move || Ok(BreezeService::new(indexer.clone())),
     LocalSessionManager::default().into(),
     Default::default(),
   )
@@ -215,10 +204,6 @@ pub fn create_sse_server(
 }
 
 /// Start the SSE service with the BreezeService handler
-pub fn start_sse_service(
-  sse_server: SseServer,
-  indexer: Arc<Indexer>,
-  shutdown_token: CancellationToken,
-) -> CancellationToken {
-  sse_server.with_service(move || BreezeService::new(indexer.clone(), shutdown_token.clone()))
+pub fn start_sse_service(sse_server: SseServer, indexer: Arc<Indexer>) -> CancellationToken {
+  sse_server.with_service(move || BreezeService::new(indexer.clone()))
 }

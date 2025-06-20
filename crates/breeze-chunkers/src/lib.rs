@@ -22,8 +22,7 @@ use std::sync::Arc;
 use futures::stream::BoxStream;
 use futures::{Stream, StreamExt};
 
-pub use crate::chunker::InnerChunker;
-
+use crate::chunker::InnerChunker;
 // Re-export main types
 pub use crate::types::{
   Chunk, ChunkError, ChunkMetadata, FileMetadata, ProjectChunk, SemanticChunk,
@@ -176,11 +175,24 @@ impl Chunker {
   pub async fn chunk_file(
     &self,
     path: impl AsRef<Path>,
+    content: Option<String>,
   ) -> Result<BoxStream<'_, Result<Chunk, ChunkError>>, ChunkError> {
     let path = path.as_ref();
-    let content = tokio::fs::read_to_string(path)
-      .await
-      .map_err(ChunkError::IoError)?;
+    if content.is_none() && !path.exists() {
+      return Err(ChunkError::IoError(std::io::Error::new(
+        std::io::ErrorKind::NotFound,
+        format!("File not found: {}", path.display()),
+      )));
+    }
+
+    let content = if let Some(content) = content {
+      content
+    } else {
+      // Read file content if not provided
+      tokio::fs::read_to_string(path)
+        .await
+        .map_err(ChunkError::IoError)?
+    };
 
     let file_path = path.to_string_lossy().to_string();
 

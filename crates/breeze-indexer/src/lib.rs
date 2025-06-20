@@ -8,6 +8,7 @@ mod models;
 mod pipeline;
 mod reqwestx;
 mod sinks;
+mod task_manager;
 
 // Public modules
 mod config;
@@ -18,6 +19,8 @@ mod search;
 pub use config::*;
 pub use indexer::{Indexer, IndexerError};
 pub use search::{SearchResult, hybrid_search};
+pub use task_manager::TaskManager;
+pub use models::{IndexTask, TaskStatus};
 
 // Global ONNX runtime initialization to prevent multiple initialization issues
 #[cfg(feature = "local-embeddings")]
