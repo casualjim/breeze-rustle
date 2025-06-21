@@ -11,10 +11,11 @@ async-compression = { version = "0.4", features = ["all-algorithms", "tokio"] }
 
 axum = { version = "0.8.4", features = ["macros", "multipart", "ws", "http2"] }
 axum-helmet = "0.2.0"
-axum-otel-metrics = "0.11.0"
+axum-otel-metrics = "0.12.0"
 axum-server = { version = "0.7.2", features = ["tls-rustls"] }
 axum-tracing-opentelemetry = "0.29.0"
 breeze-indexer = { path = "../breeze-indexer" }
+chrono.workspace = true
 
 futures.workspace = true
 
@@ -46,6 +47,7 @@ rustls-acme = { version = "0.14.0", features = [
 rustls-pemfile = "2.2.0"
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
+thiserror = { workspace = true }
 tokio = { workspace = true, features = ["signal", "rt-multi-thread"] }
 tokio-util = { workspace = true }
 tower = { version = "0.5.2" }
@@ -63,9 +65,8 @@ tracing.workspace = true
 
 url = { version = "2", features = ["serde"] }
 uuid = { workspace = true, features = ["serde"] }
-schemars = { version = "0.8", features = ["uuid1"] }
-
-rmcp = { git = "https://github.com/modelcontextprotocol/rust-sdk", branch = "main", features = ["transport-streamable-http-server-session", "transport-streamable-http-server", "transport-worker", "transport-sse-server"] }
+schemars = { version = "0.9", features = ["uuid1", "chrono04"] }
+aide = { version = "0.15", features = ["axum-json", "axum-query", "axum-matched-path", "axum-tokio", "axum-extra-query", "axum-extra-json-deserializer", "redoc", "scalar"] }
 
 [dev-dependencies]
 axum-test = "17"

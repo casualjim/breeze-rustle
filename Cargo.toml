@@ -51,6 +51,7 @@ text-splitter = { version = "0.27", features = [
   "tiktoken-rs",
   "tokenizers",
 ] }
+thiserror = "2"
 tiktoken-rs = "0.7"
 
 # Tokenization

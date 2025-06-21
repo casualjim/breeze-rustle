@@ -1,8 +1,7 @@
 use anyhow::Result;
-use breeze_chunkers::{Chunk, Chunker, ChunkerConfig, Tokenizer};
 use dashmap::DashMap;
-use futures::StreamExt;
 use lancedb::Table;
+use std::collections::BTreeSet;
 use std::path::Path;
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -16,7 +15,7 @@ use crate::{
   embeddings::{EmbeddingProvider, factory::create_embedding_provider},
   file_watcher::ProjectWatcher,
   hybrid_search,
-  models::{CodeDocument, Project},
+  models::{CodeDocument, FileChange, FileOperation, Project},
   project_manager::ProjectManager,
   task_manager::TaskManager,
 };
@@ -27,20 +26,23 @@ pub enum IndexerError {
   #[error("Configuration error: {0}")]
   Config(String),
 
-  #[error("Storage error: {0}")]
-  Storage(String),
+  #[error("Storage error")]
+  Storage(#[from] lancedb::Error),
 
-  #[error("Embedding error: {0}")]
-  Embedding(String),
+  #[error("Embedding provider error")]
+  Embedding(#[from] Box<dyn std::error::Error + Send + Sync>),
 
-  #[error("IO error: {0}")]
-  IO(String),
+  #[error("IO error")]
+  Io(#[from] std::io::Error),
 
-  #[error("Chunker error: {0}")]
+  #[error("Chunker error")]
   Chunker(#[from] breeze_chunkers::ChunkError),
 
-  #[error("io error: {0}")]
-  Io(#[from] std::io::Error),
+  #[error("Project not found: {0}")]
+  ProjectNotFound(Uuid),
+
+  #[error("File outside project directory")]
+  FileOutsideProject { file: String, project_dir: String },
 }
 
 /// Main public interface for indexing and searching code
@@ -50,18 +52,20 @@ pub struct Indexer {
   table: Arc<RwLock<Table>>,
   task_manager: Arc<TaskManager>,
   project_manager: Arc<ProjectManager>,
-  embedding_dim: usize,
   active_watchers: DashMap<Uuid, Arc<ProjectWatcher>>,
   shutdown_token: CancellationToken,
 }
 
 impl Indexer {
   /// Create a new Indexer from configuration
-  pub async fn new(config: Config, shutdown_token: CancellationToken) -> Result<Self, IndexerError> {
+  pub async fn new(
+    config: Config,
+    shutdown_token: CancellationToken,
+  ) -> Result<Self, IndexerError> {
     // Initialize embedding provider
     let embedding_provider = create_embedding_provider(&config)
       .await
-      .map_err(|e| IndexerError::Config(format!("Failed to create embedding provider: {}", e)))?;
+      .map_err(|e| IndexerError::Embedding(Box::new(e)))?;
 
     let embedding_dim = embedding_provider.embedding_dim();
 
@@ -74,22 +78,18 @@ impl Indexer {
         .ok_or_else(|| IndexerError::Config("Invalid database path".to_string()))?,
     )
     .execute()
-    .await
-    .map_err(|e| IndexerError::Storage(format!("Failed to open LanceDB: {}", e)))?;
+    .await?;
 
     // Ensure tables exist
     let table = CodeDocument::ensure_table(&connection, "code_embeddings", embedding_dim)
-      .await
-      .map_err(|e| IndexerError::Storage(format!("Failed to ensure table: {}", e)))?;
+      .await?;
 
     let task_table = crate::models::IndexTask::ensure_table(&connection, "index_tasks")
-      .await
-      .map_err(|e| IndexerError::Storage(format!("Failed to ensure task table: {}", e)))?;
+      .await?;
 
     // Ensure projects table exists
     let project_table = Project::ensure_table(&connection, "projects")
-      .await
-      .map_err(|e| IndexerError::Storage(format!("Failed to ensure projects table: {}", e)))?;
+      .await?;
 
     let project_table = Arc::new(RwLock::new(project_table));
     let task_table = Arc::new(RwLock::new(task_table));
@@ -113,7 +113,6 @@ impl Indexer {
       table,
       task_manager,
       project_manager,
-      embedding_dim,
       active_watchers: DashMap::new(),
       shutdown_token,
     })
@@ -129,126 +128,71 @@ impl Indexer {
     self.project_manager.clone()
   }
 
-  /// Index a single file
+  /// Index a single file by submitting a partial index task
   pub async fn index_file(
     &self,
-    _project_id: Uuid,
+    project_id: Uuid,
     file_path: &Path,
-    content: Option<String>,
-  ) -> Result<(), IndexerError> {
-    info!(path = %file_path.display(), "Indexing single file");
+  ) -> Result<Uuid, IndexerError> {
+    info!(path = %file_path.display(), project_id = %project_id, "Submitting single file index task");
 
-    let tokenizer = if let Some(provider_tokenizer) = self.embedding_provider.tokenizer() {
-      Tokenizer::PreloadedHuggingFace(provider_tokenizer)
-    } else {
-      Tokenizer::Characters
-    };
+    // Get the project to validate the file belongs to it
+    let project = self
+      .project_manager
+      .get_project(project_id)
+      .await
+      .map_err(|e| IndexerError::Embedding(e))?
+      .ok_or(IndexerError::ProjectNotFound(project_id))?;
 
-    let chunker = Chunker::new(ChunkerConfig {
-      max_chunk_size: self.config.max_chunk_size,
-      tokenizer,
-    })?;
+    let project_dir = Path::new(&project.directory);
+    
+    // Canonicalize paths to resolve .. and symlinks
+    let canonical_project = project_dir.canonicalize()?;
+    let canonical_file = file_path.canonicalize()?;
 
-    // Create a file accumulator
-    let mut accumulator =
-      crate::pipeline::FileAccumulator::new(file_path.to_string_lossy().to_string());
-
-    // Chunk the file using breeze-chunkers' language detection
-    let mut chunk_stream = chunker.chunk_file(file_path, content).await?;
-    let mut chunks_to_embed = Vec::new();
-
-    while let Some(chunk_result) = chunk_stream.next().await {
-      match chunk_result {
-        Ok(chunk) => {
-          match &chunk {
-            Chunk::Semantic(_) | Chunk::Text(_) => {
-              // Collect chunks that need embedding
-              chunks_to_embed.push(chunk);
-            }
-            Chunk::EndOfFile { .. } => {
-              // Add EOF chunk directly to accumulator (it has content and hash)
-              accumulator.add_chunk(crate::pipeline::EmbeddedChunk {
-                chunk,
-                embedding: vec![],
-              });
-            }
-          }
-        }
-        Err(e) => error!("Error chunking file: {}", e),
-      }
+    // Ensure the file is within the project directory
+    if !canonical_file.starts_with(&canonical_project) {
+      return Err(IndexerError::FileOutsideProject {
+        file: file_path.display().to_string(),
+        project_dir: project.directory.clone(),
+      });
     }
 
-    if chunks_to_embed.is_empty() {
-      info!(path = %file_path.display(), "No embeddable content in file, skipping");
-      return Ok(());
-    }
+    // Check that file exists is handled by canonicalize() which returns an error if file doesn't exist
 
-    // Embed all chunks at once
-    let embeddings = self
-      .embedding_provider
-      .embed(
-        &chunks_to_embed
-          .iter()
-          .map(|chunk| match chunk {
-            Chunk::Semantic(sc) | Chunk::Text(sc) => crate::embeddings::EmbeddingInput {
-              text: &sc.text,
-              token_count: sc.tokens.as_ref().map(|t| t.len()),
-            },
-            _ => unreachable!("Only semantic and text chunks should be here"),
-          })
-          .collect::<Vec<_>>(),
+
+    let mut changes = BTreeSet::new();
+    let operation = FileOperation::Update;
+
+    changes.insert(FileChange {
+      path: canonical_file.clone(),
+      operation,
+    });
+
+    // Submit partial index task
+    let task_id = self
+      .task_manager
+      .submit_task_with_type(
+        project_id,
+        &canonical_project,
+        crate::models::TaskType::PartialUpdate { changes },
       )
       .await
-      .map_err(|e| IndexerError::Embedding(format!("Failed to embed chunks: {}", e)))?;
+      .map_err(|e| IndexerError::Embedding(e))?;
 
-    // Add embedded chunks to accumulator
-    for (chunk, embedding) in chunks_to_embed.into_iter().zip(embeddings.into_iter()) {
-      accumulator.add_chunk(crate::pipeline::EmbeddedChunk { chunk, embedding });
-    }
-
-    // Build document using the same logic as bulk indexer
-    let doc = match crate::document_builder::build_document_from_accumulator(
-      accumulator,
-      self.embedding_dim,
-    )
-    .await
-    {
-      Some(doc) => doc,
-      None => {
-        info!(path = %file_path.display(), "No document created for file");
-        return Ok(());
-      }
-    };
-
-    // Use the same sink infrastructure as bulk indexer for consistency
-    let converter = crate::converter::BufferedRecordBatchConverter::<CodeDocument>::default()
-      .with_schema(Arc::new(CodeDocument::schema(self.embedding_dim)));
-
-    let sink = crate::sinks::lancedb_sink::LanceDbSink::new(self.table.clone());
-
-    // Create a single-item stream
-    let doc_stream = futures::stream::once(async move { doc });
-    let record_batches = converter.convert(Box::pin(doc_stream));
-
-    // Process through sink
-    let mut sink_stream = sink.sink(record_batches);
-    while sink_stream.next().await.is_some() {
-      // Process the single batch
-    }
-
-    info!(path = %file_path.display(), "Successfully indexed file");
-    Ok(())
+    info!(task_id = %task_id, path = %file_path.display(), "Submitted partial index task for file");
+    Ok(task_id)
   }
 
   /// Index an entire project - always submits to task queue
-  pub async fn index_project(&self, project_id: Uuid) -> Result<String, IndexerError> {
+  pub async fn index_project(&self, project_id: Uuid) -> Result<Uuid, IndexerError> {
     // Get the project to find its directory
     let project = self
       .project_manager
       .get_project(project_id)
       .await
-      .map_err(|e| IndexerError::Storage(format!("Failed to get project: {}", e)))?
-      .ok_or_else(|| IndexerError::Storage(format!("Project not found: {}", project_id)))?;
+      .map_err(|e| IndexerError::Embedding(e))?
+      .ok_or(IndexerError::ProjectNotFound(project_id))?;
 
     info!(project_id = %project_id, path = %project.directory, "Submitting project indexing task");
 
@@ -257,9 +201,9 @@ impl Indexer {
       .task_manager
       .has_active_task(project_id)
       .await
-      .map_err(|e| IndexerError::Storage(format!("Failed to check active tasks: {}", e)))?
+      .map_err(|e| IndexerError::Embedding(e))?
     {
-      return Err(IndexerError::Storage(
+      return Err(IndexerError::Config(
         "Project already has an active indexing task".to_string(),
       ));
     }
@@ -268,15 +212,15 @@ impl Indexer {
       .task_manager
       .submit_task(project_id, Path::new(&project.directory))
       .await
-      .map_err(|e| IndexerError::Storage(format!("Failed to submit indexing task: {}", e)))?;
-    
+      .map_err(|e| IndexerError::Embedding(e))?;
+
     // Start file watcher for the project
     if let Err(e) = self.start_file_watcher(project_id).await {
       error!(project_id = %project_id, error = %e, "Failed to start file watcher");
       // Don't fail the indexing task if watcher fails to start
     }
-    
-    Ok(task_id.to_string())
+
+    Ok(task_id)
   }
 
   /// Start file watching for a project
@@ -292,8 +236,8 @@ impl Indexer {
       .project_manager
       .get_project(project_id)
       .await
-      .map_err(|e| IndexerError::Storage(format!("Failed to get project: {}", e)))?
-      .ok_or_else(|| IndexerError::Storage(format!("Project not found: {}", project_id)))?;
+      .map_err(|e| IndexerError::Embedding(e))?
+      .ok_or(IndexerError::ProjectNotFound(project_id))?;
 
     info!(project_id = %project_id, path = %project.directory, "Starting file watcher");
 
@@ -305,8 +249,7 @@ impl Indexer {
         self.task_manager.clone(),
         self.config.max_file_size,
       )
-      .await
-      .map_err(|e| IndexerError::IO(format!("Failed to create file watcher: {}", e)))?,
+      .await?,
     );
 
     // Store the watcher
@@ -329,7 +272,7 @@ impl Indexer {
       .project_manager
       .list_projects()
       .await
-      .map_err(|e| IndexerError::Storage(format!("Failed to list projects: {}", e)))?;
+      .map_err(|e| IndexerError::Embedding(e))?;
 
     info!("Starting file watchers for {} projects", projects.len());
 
@@ -358,7 +301,7 @@ impl Indexer {
       limit,
     )
     .await
-    .map_err(|e| IndexerError::Storage(format!("Search failed: {}", e)))
+    .map_err(|e| IndexerError::Embedding(Box::new(e)))
   }
 
   /// Find a document by file path
@@ -373,17 +316,10 @@ impl Indexer {
       .only_if(format!("file_path = '{}'", file_path))
       .limit(1)
       .execute()
-      .await
-      .map_err(|e| IndexerError::Storage(format!("Failed to query by file path: {}", e)))?;
+      .await?;
 
-    if let Some(batch) = results
-      .try_next()
-      .await
-      .map_err(|e| IndexerError::Storage(format!("Failed to get result: {}", e)))?
-    {
-      CodeDocument::from_record_batch(&batch, 0)
-        .map(Some)
-        .map_err(|e| IndexerError::Storage(format!("Failed to parse document: {}", e)))
+    if let Some(batch) = results.try_next().await? {
+      Ok(Some(CodeDocument::from_record_batch(&batch, 0)?))
     } else {
       Ok(None)
     }
@@ -407,17 +343,10 @@ impl Indexer {
       .only_if(format!("content_hash = X'{}'", hash_hex))
       .limit(1)
       .execute()
-      .await
-      .map_err(|e| IndexerError::Storage(format!("Failed to query by content hash: {}", e)))?;
+      .await?;
 
-    if let Some(batch) = results
-      .try_next()
-      .await
-      .map_err(|e| IndexerError::Storage(format!("Failed to get result: {}", e)))?
-    {
-      CodeDocument::from_record_batch(&batch, 0)
-        .map(Some)
-        .map_err(|e| IndexerError::Storage(format!("Failed to parse document: {}", e)))
+    if let Some(batch) = results.try_next().await? {
+      Ok(Some(CodeDocument::from_record_batch(&batch, 0)?))
     } else {
       Ok(None)
     }

@@ -12,7 +12,10 @@ pub struct App {
 impl App {
   /// Create a new App instance with the given configuration
   #[instrument(skip(config, shutdown_token), fields(database_path = %config.db_dir.display()))]
-  pub async fn new(config: Config, shutdown_token: CancellationToken) -> Result<Self, Box<dyn std::error::Error>> {
+  pub async fn new(
+    config: Config,
+    shutdown_token: CancellationToken,
+  ) -> Result<Self, Box<dyn std::error::Error>> {
     info!("Initializing Breeze app");
 
     // Convert the config to breeze_indexer::Config
@@ -41,24 +44,21 @@ impl App {
           .and_then(|n| n.to_str())
           .unwrap_or("project")
           .to_string();
-        
+
         self
           .indexer
           .project_manager()
-          .create_project(
-            project_name,
-            path.to_string_lossy().to_string(),
-            None,
-          )
+          .create_project(project_name, path.to_string_lossy().to_string(), None)
           .await?
       }
     };
-    
+
     // Use the facade to index the project
     self
       .indexer
       .index_project(project.id)
       .await
+      .map(|task_id| task_id.to_string())
       .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)
   }
 

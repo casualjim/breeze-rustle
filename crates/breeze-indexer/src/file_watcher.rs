@@ -1,4 +1,4 @@
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -15,9 +15,7 @@ use crate::task_manager::TaskManager;
 /// Manages file watching for a project
 pub struct ProjectWatcher {
   project_id: Uuid,
-  project_path: PathBuf,
-  task_manager: Arc<TaskManager>,
-  candidate_matcher: Arc<CandidateMatcher>,
+
   _debouncer: Arc<RwLock<Debouncer<notify::RecommendedWatcher, FileIdMap>>>,
 }
 
@@ -157,21 +155,15 @@ impl ProjectWatcher {
 
     Ok(Self {
       project_id,
-      project_path: project_path_buf,
-      task_manager,
-      candidate_matcher,
+
       _debouncer: Arc::new(RwLock::new(debouncer)),
     })
   }
 
   /// Get the project ID
+  #[cfg(test)]
   pub fn project_id(&self) -> Uuid {
     self.project_id
-  }
-
-  /// Get the project path
-  pub fn project_path(&self) -> &Path {
-    &self.project_path
   }
 
   /// Wait for shutdown signal
@@ -241,7 +233,7 @@ mod tests {
 
   #[tokio::test]
   async fn test_file_watch_debouncing() {
-    let (watcher, temp_dir, _project_id) = create_test_watcher().await;
+    let (_watcher, temp_dir, _project_id) = create_test_watcher().await;
 
     // Give the watcher time to initialize
     tokio::time::sleep(Duration::from_millis(200)).await;

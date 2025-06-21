@@ -2,12 +2,10 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use breeze_indexer::Indexer;
-use rmcp::transport::sse_server::{SseServer, SseServerConfig};
 use rmcp::transport::streamable_http_server::{
   StreamableHttpService, session::local::LocalSessionManager,
 };
 use rmcp::{Error as McpError, RoleServer, ServerHandler, model::*, service::RequestContext, tool};
-use tokio_util::sync::CancellationToken;
 use tracing::info;
 use uuid::Uuid;
 
@@ -244,27 +242,4 @@ pub fn create_http_service(indexer: Arc<Indexer>) -> StreamableHttpService<Breez
     LocalSessionManager::default().into(),
     Default::default(),
   )
-}
-
-/// Create an SSE MCP server
-pub fn create_sse_server(
-  ct: CancellationToken,
-  sse_path: String,
-  post_path: String,
-  bind_address: std::net::SocketAddr,
-) -> (SseServer, axum::Router) {
-  let config = SseServerConfig {
-    bind: bind_address,
-    sse_path,
-    post_path,
-    ct,
-    sse_keep_alive: Some(std::time::Duration::from_secs(30)),
-  };
-
-  SseServer::new(config)
-}
-
-/// Start the SSE service with the BreezeService handler
-pub fn start_sse_service(sse_server: SseServer, indexer: Arc<Indexer>) -> CancellationToken {
-  sse_server.with_service(move || BreezeService::new(indexer.clone()))
 }

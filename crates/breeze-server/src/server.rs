@@ -5,9 +5,13 @@ use std::{
   time::Duration,
 };
 
+use aide::scalar::Scalar;
 use axum::{
-  BoxError, Router, extract::Request as AxumRequest, handler::HandlerWithoutStateExt as _,
-  response::Redirect, routing::get,
+  BoxError, Extension, Router,
+  extract::Request as AxumRequest,
+  handler::HandlerWithoutStateExt as _,
+  response::{Json, Redirect},
+  routing::get,
 };
 
 use axum_helmet::{Helmet, HelmetLayer};
@@ -17,6 +21,7 @@ use axum_tracing_opentelemetry::middleware::{OtelAxumLayer, OtelInResponseLayer}
 use futures::StreamExt;
 use http::{StatusCode, Uri};
 use listenfd::ListenFd;
+use prometheus::Encoder as _;
 use rustls::ServerConfig;
 use rustls_acme::{AcmeConfig, caches::DirCache};
 use tokio::{signal, task::JoinHandle, time::sleep};
@@ -24,6 +29,12 @@ use tower_http::compression::CompressionLayer;
 use tracing::{debug, error, info};
 
 use crate::app::AppState;
+
+async fn serve_openapi(
+  Extension(api): Extension<Arc<aide::openapi::OpenApi>>,
+) -> Json<aide::openapi::OpenApi> {
+  Json((*api).clone())
+}
 
 #[derive(Clone, Copy)]
 struct Ports {
@@ -109,7 +120,7 @@ pub async fn run(
     }
   });
 
-  let state = AppState::new(indexer_arc, shutdown_token.clone()).await;
+  let state = AppState::new(indexer_arc).await;
 
   let metrics = metrics_layer();
 
@@ -139,63 +150,45 @@ pub async fn run(
 
   // let cors_origin: HeaderValue = (&args.cors_origin).parse()?;
 
-  use prometheus::Encoder;
-
   // Create MCP HTTP service
-  let mcp_http_service = crate::mcp::create_http_service(state.indexer.clone());
+  // let mcp_http_service = crate::mcp::create_http_service(state.indexer.clone());
 
   // Create MCP SSE server and router
-  let bind_addr = SocketAddr::from((Ipv4Addr::UNSPECIFIED, http_port));
-  let (sse_server, sse_router) = crate::mcp::create_sse_server(
-    state.shutdown_token.clone(),
-    "/sse".to_string(),
-    "/message".to_string(),
-    bind_addr,
-  );
+  // let bind_addr = SocketAddr::from((Ipv4Addr::UNSPECIFIED, http_port));
 
-  // Start the SSE service
-  let sse_service_ct = crate::mcp::start_sse_service(sse_server, state.indexer.clone());
+  aide::generate::infer_responses(true);
+
+  let mut api = crate::routes::openapi();
+
+  let api_routes = crate::routes::router(state.clone()).finish_api(&mut api);
 
   let app = Router::new()
-    .nest_service("/mcp", mcp_http_service)
-    .nest("/sse", sse_router)
-    .merge(
-      crate::routes::router(state.clone())
-        // .layer(auth_layer)
-        .layer(HelmetLayer::new(Helmet::default()))
-        .layer(OtelInResponseLayer)
-        .layer(OtelAxumLayer::default())
-        .route(
-          "/metrics",
-          get(|| async {
-            let mut buffer = Vec::new();
-            let encoder = prometheus::TextEncoder::new();
-            encoder.encode(&prometheus::gather(), &mut buffer).unwrap();
-            // return metrics
-            String::from_utf8(buffer).unwrap()
-          }),
-        )
-        // .layer(session_layer)
-        .layer(metrics)
-        // .layer(
-        //   CorsLayer::new()
-        //     .allow_credentials(true)
-        //     .allow_headers([ACCEPT, CONTENT_TYPE, HeaderName::from_static("csrf-token")])
-        //     .max_age(Duration::from_secs(86400))
-        //     .allow_origin(cors_origin)
-        //     .allow_methods([
-        //       Method::GET,
-        //       Method::POST,
-        //       Method::PUT,
-        //       Method::DELETE,
-        //       Method::OPTIONS,
-        //       Method::HEAD,
-        //       Method::PATCH,
-        //     ]),
-        // )
-        .layer(CompressionLayer::new().quality(tower_http::CompressionLevel::Default))
-        .with_state(state.clone()), // .with_state(pool),
-    );
+    .merge(api_routes)
+    // .nest_service("/mcp", mcp_http_service)
+    .route("/api/openapi.json", get(serve_openapi))
+    .route(
+      "/api/docs",
+      Scalar::new("/api/openapi.json").axum_route().into(),
+    )
+    .route(
+      "/metrics",
+      get(|| async {
+        let mut buffer = Vec::new();
+        let encoder = prometheus::TextEncoder::new();
+        encoder.encode(&prometheus::gather(), &mut buffer).unwrap();
+        // return metrics
+        String::from_utf8(buffer).unwrap()
+      }),
+    )
+    .layer(HelmetLayer::new(Helmet::default()))
+    .layer(OtelInResponseLayer)
+    .layer(OtelAxumLayer::default())
+    .layer(Extension(Arc::new(api.clone()))) // Arc is important for performance
+    .layer(metrics)
+    .layer(CompressionLayer::new().quality(tower_http::CompressionLevel::Default))
+    .with_state(state);
+
+  // .layer(
   // .nest_service("/static", static_file_handler(state));
 
   // #[cfg(debug_assertions)]
@@ -264,15 +257,7 @@ pub async fn run(
 
     // Run the server
     let server_future = server.serve(app.into_make_service_with_connect_info::<SocketAddr>());
-
-    // Wait for server to complete or cancellation token
-    tokio::select! {
-      result = server_future => {
-        // Cancel SSE service when main server stops
-        sse_service_ct.cancel();
-        result?
-      }
-    }
+    server_future.await?;
   } else {
     // TLS is disabled - run plain HTTP server only
     let http_listener = listenfd.take_tcp_listener(0)?.unwrap_or_else(|| {
@@ -288,15 +273,7 @@ pub async fn run(
     let server = axum_server::from_tcp(http_listener)
       .handle(handle.clone())
       .serve(app.into_make_service_with_connect_info::<SocketAddr>());
-
-    // Wait for server to complete or cancellation token
-    tokio::select! {
-      result = server => {
-        // Cancel SSE service when main server stops
-        sse_service_ct.cancel();
-        result?
-      }
-    }
+    server.await?;
   }
 
   debug!("Server run function completing");
