@@ -63,7 +63,7 @@ jobs:
           version: "25.x"
       - name: Run Rust tests
         run: |
-          cargo nextest run
+          cargo nextest run --features local-embeddings --no-fail-fast
       - name: Run Python tests
         run: |
           cd crates/breeze-py && uv run --python ../../.venv pytest -v

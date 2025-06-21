@@ -7,80 +7,166 @@ use axum::{
   response::IntoResponse,
   routing::{get, post},
 };
-use serde::{Deserialize, Serialize};
 use tracing::{error, info};
+use uuid::Uuid;
 
 use crate::app::{self, AppState};
-
-#[derive(Deserialize)]
-struct IndexProjectRequest {
-  path: String,
-}
-
-#[derive(Deserialize)]
-struct IndexFileRequest {
-  path: String,
-  content: Option<String>,
-}
-
-#[derive(Deserialize)]
-struct SearchRequest {
-  query: String,
-  limit: Option<usize>,
-}
-
-#[derive(Serialize)]
-struct IndexResponse {
-  status: String,
-  files_indexed: usize,
-}
-
-#[derive(Serialize)]
-struct TaskSubmittedResponse {
-  task_id: String,
-  status: String,
-}
-
-#[derive(Serialize)]
-struct ErrorResponse {
-  error: String,
-}
-
-#[derive(Deserialize)]
-struct ListTasksQuery {
-  limit: Option<usize>,
-}
+use crate::types::*;
 
 pub fn router(app: app::AppState) -> Router<AppState> {
   Router::new()
-    .route("/api/v1/index/project", post(index_project))
-    .route("/api/v1/index/file", post(index_file))
+    // Project endpoints
+    .route("/api/v1/projects", post(create_project).get(list_projects))
+    .route("/api/v1/projects/:id", get(get_project).put(update_project).delete(delete_project))
+    .route("/api/v1/projects/:id/index", post(index_project_by_id))
+    .route("/api/v1/projects/:id/index/file", post(index_file))
+    // Search endpoint
     .route("/api/v1/search", post(search))
+    // Task endpoints
     .route("/api/v1/tasks/:id", get(get_task))
     .route("/api/v1/tasks", get(list_tasks))
     .with_state(app)
 }
 
-async fn index_project(
+// Project CRUD handlers
+async fn create_project(
   State(state): State<AppState>,
-  Json(req): Json<IndexProjectRequest>,
+  Json(req): Json<CreateProjectRequest>,
 ) -> impl IntoResponse {
-  info!(path = %req.path, "Submitting project indexing task");
+  info!(name = %req.name, directory = %req.directory, "Creating project");
 
-  let project_path = PathBuf::from(&req.path);
-  if !project_path.exists() {
-    return (
-      StatusCode::BAD_REQUEST,
+  match state.indexer.project_manager().create_project(
+    req.name,
+    req.directory,
+    req.description,
+  ).await {
+    Ok(project) => {
+      info!(project_id = %project.id, "Project created");
+      (StatusCode::CREATED, Json(project)).into_response()
+    }
+    Err(e) => {
+      error!("Failed to create project: {}", e);
+      (
+        StatusCode::BAD_REQUEST,
+        Json(ErrorResponse {
+          error: format!("Failed to create project: {}", e),
+        }),
+      )
+        .into_response()
+    }
+  }
+}
+
+async fn get_project(
+  State(state): State<AppState>,
+  Path(id): Path<Uuid>,
+) -> impl IntoResponse {
+  match state.indexer.project_manager().get_project(id).await {
+    Ok(Some(project)) => (StatusCode::OK, Json(project)).into_response(),
+    Ok(None) => (
+      StatusCode::NOT_FOUND,
       Json(ErrorResponse {
-        error: format!("Project path '{}' does not exist", req.path),
+        error: format!("Project '{}' not found", id),
       }),
     )
-      .into_response();
+      .into_response(),
+    Err(e) => {
+      error!("Failed to get project: {}", e);
+      (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        Json(ErrorResponse {
+          error: format!("Failed to get project: {}", e),
+        }),
+      )
+        .into_response()
+    }
   }
+}
 
-  match state.indexer.index_project(&project_path).await {
+async fn list_projects(
+  State(state): State<AppState>,
+) -> impl IntoResponse {
+  match state.indexer.project_manager().list_projects().await {
+    Ok(projects) => (StatusCode::OK, Json(projects)).into_response(),
+    Err(e) => {
+      error!("Failed to list projects: {}", e);
+      (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        Json(ErrorResponse {
+          error: format!("Failed to list projects: {}", e),
+        }),
+      )
+        .into_response()
+    }
+  }
+}
+
+async fn update_project(
+  State(state): State<AppState>,
+  Path(id): Path<Uuid>,
+  Json(req): Json<UpdateProjectRequest>,
+) -> impl IntoResponse {
+  match state.indexer.project_manager().update_project(
+    id,
+    req.name,
+    req.description,
+  ).await {
+    Ok(Some(project)) => (StatusCode::OK, Json(project)).into_response(),
+    Ok(None) => (
+      StatusCode::NOT_FOUND,
+      Json(ErrorResponse {
+        error: format!("Project '{}' not found", id),
+      }),
+    )
+      .into_response(),
+    Err(e) => {
+      error!("Failed to update project: {}", e);
+      (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        Json(ErrorResponse {
+          error: format!("Failed to update project: {}", e),
+        }),
+      )
+        .into_response()
+    }
+  }
+}
+
+async fn delete_project(
+  State(state): State<AppState>,
+  Path(id): Path<Uuid>,
+) -> impl IntoResponse {
+  match state.indexer.project_manager().delete_project(id).await {
+    Ok(true) => StatusCode::NO_CONTENT.into_response(),
+    Ok(false) => (
+      StatusCode::NOT_FOUND,
+      Json(ErrorResponse {
+        error: format!("Project '{}' not found", id),
+      }),
+    )
+      .into_response(),
+    Err(e) => {
+      error!("Failed to delete project: {}", e);
+      (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        Json(ErrorResponse {
+          error: format!("Failed to delete project: {}", e),
+        }),
+      )
+        .into_response()
+    }
+  }
+}
+
+async fn index_project_by_id(
+  State(state): State<AppState>,
+  Path(id): Path<Uuid>,
+) -> impl IntoResponse {
+  info!(project_id = %id, "Submitting project indexing task");
+
+  match state.indexer.index_project(id).await {
     Ok(task_id) => {
-      info!(task_id, "Indexing task submitted");
+      info!(task_id, project_id = %id, "Indexing task submitted");
       (
         StatusCode::ACCEPTED,
         Json(TaskSubmittedResponse {
@@ -105,14 +191,15 @@ async fn index_project(
 
 async fn index_file(
   State(state): State<AppState>,
+  Path(project_id): Path<Uuid>,
   Json(req): Json<IndexFileRequest>,
 ) -> impl IntoResponse {
-  info!(path = %req.path, "Indexing file");
+  info!(project_id = %project_id, path = %req.path, "Indexing file");
 
   let file_path = PathBuf::from(&req.path);
 
   // If content is not provided, check that file exists
-  if !file_path.exists() {
+  if req.content.is_none() && !file_path.exists() {
     return (
       StatusCode::BAD_REQUEST,
       Json(ErrorResponse {
@@ -122,7 +209,7 @@ async fn index_file(
       .into_response();
   }
 
-  match state.indexer.index_file(&file_path, req.content).await {
+  match state.indexer.index_file(project_id, &file_path, req.content).await {
     Ok(()) => {
       info!("File indexed successfully");
       (
@@ -174,7 +261,20 @@ async fn search(
 }
 
 async fn get_task(State(state): State<AppState>, Path(task_id): Path<String>) -> impl IntoResponse {
-  match state.indexer.task_manager().get_task(&task_id).await {
+  let task_uuid = match Uuid::parse_str(&task_id) {
+    Ok(uuid) => uuid,
+    Err(_) => {
+      return (
+        StatusCode::BAD_REQUEST,
+        Json(ErrorResponse {
+          error: format!("Invalid task ID format: {}", task_id),
+        }),
+      )
+        .into_response();
+    }
+  };
+
+  match state.indexer.task_manager().get_task(&task_uuid).await {
     Ok(Some(task)) => (StatusCode::OK, Json(task)).into_response(),
     Ok(None) => (
       StatusCode::NOT_FOUND,

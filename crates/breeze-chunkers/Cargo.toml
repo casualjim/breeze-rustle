@@ -13,7 +13,7 @@ async-stream.workspace = true
 blake3.workspace = true
 breeze-grammars = { path = "../breeze-grammars" }
 
-dashmap = "6.1"
+dashmap.workspace = true
 
 flume.workspace = true
 futures.workspace = true
@@ -22,6 +22,7 @@ hyperpolyglot = "0.1.7"
 
 ignore = { version = "0.4", features = ["simd-accel"] }
 infer = "0.19.0"
+memchr = "2.7.5"
 
 serde.workspace = true
 

@@ -90,7 +90,7 @@ async fn async_main() {
       info!("Starting indexing of: {}", path.display());
       info!("Using configuration: {:?}", config);
 
-      match breeze::App::new(config).await {
+      match breeze::App::new(config, shutdown_token.clone()).await {
         Ok(app) => {
           tokio::select! {
             result = app.index(&path) => {
@@ -121,7 +121,7 @@ async fn async_main() {
       info!("Starting search for: \"{}\"", query);
       info!("Using configuration: {:?}", config);
 
-      match breeze::App::new(config).await {
+      match breeze::App::new(config, shutdown_token.clone()).await {
         Ok(app) => match app.search(&query, limit).await {
           Ok(results) => {
             if results.is_empty() {

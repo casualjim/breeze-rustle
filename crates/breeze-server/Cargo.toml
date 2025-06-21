@@ -62,6 +62,8 @@ tower-sessions = { version = "0.14.0" }
 tracing.workspace = true
 
 url = { version = "2", features = ["serde"] }
+uuid = { workspace = true, features = ["serde"] }
+schemars = { version = "0.8", features = ["uuid1"] }
 
 rmcp = { git = "https://github.com/modelcontextprotocol/rust-sdk", branch = "main", features = ["transport-streamable-http-server-session", "transport-streamable-http-server", "transport-worker", "transport-sse-server"] }
 

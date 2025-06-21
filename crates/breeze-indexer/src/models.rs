@@ -1,8 +1,7 @@
 use blake3::Hasher;
 use serde::{Deserialize, Serialize};
-use std::path::Path;
-#[cfg(test)]
-use std::path::PathBuf;
+use std::collections::BTreeSet;
+use std::path::{Path, PathBuf};
 use uuid::Uuid;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -434,16 +433,38 @@ impl CodeDocument {
   }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub enum FileOperation {
+  Add,
+  Update,
+  Delete,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct FileChange {
+  pub path: PathBuf,
+  pub operation: FileOperation,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum TaskType {
+  FullIndex,
+  PartialUpdate { changes: BTreeSet<FileChange> },
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct IndexTask {
-  pub id: String,
+  pub id: Uuid,
+  pub project_id: Uuid,
   pub path: String,
+  pub task_type: TaskType,
   pub status: TaskStatus,
   pub created_at: chrono::NaiveDateTime,
   pub started_at: Option<chrono::NaiveDateTime>,
   pub completed_at: Option<chrono::NaiveDateTime>,
   pub error: Option<String>,
   pub files_indexed: Option<usize>,
+  pub merged_into: Option<Uuid>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -452,6 +473,7 @@ pub enum TaskStatus {
   Running,
   Completed,
   Failed,
+  Merged,
 }
 
 impl std::fmt::Display for TaskStatus {
@@ -461,6 +483,7 @@ impl std::fmt::Display for TaskStatus {
       TaskStatus::Running => write!(f, "running"),
       TaskStatus::Completed => write!(f, "completed"),
       TaskStatus::Failed => write!(f, "failed"),
+      TaskStatus::Merged => write!(f, "merged"),
     }
   }
 }
@@ -474,22 +497,42 @@ impl std::str::FromStr for TaskStatus {
       "running" => Ok(TaskStatus::Running),
       "completed" => Ok(TaskStatus::Completed),
       "failed" => Ok(TaskStatus::Failed),
+      "merged" => Ok(TaskStatus::Merged),
       _ => Err(format!("Invalid task status: {}", s)),
     }
   }
 }
 
 impl IndexTask {
-  pub fn new(path: &Path) -> Self {
+  pub fn new(project_id: Uuid, path: &Path) -> Self {
     Self {
-      id: Uuid::now_v7().to_string(),
+      id: Uuid::now_v7(),
+      project_id,
       path: path.to_path_buf().to_string_lossy().to_string(),
+      task_type: TaskType::FullIndex,
       status: TaskStatus::Pending,
       created_at: chrono::Utc::now().naive_utc(),
       started_at: None,
       completed_at: None,
       error: None,
       files_indexed: None,
+      merged_into: None,
+    }
+  }
+
+  pub fn new_partial(project_id: Uuid, path: &Path, changes: BTreeSet<FileChange>) -> Self {
+    Self {
+      id: Uuid::now_v7(),
+      project_id,
+      path: path.to_path_buf().to_string_lossy().to_string(),
+      task_type: TaskType::PartialUpdate { changes },
+      status: TaskStatus::Pending,
+      created_at: chrono::Utc::now().naive_utc(),
+      started_at: None,
+      completed_at: None,
+      error: None,
+      files_indexed: None,
+      merged_into: None,
     }
   }
 
@@ -504,7 +547,9 @@ impl IndexTask {
 
     let fields = vec![
       Field::new("id", DataType::Utf8, false),
+      Field::new("project_id", DataType::Utf8, false), // UUID as string
       Field::new("path", DataType::Utf8, false),
+      Field::new("task_type", DataType::Utf8, false), // JSON serialized
       Field::new("status", DataType::Utf8, false),
       Field::new(
         "created_at",
@@ -523,6 +568,7 @@ impl IndexTask {
       ),
       Field::new("error", DataType::Utf8, true),
       Field::new("files_indexed", DataType::UInt64, true),
+      Field::new("merged_into", DataType::Utf8, true), // UUID as string
     ];
 
     Schema::new(fields)
@@ -540,7 +586,10 @@ impl IndexTask {
 
     // Create dummy data - LanceDB requires at least one batch
     let id_array = StringArray::from(vec!["00000000-0000-0000-0000-000000000000"]);
+    let dummy_uuid = Uuid::nil();
+    let project_id_array = StringArray::from(vec![dummy_uuid.to_string()]);
     let path_array = StringArray::from(vec!["/__dummy__"]);
+    let task_type_array = StringArray::from(vec![serde_json::to_string(&TaskType::FullIndex).unwrap()]);
     let status_array = StringArray::from(vec!["pending"]);
 
     let created_at_array = arrow::array::TimestampMicrosecondArray::from(vec![0i64]);
@@ -549,18 +598,22 @@ impl IndexTask {
       arrow::array::TimestampMicrosecondArray::from(vec![None as Option<i64>]);
     let error_array = StringArray::from(vec![None as Option<&str>]);
     let files_indexed_array = UInt64Array::from(vec![None as Option<u64>]);
+    let merged_into_array = StringArray::from(vec![None as Option<&str>]);
 
     let batch = RecordBatch::try_new(
       schema.clone(),
       vec![
         std::sync::Arc::new(id_array),
+        std::sync::Arc::new(project_id_array),
         std::sync::Arc::new(path_array),
+        std::sync::Arc::new(task_type_array),
         std::sync::Arc::new(status_array),
         std::sync::Arc::new(created_at_array),
         std::sync::Arc::new(started_at_array),
         std::sync::Arc::new(completed_at_array),
         std::sync::Arc::new(error_array),
         std::sync::Arc::new(files_indexed_array),
+        std::sync::Arc::new(merged_into_array),
       ],
     )
     .map_err(|e| lancedb::Error::Arrow { source: e })?;
@@ -578,7 +631,50 @@ impl IndexTask {
       .delete("id = '00000000-0000-0000-0000-000000000000'")
       .await?;
 
+    // Create indices
+    Self::create_indices(&table).await;
+
     Ok(table)
+  }
+
+  /// Create indices on the table
+  async fn create_indices(table: &lancedb::Table) {
+    use lancedb::index::Index;
+    use tracing::debug;
+
+    // Create Auto index on project_id for project-based queries
+    match table
+      .create_index(&["project_id"], Index::Auto)
+      .execute()
+      .await
+    {
+      Ok(_) => {
+        debug!("Created index on project_id field");
+      }
+      Err(e) => {
+        debug!(
+          "Index on project_id might already exist or creation failed: {}",
+          e
+        );
+      }
+    }
+
+    // Create Auto index on path for path-based queries
+    match table
+      .create_index(&["path"], Index::Auto)
+      .execute()
+      .await
+    {
+      Ok(_) => {
+        debug!("Created index on path field");
+      }
+      Err(e) => {
+        debug!(
+          "Index on path might already exist or creation failed: {}",
+          e
+        );
+      }
+    }
   }
 
   /// Ensure a table exists - open if it exists, create if it doesn't
@@ -601,6 +697,125 @@ impl IndexTask {
       }
     }
   }
+
+  /// Convert RecordBatch row to IndexTask
+  pub fn from_record_batch(
+    batch: &arrow::record_batch::RecordBatch,
+    row: usize,
+  ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
+    use arrow::array::*;
+
+    let id_array = batch
+      .column_by_name("id")
+      .and_then(|col| col.as_any().downcast_ref::<StringArray>())
+      .ok_or("Invalid id column")?;
+    
+    let id_str = id_array.value(row);
+    let id = Uuid::parse_str(id_str)?;
+
+    let project_id_array = batch
+      .column_by_name("project_id")
+      .and_then(|col| col.as_any().downcast_ref::<StringArray>())
+      .ok_or("Invalid project_id column")?;
+
+    let project_id_str = project_id_array.value(row);
+    let project_id = Uuid::parse_str(project_id_str)?;
+
+    let path_array = batch
+      .column_by_name("path")
+      .and_then(|col| col.as_any().downcast_ref::<StringArray>())
+      .ok_or("Invalid path column")?;
+
+    let task_type_array = batch
+      .column_by_name("task_type")
+      .and_then(|col| col.as_any().downcast_ref::<StringArray>())
+      .ok_or("Invalid task_type column")?;
+    
+    let task_type: TaskType = serde_json::from_str(task_type_array.value(row))?;
+
+    let status_array = batch
+      .column_by_name("status")
+      .and_then(|col| col.as_any().downcast_ref::<StringArray>())
+      .ok_or("Invalid status column")?;
+
+    let status = status_array.value(row).parse()?;
+
+    let created_at_array = batch
+      .column_by_name("created_at")
+      .and_then(|col| col.as_any().downcast_ref::<TimestampMicrosecondArray>())
+      .ok_or("Invalid created_at column")?;
+
+    let started_at_array = batch
+      .column_by_name("started_at")
+      .and_then(|col| col.as_any().downcast_ref::<TimestampMicrosecondArray>())
+      .ok_or("Invalid started_at column")?;
+
+    let completed_at_array = batch
+      .column_by_name("completed_at")
+      .and_then(|col| col.as_any().downcast_ref::<TimestampMicrosecondArray>())
+      .ok_or("Invalid completed_at column")?;
+
+    let error_array = batch
+      .column_by_name("error")
+      .and_then(|col| col.as_any().downcast_ref::<StringArray>())
+      .ok_or("Invalid error column")?;
+
+    let files_indexed_array = batch
+      .column_by_name("files_indexed")
+      .and_then(|col| col.as_any().downcast_ref::<UInt64Array>())
+      .ok_or("Invalid files_indexed column")?;
+
+    let merged_into_array = batch
+      .column_by_name("merged_into")
+      .and_then(|col| col.as_any().downcast_ref::<StringArray>())
+      .ok_or("Invalid merged_into column")?;
+
+    let merged_into = if merged_into_array.is_null(row) {
+      None
+    } else {
+      Some(Uuid::parse_str(merged_into_array.value(row))?)
+    };
+
+    Ok(IndexTask {
+      id,
+      project_id,
+      path: path_array.value(row).to_string(),
+      task_type,
+      status,
+      created_at: chrono::DateTime::from_timestamp_micros(created_at_array.value(row))
+        .ok_or("Invalid created_at timestamp")?
+        .naive_utc(),
+      started_at: if started_at_array.is_null(row) {
+        None
+      } else {
+        Some(
+          chrono::DateTime::from_timestamp_micros(started_at_array.value(row))
+            .ok_or("Invalid started_at timestamp")?
+            .naive_utc(),
+        )
+      },
+      completed_at: if completed_at_array.is_null(row) {
+        None
+      } else {
+        Some(
+          chrono::DateTime::from_timestamp_micros(completed_at_array.value(row))
+            .ok_or("Invalid completed_at timestamp")?
+            .naive_utc(),
+        )
+      },
+      error: if error_array.is_null(row) {
+        None
+      } else {
+        Some(error_array.value(row).to_string())
+      },
+      files_indexed: if files_indexed_array.is_null(row) {
+        None
+      } else {
+        Some(files_indexed_array.value(row) as usize)
+      },
+      merged_into,
+    })
+  }
 }
 
 // Implement IntoArrow for IndexTask to enable LanceDB persistence
@@ -613,14 +828,11 @@ impl lancedb::arrow::IntoArrow for IndexTask {
     let schema = Arc::new(IndexTask::schema());
 
     // Build arrays for single task
-    let id_array = StringArray::from(vec![self.id.as_str()]);
+    let id_array = StringArray::from(vec![self.id.to_string()]);
+    let project_id_array = StringArray::from(vec![self.project_id.to_string()]);
     let path_array = StringArray::from(vec![self.path.as_str()]);
-    let status_array = StringArray::from(vec![match self.status {
-      TaskStatus::Pending => "pending",
-      TaskStatus::Running => "running",
-      TaskStatus::Completed => "completed",
-      TaskStatus::Failed => "failed",
-    }]);
+    let task_type_array = StringArray::from(vec![serde_json::to_string(&self.task_type).unwrap()]);
+    let status_array = StringArray::from(vec![self.status.to_string()]);
 
     // Convert timestamps to microseconds
     let created_at_us = self.created_at.and_utc().timestamp_micros();
@@ -636,19 +848,23 @@ impl lancedb::arrow::IntoArrow for IndexTask {
 
     let error_array = StringArray::from(vec![self.error.as_deref()]);
     let files_indexed_array = UInt64Array::from(vec![self.files_indexed.map(|n| n as u64)]);
+    let merged_into_array = StringArray::from(vec![self.merged_into.map(|u| u.to_string()).as_deref()]);
 
     // Create the record batch
     let batch = RecordBatch::try_new(
       schema.clone(),
       vec![
         Arc::new(id_array),
+        Arc::new(project_id_array),
         Arc::new(path_array),
+        Arc::new(task_type_array),
         Arc::new(status_array),
         Arc::new(created_at_array),
         Arc::new(started_at_array),
         Arc::new(completed_at_array),
         Arc::new(error_array),
         Arc::new(files_indexed_array),
+        Arc::new(merged_into_array),
       ],
     )
     .map_err(|e| lancedb::Error::Arrow { source: e })?;
@@ -716,6 +932,274 @@ impl lancedb::arrow::IntoArrow for CodeDocument {
         Arc::new(file_size_array),
         Arc::new(last_modified_array),
         Arc::new(indexed_at_array),
+      ],
+    )
+    .map_err(|e| lancedb::Error::Arrow { source: e })?;
+
+    // Return as RecordBatchReader
+    Ok(Box::new(arrow::record_batch::RecordBatchIterator::new(
+      vec![Ok(batch)].into_iter(),
+      schema,
+    )))
+  }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Project {
+  pub id: Uuid,
+  pub name: String,
+  pub directory: String,
+  pub description: Option<String>,
+  pub created_at: chrono::NaiveDateTime,
+  pub updated_at: chrono::NaiveDateTime,
+}
+
+impl Project {
+  pub fn new(name: String, directory: String, description: Option<String>) -> Result<Self, String> {
+    // Validate directory exists
+    let path = Path::new(&directory);
+    if !path.exists() {
+      return Err(format!("Directory does not exist: {}", directory));
+    }
+    if !path.is_dir() {
+      return Err(format!("Path is not a directory: {}", directory));
+    }
+    
+    let now = chrono::Utc::now().naive_utc();
+    Ok(Self {
+      id: Uuid::now_v7(),
+      name,
+      directory,
+      description,
+      created_at: now,
+      updated_at: now,
+    })
+  }
+
+  /// Create the Arrow schema for Project
+  pub fn schema() -> arrow::datatypes::Schema {
+    use arrow::datatypes::{DataType, Field, Schema, TimeUnit};
+
+    let fields = vec![
+      Field::new("id", DataType::Utf8, false), // UUID as string
+      Field::new("name", DataType::Utf8, false),
+      Field::new("directory", DataType::Utf8, false),
+      Field::new("description", DataType::Utf8, true),
+      Field::new(
+        "created_at",
+        DataType::Timestamp(TimeUnit::Microsecond, None),
+        false,
+      ),
+      Field::new(
+        "updated_at",
+        DataType::Timestamp(TimeUnit::Microsecond, None),
+        false,
+      ),
+    ];
+
+    Schema::new(fields)
+  }
+
+  /// Create a LanceDB table for storing Projects
+  pub async fn create_table(
+    connection: &lancedb::Connection,
+    table_name: &str,
+  ) -> lancedb::Result<lancedb::Table> {
+    use arrow::array::*;
+    use arrow::record_batch::{RecordBatch, RecordBatchIterator};
+
+    let schema = std::sync::Arc::new(Self::schema());
+
+    // Create dummy data - LanceDB requires at least one batch
+    let dummy_uuid = Uuid::nil();
+    let id_array = StringArray::from(vec![dummy_uuid.to_string()]);
+    let name_array = StringArray::from(vec!["__dummy__"]);
+    let directory_array = StringArray::from(vec!["/__dummy__"]);
+    let description_array = StringArray::from(vec![None as Option<&str>]);
+    let created_at_array = arrow::array::TimestampMicrosecondArray::from(vec![0i64]);
+    let updated_at_array = arrow::array::TimestampMicrosecondArray::from(vec![0i64]);
+
+    let batch = RecordBatch::try_new(
+      schema.clone(),
+      vec![
+        std::sync::Arc::new(id_array),
+        std::sync::Arc::new(name_array),
+        std::sync::Arc::new(directory_array),
+        std::sync::Arc::new(description_array),
+        std::sync::Arc::new(created_at_array),
+        std::sync::Arc::new(updated_at_array),
+      ],
+    )
+    .map_err(|e| lancedb::Error::Arrow { source: e })?;
+
+    let batch_iter = RecordBatchIterator::new(vec![Ok(batch)].into_iter(), schema);
+
+    // Create table
+    let table = connection
+      .create_table(table_name, Box::new(batch_iter))
+      .execute()
+      .await?;
+
+    // Delete the dummy row
+    table
+      .delete(&format!("id = '{}'", dummy_uuid))
+      .await?;
+
+    Ok(table)
+  }
+
+  /// Ensure a table exists - open if it exists, create if it doesn't
+  pub async fn ensure_table(
+    connection: &lancedb::Connection,
+    table_name: &str,
+  ) -> lancedb::Result<lancedb::Table> {
+    // Try to open the table first
+    match connection.open_table(table_name).execute().await {
+      Ok(table) => Ok(table),
+      Err(e) => {
+        // Check if it's a table not found error
+        match &e {
+          lancedb::Error::TableNotFound { .. } => {
+            // Create the table
+            Self::create_table(connection, table_name).await
+          }
+          _ => Err(e), // Propagate other errors
+        }
+      }
+    }
+  }
+
+  /// Convert a RecordBatch row to Project
+  pub fn from_record_batch(
+    batch: &arrow::record_batch::RecordBatch,
+    row: usize,
+  ) -> Result<Self, lancedb::Error> {
+    use arrow::array::*;
+
+    if row >= batch.num_rows() {
+      return Err(lancedb::Error::Runtime {
+        message: format!(
+          "Row index {} out of bounds (batch has {} rows)",
+          row,
+          batch.num_rows()
+        ),
+      });
+    }
+
+    let id_str = batch
+      .column_by_name("id")
+      .and_then(|col| col.as_any().downcast_ref::<StringArray>())
+      .ok_or_else(|| lancedb::Error::Runtime {
+        message: "Missing or invalid id column".to_string(),
+      })?
+      .value(row);
+
+    let id = Uuid::parse_str(id_str).map_err(|e| lancedb::Error::Runtime {
+      message: format!("Invalid UUID string: {}", e),
+    })?;
+
+    let name = batch
+      .column_by_name("name")
+      .and_then(|col| col.as_any().downcast_ref::<StringArray>())
+      .ok_or_else(|| lancedb::Error::Runtime {
+        message: "Missing or invalid name column".to_string(),
+      })?
+      .value(row)
+      .to_string();
+
+    let directory = batch
+      .column_by_name("directory")
+      .and_then(|col| col.as_any().downcast_ref::<StringArray>())
+      .ok_or_else(|| lancedb::Error::Runtime {
+        message: "Missing or invalid directory column".to_string(),
+      })?
+      .value(row)
+      .to_string();
+
+    let description_array = batch
+      .column_by_name("description")
+      .and_then(|col| col.as_any().downcast_ref::<StringArray>())
+      .ok_or_else(|| lancedb::Error::Runtime {
+        message: "Missing or invalid description column".to_string(),
+      })?;
+
+    let description = if description_array.is_null(row) {
+      None
+    } else {
+      Some(description_array.value(row).to_string())
+    };
+
+    let created_at = batch
+      .column_by_name("created_at")
+      .and_then(|col| {
+        col
+          .as_any()
+          .downcast_ref::<arrow::array::TimestampMicrosecondArray>()
+      })
+      .ok_or_else(|| lancedb::Error::Runtime {
+        message: "Missing or invalid created_at column".to_string(),
+      })?
+      .value(row);
+
+    let updated_at = batch
+      .column_by_name("updated_at")
+      .and_then(|col| {
+        col
+          .as_any()
+          .downcast_ref::<arrow::array::TimestampMicrosecondArray>()
+      })
+      .ok_or_else(|| lancedb::Error::Runtime {
+        message: "Missing or invalid updated_at column".to_string(),
+      })?
+      .value(row);
+
+    Ok(Self {
+      id,
+      name,
+      directory,
+      description,
+      created_at: chrono::DateTime::from_timestamp_micros(created_at)
+        .unwrap_or_default()
+        .naive_utc(),
+      updated_at: chrono::DateTime::from_timestamp_micros(updated_at)
+        .unwrap_or_default()
+        .naive_utc(),
+    })
+  }
+}
+
+// Implement IntoArrow for Project to enable LanceDB persistence
+impl lancedb::arrow::IntoArrow for Project {
+  fn into_arrow(self) -> lancedb::Result<Box<dyn arrow::array::RecordBatchReader + Send>> {
+    use arrow::array::*;
+    use arrow::record_batch::RecordBatch;
+    use std::sync::Arc;
+
+    let schema = Arc::new(Project::schema());
+
+    // Build arrays for single project
+    let id_array = StringArray::from(vec![self.id.to_string()]);
+
+    let name_array = StringArray::from(vec![self.name.as_str()]);
+    let directory_array = StringArray::from(vec![self.directory.as_str()]);
+    let description_array = StringArray::from(vec![self.description.as_deref()]);
+
+    // Convert timestamps to microseconds
+    let created_at_us = self.created_at.and_utc().timestamp_micros();
+    let updated_at_us = self.updated_at.and_utc().timestamp_micros();
+    let created_at_array = arrow::array::TimestampMicrosecondArray::from(vec![created_at_us]);
+    let updated_at_array = arrow::array::TimestampMicrosecondArray::from(vec![updated_at_us]);
+
+    // Create the record batch
+    let batch = RecordBatch::try_new(
+      schema.clone(),
+      vec![
+        Arc::new(id_array),
+        Arc::new(name_array),
+        Arc::new(directory_array),
+        Arc::new(description_array),
+        Arc::new(created_at_array),
+        Arc::new(updated_at_array),
       ],
     )
     .map_err(|e| lancedb::Error::Arrow { source: e })?;
@@ -851,10 +1335,11 @@ mod tests {
 
   #[test]
   fn test_index_task_new() {
+    let project_id = Uuid::now_v7();
     let path = Path::new("/test/project");
-    let task = IndexTask::new(path);
+    let task = IndexTask::new(project_id, path);
 
-    assert!(!task.id.is_empty());
+    assert_eq!(task.project_id, project_id);
     assert_eq!(task.path, path.to_str().unwrap());
     assert_eq!(task.status, TaskStatus::Pending);
     assert!(task.started_at.is_none());
@@ -898,30 +1383,103 @@ mod tests {
   fn test_index_task_schema() {
     let schema = IndexTask::schema();
 
-    assert_eq!(schema.fields().len(), 8);
+    assert_eq!(schema.fields().len(), 11);
 
     let field_names: Vec<&str> = schema.fields().iter().map(|f| f.name().as_str()).collect();
     assert_eq!(
       field_names,
       vec![
         "id",
+        "project_id",
         "path",
+        "task_type",
         "status",
         "created_at",
         "started_at",
         "completed_at",
         "error",
-        "files_indexed"
+        "files_indexed",
+        "merged_into"
       ]
     );
 
     assert!(!schema.field(0).is_nullable()); // id
-    assert!(!schema.field(1).is_nullable()); // path
-    assert!(!schema.field(2).is_nullable()); // status
-    assert!(!schema.field(3).is_nullable()); // created_at
-    assert!(schema.field(4).is_nullable()); // started_at
-    assert!(schema.field(5).is_nullable()); // completed_at
-    assert!(schema.field(6).is_nullable()); // error
-    assert!(schema.field(7).is_nullable()); // files_indexed
+    assert!(!schema.field(1).is_nullable()); // project_id
+    assert!(!schema.field(2).is_nullable()); // path
+    assert!(!schema.field(3).is_nullable()); // task_type
+    assert!(!schema.field(4).is_nullable()); // status
+    assert!(!schema.field(5).is_nullable()); // created_at
+    assert!(schema.field(6).is_nullable()); // started_at
+    assert!(schema.field(7).is_nullable()); // completed_at
+    assert!(schema.field(8).is_nullable()); // error
+    assert!(schema.field(9).is_nullable()); // files_indexed
+    assert!(schema.field(10).is_nullable()); // merged_into
+  }
+
+  #[test]
+  fn test_project_new() {
+    let temp_dir = TempDir::new().unwrap();
+    let test_dir = temp_dir.path().join("test_project");
+    std::fs::create_dir(&test_dir).unwrap();
+    
+    let project = Project::new(
+      "Test Project".to_string(),
+      test_dir.to_str().unwrap().to_string(),
+      Some("A test project".to_string()),
+    ).unwrap();
+    
+    assert_eq!(project.name, "Test Project");
+    assert_eq!(project.directory, test_dir.to_str().unwrap());
+    assert_eq!(project.description, Some("A test project".to_string()));
+    assert!(!project.id.is_nil());
+    assert_eq!(project.created_at, project.updated_at);
+  }
+
+  #[test]
+  fn test_project_new_invalid_directory() {
+    let result = Project::new(
+      "Test Project".to_string(),
+      "/non/existent/directory".to_string(),
+      None,
+    );
+    
+    assert!(result.is_err());
+    assert!(result.unwrap_err().contains("does not exist"));
+  }
+
+  #[test]
+  fn test_project_new_not_directory() {
+    let temp_dir = TempDir::new().unwrap();
+    let test_file = temp_dir.path().join("not_a_dir.txt");
+    std::fs::write(&test_file, "content").unwrap();
+    
+    let result = Project::new(
+      "Test Project".to_string(),
+      test_file.to_str().unwrap().to_string(),
+      None,
+    );
+    
+    assert!(result.is_err());
+    assert!(result.unwrap_err().contains("not a directory"));
+  }
+
+  #[test]
+  fn test_project_schema() {
+    let schema = Project::schema();
+    
+    assert_eq!(schema.fields().len(), 6);
+    
+    let field_names: Vec<&str> = schema.fields().iter().map(|f| f.name().as_str()).collect();
+    assert_eq!(
+      field_names,
+      vec!["id", "name", "directory", "description", "created_at", "updated_at"]
+    );
+    
+    assert!(!schema.field(0).is_nullable()); // id
+    assert!(!schema.field(1).is_nullable()); // name
+    assert!(!schema.field(2).is_nullable()); // directory
+    assert!(schema.field(3).is_nullable()); // description
+    assert!(!schema.field(4).is_nullable()); // created_at
+    assert!(!schema.field(5).is_nullable()); // updated_at
   }
 }

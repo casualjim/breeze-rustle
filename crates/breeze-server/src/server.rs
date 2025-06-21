@@ -87,11 +87,18 @@ pub async fn run(
   };
 
   // Initialize the indexer (this moves args.indexer)
-  let indexer = breeze_indexer::Indexer::new(args.indexer)
+  let indexer_shutdown = shutdown_token.clone().unwrap_or_default();
+  let indexer = breeze_indexer::Indexer::new(args.indexer, indexer_shutdown)
     .await
     .map_err(|e| anyhow::anyhow!("Failed to initialize indexer: {}", e))?;
 
   let indexer_arc = Arc::new(indexer);
+
+  // Start file watchers for all existing projects
+  if let Err(e) = indexer_arc.start_all_project_watchers().await {
+    error!("Failed to start file watchers: {}", e);
+    // Don't fail server startup if watchers fail
+  }
 
   // Spawn the task worker
   let worker_shutdown = shutdown_token.clone().unwrap_or_default();

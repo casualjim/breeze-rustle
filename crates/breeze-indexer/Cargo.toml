@@ -34,6 +34,7 @@ accelerate-src = { version = "0.3.2", optional = true }
 # Core dependencies
 anyhow.workspace = true
 
+
 # Arrow dependencies
 arrow.workspace = true
 async-stream.workspace = true
@@ -60,6 +61,8 @@ http = "1.2"
 intel-mkl-src = { version = "0.8.1", optional = true }
 lancedb.workspace = true
 ndarray = "0.16.1"
+notify = "8.0"
+notify-debouncer-full = "0.5"
 num_cpus.workspace = true
 
 pin-project-lite.workspace = true
@@ -81,6 +84,7 @@ tokio-stream.workspace = true
 tokio-util.workspace = true
 tracing.workspace = true
 uuid.workspace = true
+dashmap = { workspace = true, features = ["serde", "rayon"] }
 
 [dev-dependencies]
 toml = "0.8"

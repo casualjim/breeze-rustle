@@ -1,18 +1,23 @@
 use anyhow::Result;
 use breeze_chunkers::{Chunk, Chunker, ChunkerConfig, Tokenizer};
+use dashmap::DashMap;
 use futures::StreamExt;
 use lancedb::Table;
 use std::path::Path;
 use std::sync::Arc;
 use tokio::sync::RwLock;
+use tokio_util::sync::CancellationToken;
 use tracing::{error, info};
+use uuid::Uuid;
 
 use crate::{
   Config, SearchResult,
   bulk_indexer::BulkIndexer,
   embeddings::{EmbeddingProvider, factory::create_embedding_provider},
+  file_watcher::ProjectWatcher,
   hybrid_search,
-  models::CodeDocument,
+  models::{CodeDocument, Project},
+  project_manager::ProjectManager,
   task_manager::TaskManager,
 };
 
@@ -44,12 +49,15 @@ pub struct Indexer {
   embedding_provider: Arc<dyn EmbeddingProvider>,
   table: Arc<RwLock<Table>>,
   task_manager: Arc<TaskManager>,
+  project_manager: Arc<ProjectManager>,
   embedding_dim: usize,
+  active_watchers: DashMap<Uuid, Arc<ProjectWatcher>>,
+  shutdown_token: CancellationToken,
 }
 
 impl Indexer {
   /// Create a new Indexer from configuration
-  pub async fn new(config: Config) -> Result<Self, IndexerError> {
+  pub async fn new(config: Config, shutdown_token: CancellationToken) -> Result<Self, IndexerError> {
     // Initialize embedding provider
     let embedding_provider = create_embedding_provider(&config)
       .await
@@ -78,10 +86,17 @@ impl Indexer {
       .await
       .map_err(|e| IndexerError::Storage(format!("Failed to ensure task table: {}", e)))?;
 
+    // Ensure projects table exists
+    let project_table = Project::ensure_table(&connection, "projects")
+      .await
+      .map_err(|e| IndexerError::Storage(format!("Failed to ensure projects table: {}", e)))?;
+
+    let project_table = Arc::new(RwLock::new(project_table));
     let task_table = Arc::new(RwLock::new(task_table));
     let table = Arc::new(RwLock::new(table));
     let config = Arc::new(config);
     let embedding_provider: Arc<dyn EmbeddingProvider> = Arc::from(embedding_provider);
+    let project_manager = Arc::new(ProjectManager::new(project_table));
     let task_manager = Arc::new(TaskManager::new(
       task_table,
       BulkIndexer::new(
@@ -97,7 +112,10 @@ impl Indexer {
       embedding_provider,
       table,
       task_manager,
+      project_manager,
       embedding_dim,
+      active_watchers: DashMap::new(),
+      shutdown_token,
     })
   }
 
@@ -106,9 +124,15 @@ impl Indexer {
     self.task_manager.clone()
   }
 
+  /// Get the project manager
+  pub fn project_manager(&self) -> Arc<ProjectManager> {
+    self.project_manager.clone()
+  }
+
   /// Index a single file
   pub async fn index_file(
     &self,
+    _project_id: Uuid,
     file_path: &Path,
     content: Option<String>,
   ) -> Result<(), IndexerError> {
@@ -217,14 +241,112 @@ impl Indexer {
   }
 
   /// Index an entire project - always submits to task queue
-  pub async fn index_project(&self, project_path: &Path) -> Result<String, IndexerError> {
-    info!(path = %project_path.display(), "Submitting project indexing task");
-
-    self
-      .task_manager
-      .submit_task(project_path)
+  pub async fn index_project(&self, project_id: Uuid) -> Result<String, IndexerError> {
+    // Get the project to find its directory
+    let project = self
+      .project_manager
+      .get_project(project_id)
       .await
-      .map_err(|e| IndexerError::Storage(format!("Failed to submit indexing task: {}", e)))
+      .map_err(|e| IndexerError::Storage(format!("Failed to get project: {}", e)))?
+      .ok_or_else(|| IndexerError::Storage(format!("Project not found: {}", project_id)))?;
+
+    info!(project_id = %project_id, path = %project.directory, "Submitting project indexing task");
+
+    // Check if project already has an active task
+    if self
+      .task_manager
+      .has_active_task(project_id)
+      .await
+      .map_err(|e| IndexerError::Storage(format!("Failed to check active tasks: {}", e)))?
+    {
+      return Err(IndexerError::Storage(
+        "Project already has an active indexing task".to_string(),
+      ));
+    }
+
+    let task_id = self
+      .task_manager
+      .submit_task(project_id, Path::new(&project.directory))
+      .await
+      .map_err(|e| IndexerError::Storage(format!("Failed to submit indexing task: {}", e)))?;
+    
+    // Start file watcher for the project
+    if let Err(e) = self.start_file_watcher(project_id).await {
+      error!(project_id = %project_id, error = %e, "Failed to start file watcher");
+      // Don't fail the indexing task if watcher fails to start
+    }
+    
+    Ok(task_id.to_string())
+  }
+
+  /// Start file watching for a project
+  async fn start_file_watcher(&self, project_id: Uuid) -> Result<(), IndexerError> {
+    // Check if watcher already exists
+    if self.active_watchers.contains_key(&project_id) {
+      info!(project_id = %project_id, "File watcher already active");
+      return Ok(());
+    }
+
+    // Get the project to find its directory
+    let project = self
+      .project_manager
+      .get_project(project_id)
+      .await
+      .map_err(|e| IndexerError::Storage(format!("Failed to get project: {}", e)))?
+      .ok_or_else(|| IndexerError::Storage(format!("Project not found: {}", project_id)))?;
+
+    info!(project_id = %project_id, path = %project.directory, "Starting file watcher");
+
+    // Create and start the watcher
+    let watcher = Arc::new(
+      ProjectWatcher::new(
+        project_id,
+        &project.directory,
+        self.task_manager.clone(),
+        self.config.max_file_size,
+      )
+      .await
+      .map_err(|e| IndexerError::IO(format!("Failed to create file watcher: {}", e)))?,
+    );
+
+    // Store the watcher
+    self.active_watchers.insert(project_id, watcher.clone());
+
+    // Spawn a task to handle watcher shutdown
+    let shutdown_token = self.shutdown_token.clone();
+    let active_watchers = self.active_watchers.clone();
+    tokio::spawn(async move {
+      watcher.wait_for_shutdown(shutdown_token).await;
+      active_watchers.remove(&project_id);
+    });
+
+    Ok(())
+  }
+
+  /// Start file watchers for all existing projects
+  pub async fn start_all_project_watchers(&self) -> Result<(), IndexerError> {
+    let projects = self
+      .project_manager
+      .list_projects()
+      .await
+      .map_err(|e| IndexerError::Storage(format!("Failed to list projects: {}", e)))?;
+
+    info!("Starting file watchers for {} projects", projects.len());
+
+    for project in projects {
+      if let Err(e) = self.start_file_watcher(project.id).await {
+        error!(project_id = %project.id, error = %e, "Failed to start file watcher");
+        // Continue with other projects even if one fails
+      }
+    }
+
+    Ok(())
+  }
+
+  /// Stop all file watchers
+  pub fn stop_all_watchers(&self) {
+    self.active_watchers.clear();
+    self.shutdown_token.cancel();
   }
 
   /// Search the indexed code

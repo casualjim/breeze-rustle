@@ -8,7 +8,8 @@ use lancedb::arrow::IntoArrow;
 use lancedb::query::{ExecutableQuery as _, QueryBase};
 use tokio::sync::RwLock;
 use tokio_util::sync::CancellationToken;
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
+use uuid::Uuid;
 
 use crate::bulk_indexer::BulkIndexer;
 use crate::models::{IndexTask, TaskStatus};
@@ -26,21 +27,124 @@ impl TaskManager {
     }
   }
 
-  /// Submit a new indexing task and return its ID
+  /// Submit a new indexing task and return its ID (backward compatibility)
   pub async fn submit_task(
     &self,
+    project_id: Uuid,
     path: &Path,
-  ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
-    let task = IndexTask::new(path);
-    let task_id = task.id.clone();
+  ) -> Result<Uuid, Box<dyn std::error::Error + Send + Sync>> {
+    self.submit_task_with_type(project_id, path, crate::models::TaskType::FullIndex).await
+  }
+
+  /// Submit a new indexing task with specific type and return its ID
+  pub async fn submit_task_with_type(
+    &self,
+    project_id: Uuid,
+    path: &Path,
+    task_type: crate::models::TaskType,
+  ) -> Result<Uuid, Box<dyn std::error::Error + Send + Sync>> {
+    let table = self.task_table.write().await;
+
+    // Check for existing pending tasks for this project
+    let existing_tasks = table
+      .query()
+      .only_if(format!("project_id = '{}' AND status = 'pending'", project_id).as_str())
+      .execute()
+      .await?
+      .try_collect::<Vec<_>>()
+      .await?;
+
+    // Process merging logic
+    for batch in existing_tasks {
+      for i in 0..batch.num_rows() {
+        let existing_task = crate::models::IndexTask::from_record_batch(&batch, i)?;
+        
+        match (&existing_task.task_type, &task_type) {
+          // If there's already a full index pending, mark any new task as merged
+          (crate::models::TaskType::FullIndex, _) => {
+            let mut merged_task = match &task_type {
+              crate::models::TaskType::FullIndex => crate::models::IndexTask::new(project_id, path),
+              crate::models::TaskType::PartialUpdate { changes } => {
+                crate::models::IndexTask::new_partial(project_id, path, changes.clone())
+              }
+            };
+            merged_task.status = crate::models::TaskStatus::Merged;
+            merged_task.merged_into = Some(existing_task.id);
+            
+            let merged_task_id = merged_task.id;
+            let arrow_data = merged_task.into_arrow()?;
+            table.add(arrow_data).execute().await?;
+            
+            info!(
+              task_id = %merged_task_id,
+              merged_into = %existing_task.id,
+              "Task merged into existing full index task"
+            );
+            return Ok(merged_task_id);
+          }
+          
+          // If there's a partial update and we're adding another partial update, merge them
+          (crate::models::TaskType::PartialUpdate { changes: existing_changes }, 
+           crate::models::TaskType::PartialUpdate { changes: new_changes }) => {
+            // Merge the file changes - BTreeSet automatically handles deduplication
+            let mut merged_changes = existing_changes.clone();
+            for new_change in new_changes {
+              // Add the new change
+              merged_changes.insert(new_change.clone());
+            }
+            
+            // Update the existing task with merged changes
+            let task_type_json = serde_json::to_string(&crate::models::TaskType::PartialUpdate { 
+              changes: merged_changes 
+            })?;
+            
+            table
+              .update()
+              .only_if(format!("id = '{}'", existing_task.id).as_str())
+              .column("task_type", format!("'{}'", task_type_json.replace("'", "''")))
+              .execute()
+              .await?;
+            
+            // Create a merged record for the new task
+            let mut merged_task = crate::models::IndexTask::new_partial(project_id, path, new_changes.clone());
+            merged_task.status = crate::models::TaskStatus::Merged;
+            merged_task.merged_into = Some(existing_task.id);
+            
+            let merged_task_id = merged_task.id;
+            let arrow_data = merged_task.into_arrow()?;
+            table.add(arrow_data).execute().await?;
+            
+            info!(
+              task_id = %merged_task_id,
+              merged_into = %existing_task.id,
+              "Partial update task merged into existing partial update"
+            );
+            return Ok(merged_task_id);
+          }
+          
+          // If there's a partial update and we're adding a full index, don't merge
+          // The full index should be queued separately and will supersede the partial when it runs
+          (crate::models::TaskType::PartialUpdate { .. }, crate::models::TaskType::FullIndex) => {
+            // Continue checking other tasks
+          }
+        }
+      }
+    }
+
+    // No merging needed, create a new task
+    let task = match task_type {
+      crate::models::TaskType::FullIndex => crate::models::IndexTask::new(project_id, path),
+      crate::models::TaskType::PartialUpdate { changes } => {
+        crate::models::IndexTask::new_partial(project_id, path, changes)
+      }
+    };
+    let task_id = task.id;
 
     // Insert task into table
     let arrow_data = task.into_arrow()?;
-
-    let table = self.task_table.write().await;
     table.add(arrow_data).execute().await?;
 
-    info!(task_id, "Submitted new indexing task");
+    info!(task_id = %task_id, "Submitted new indexing task");
     Ok(task_id)
   }
 
@@ -86,28 +190,23 @@ impl TaskManager {
   /// Get task by ID
   pub async fn get_task(
     &self,
-    task_id: &str,
+    task_id: &Uuid,
   ) -> Result<Option<IndexTask>, Box<dyn std::error::Error + Send + Sync>> {
     let table = self.task_table.read().await;
 
-    let results = table
+    let mut stream = table
       .query()
       .only_if(format!("id = '{}'", task_id).as_str())
       .limit(1)
       .execute()
-      .await?
-      .try_collect::<Vec<_>>()
       .await?;
 
-    if results.is_empty() {
-      return Ok(None);
+    if let Some(batch) = stream.try_next().await? {
+      let task = IndexTask::from_record_batch(&batch, 0)?;
+      Ok(Some(task))
+    } else {
+      Ok(None)
     }
-
-    // Convert RecordBatch to IndexTask
-    let batch = &results[0];
-    let task = Self::record_batch_to_task(batch, 0)?;
-
-    Ok(Some(task))
   }
 
   /// List recent tasks
@@ -117,22 +216,19 @@ impl TaskManager {
   ) -> Result<Vec<IndexTask>, Box<dyn std::error::Error + Send + Sync>> {
     let table = self.task_table.read().await;
 
-    let results = table
+    let mut stream = table
       .query()
-      .limit(limit)
       .execute()
-      .await?
-      .try_collect::<Vec<_>>()
       .await?;
 
     let mut tasks = Vec::new();
-    for batch in results {
+    while let Some(batch) = stream.try_next().await? {
       for i in 0..batch.num_rows() {
-        tasks.push(Self::record_batch_to_task(&batch, i)?);
+        tasks.push(IndexTask::from_record_batch(&batch, i)?);
       }
     }
 
-    // Sort by created_at descending (newest first)
+    // Sort by created_at descending (newest first) and limit
     tasks.sort_by(|a, b| b.created_at.cmp(&a.created_at));
     tasks.truncate(limit);
 
@@ -151,17 +247,21 @@ impl TaskManager {
     };
 
     info!(
-      task_id = task.id,
+      task_id = %task.id,
       path = task.path,
       "Processing indexing task"
     );
 
-    // Execute the indexing
+    // Execute the indexing based on task type
     let start_time = std::time::Instant::now();
-    let result = self
-      .indexer
-      .index(std::path::Path::new(&task.path), Some(cancel_token.clone()))
-      .await;
+    let result = match &task.task_type {
+      crate::models::TaskType::FullIndex => {
+        self.execute_full_index(&task, cancel_token).await
+      }
+      crate::models::TaskType::PartialUpdate { changes } => {
+        self.execute_partial_update(&task, changes, cancel_token).await
+      }
+    };
 
     let elapsed = start_time.elapsed();
 
@@ -169,7 +269,7 @@ impl TaskManager {
     match result {
       Ok(files_indexed) => {
         info!(
-          task_id = task.id,
+          task_id = %task.id,
           files_indexed,
           elapsed_secs = elapsed.as_secs_f64(),
           "Task completed successfully"
@@ -178,7 +278,7 @@ impl TaskManager {
       }
       Err(e) => {
         error!(
-          task_id = task.id,
+          task_id = %task.id,
           error = %e,
           elapsed_secs = elapsed.as_secs_f64(),
           "Task failed"
@@ -190,28 +290,43 @@ impl TaskManager {
     Ok(true)
   }
 
+  /// Check if a project has any active (running) tasks
+  pub async fn has_active_task(
+    &self,
+    project_id: Uuid,
+  ) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
+    let table = self.task_table.read().await;
+    
+    let mut stream = table
+      .query()
+      .only_if(format!("project_id = '{}' AND status = 'running'", project_id).as_str())
+      .limit(1)
+      .execute()
+      .await?;
+    
+    Ok(stream.try_next().await?.is_some())
+  }
+
   /// Claim the oldest pending task by updating its status to running
   async fn claim_pending_task(
     &self,
   ) -> Result<Option<IndexTask>, Box<dyn std::error::Error + Send + Sync>> {
     let table = self.task_table.write().await;
 
-    // Get oldest pending task
-    let results = table
+    // Get oldest pending task (excluding merged tasks)
+    let mut stream = table
       .query()
       .only_if("status = 'pending'")
       .limit(1)
       .execute()
-      .await?
-      .try_collect::<Vec<_>>()
       .await?;
 
-    if results.is_empty() {
-      return Ok(None);
-    }
+    let batch = match stream.try_next().await? {
+      Some(batch) => batch,
+      None => return Ok(None),
+    };
 
-    let batch = &results[0];
-    let mut task = Self::record_batch_to_task(batch, 0)?;
+    let mut task = IndexTask::from_record_batch(&batch, 0)?;
 
     // Update status to running
     task.status = TaskStatus::Running;
@@ -229,14 +344,14 @@ impl TaskManager {
       .execute()
       .await?;
 
-    debug!(task_id = task.id, "Claimed task");
+    debug!(task_id = %task.id, "Claimed task");
     Ok(Some(task))
   }
 
   /// Update task as completed
   async fn update_task_completed(
     &self,
-    task_id: &str,
+    task_id: &Uuid,
     files_indexed: usize,
   ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let table = self.task_table.write().await;
@@ -262,7 +377,7 @@ impl TaskManager {
   /// Update task as failed
   async fn update_task_failed(
     &self,
-    task_id: &str,
+    task_id: &Uuid,
     error: &str,
   ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let table = self.task_table.write().await;
@@ -304,7 +419,7 @@ impl TaskManager {
 
     for batch in running_tasks {
       for i in 0..batch.num_rows() {
-        let task = Self::record_batch_to_task(&batch, i)?;
+        let task = IndexTask::from_record_batch(&batch, i)?;
 
         if let Some(started_at) = task.started_at {
           let started_micros = started_at.and_utc().timestamp_micros();
@@ -326,105 +441,52 @@ impl TaskManager {
     Ok(())
   }
 
-  /// Convert RecordBatch row to IndexTask
-  fn record_batch_to_task(
-    batch: &arrow::record_batch::RecordBatch,
-    row: usize,
-  ) -> Result<IndexTask, Box<dyn std::error::Error + Send + Sync>> {
-    use arrow::array::*;
+  /// Execute a full index task
+  async fn execute_full_index(
+    &self,
+    task: &crate::models::IndexTask,
+    cancel_token: &CancellationToken,
+  ) -> Result<usize, Box<dyn std::error::Error + Send + Sync>> {
+    info!(
+      task_id = %task.id,
+      path = task.path,
+      "Executing full index"
+    );
+    
+    self
+      .indexer
+      .index(std::path::Path::new(&task.path), Some(cancel_token.clone()))
+      .await
+  }
 
-    let id_array = batch
-      .column(0)
-      .as_any()
-      .downcast_ref::<StringArray>()
-      .ok_or("Invalid id column")?;
-
-    let path_array = batch
-      .column(1)
-      .as_any()
-      .downcast_ref::<StringArray>()
-      .ok_or("Invalid path column")?;
-
-    let status_array = batch
-      .column(2)
-      .as_any()
-      .downcast_ref::<StringArray>()
-      .ok_or("Invalid status column")?;
-
-    let created_at_array = batch
-      .column(3)
-      .as_any()
-      .downcast_ref::<TimestampMicrosecondArray>()
-      .ok_or("Invalid created_at column")?;
-
-    let started_at_array = batch
-      .column(4)
-      .as_any()
-      .downcast_ref::<TimestampMicrosecondArray>()
-      .ok_or("Invalid started_at column")?;
-
-    let completed_at_array = batch
-      .column(5)
-      .as_any()
-      .downcast_ref::<TimestampMicrosecondArray>()
-      .ok_or("Invalid completed_at column")?;
-
-    let error_array = batch
-      .column(6)
-      .as_any()
-      .downcast_ref::<StringArray>()
-      .ok_or("Invalid error column")?;
-
-    let files_indexed_array = batch
-      .column(7)
-      .as_any()
-      .downcast_ref::<UInt64Array>()
-      .ok_or("Invalid files_indexed column")?;
-
-    let status = match status_array.value(row) {
-      "pending" => TaskStatus::Pending,
-      "running" => TaskStatus::Running,
-      "completed" => TaskStatus::Completed,
-      "failed" => TaskStatus::Failed,
-      _ => return Err("Invalid status value".into()),
-    };
-
-    Ok(IndexTask {
-      id: id_array.value(row).to_string(),
-      path: path_array.value(row).to_string(),
-      status,
-      created_at: chrono::DateTime::from_timestamp_micros(created_at_array.value(row))
-        .ok_or("Invalid created_at timestamp")?
-        .naive_utc(),
-      started_at: if started_at_array.is_null(row) {
-        None
-      } else {
-        Some(
-          chrono::DateTime::from_timestamp_micros(started_at_array.value(row))
-            .ok_or("Invalid started_at timestamp")?
-            .naive_utc(),
-        )
-      },
-      completed_at: if completed_at_array.is_null(row) {
-        None
-      } else {
-        Some(
-          chrono::DateTime::from_timestamp_micros(completed_at_array.value(row))
-            .ok_or("Invalid completed_at timestamp")?
-            .naive_utc(),
-        )
-      },
-      error: if error_array.is_null(row) {
-        None
-      } else {
-        Some(error_array.value(row).to_string())
-      },
-      files_indexed: if files_indexed_array.is_null(row) {
-        None
-      } else {
-        Some(files_indexed_array.value(row) as usize)
-      },
-    })
+  /// Execute a partial update task
+  async fn execute_partial_update(
+    &self,
+    task: &crate::models::IndexTask,
+    changes: &std::collections::BTreeSet<crate::models::FileChange>,
+    cancel_token: &CancellationToken,
+  ) -> Result<usize, Box<dyn std::error::Error + Send + Sync>> {
+    // TODO: Implement partial indexing for specific files
+    // For now, we'll do a full index until we implement partial indexing
+    warn!(
+      task_id = %task.id,
+      files_count = changes.len(),
+      "Partial update not yet implemented, falling back to full index"
+    );
+    
+    // Log the files that would be updated
+    for change in changes {
+      debug!(
+        path = ?change.path,
+        operation = ?change.operation,
+        "Would process file change"
+      );
+    }
+    
+    self
+      .indexer
+      .index(std::path::Path::new(&task.path), Some(cancel_token.clone()))
+      .await
   }
 }
 
@@ -440,7 +502,7 @@ mod tests {
   use tempfile::TempDir;
   use tokio::time::timeout;
 
-  async fn create_test_task_manager() -> (TaskManager, TempDir) {
+  async fn create_test_task_manager() -> (TaskManager, TempDir, Uuid) {
     let temp_dir = TempDir::new().unwrap();
     let db_path = temp_dir.path().join("test.db");
 
@@ -472,23 +534,25 @@ mod tests {
     );
 
     let task_manager = TaskManager::new(task_table, bulk_indexer);
+    
+    // Create a test project ID
+    let test_project_id = Uuid::now_v7();
 
-    (task_manager, temp_dir)
+    (task_manager, temp_dir, test_project_id)
   }
 
   #[tokio::test]
   async fn test_submit_task() {
-    let (task_manager, _temp_dir) = create_test_task_manager().await;
+    let (task_manager, _temp_dir, project_id) = create_test_task_manager().await;
     let test_path = std::path::Path::new("/test/path");
 
-    let task_id = task_manager.submit_task(test_path).await.unwrap();
+    let task_id = task_manager.submit_task(project_id, test_path).await.unwrap();
 
-    assert!(!task_id.is_empty());
-    assert!(uuid::Uuid::parse_str(&task_id).is_ok());
 
     // Verify task was created
     let task = task_manager.get_task(&task_id).await.unwrap().unwrap();
     assert_eq!(task.path, test_path.to_string_lossy());
+    assert_eq!(task.project_id, project_id);
     assert_eq!(task.status, TaskStatus::Pending);
     assert!(task.started_at.is_none());
     assert!(task.completed_at.is_none());
@@ -496,15 +560,16 @@ mod tests {
 
   #[tokio::test]
   async fn test_get_task_not_found() {
-    let (task_manager, _temp_dir) = create_test_task_manager().await;
+    let (task_manager, _temp_dir, _project_id) = create_test_task_manager().await;
 
-    let result = task_manager.get_task("non-existent-id").await.unwrap();
+    let non_existent_id = Uuid::now_v7();
+    let result = task_manager.get_task(&non_existent_id).await.unwrap();
     assert!(result.is_none());
   }
 
   #[tokio::test]
   async fn test_list_tasks_empty() {
-    let (task_manager, _temp_dir) = create_test_task_manager().await;
+    let (task_manager, _temp_dir, _project_id) = create_test_task_manager().await;
 
     let tasks = task_manager.list_tasks(10).await.unwrap();
     assert!(tasks.is_empty());
@@ -512,7 +577,7 @@ mod tests {
 
   #[tokio::test]
   async fn test_list_tasks_with_data() {
-    let (task_manager, _temp_dir) = create_test_task_manager().await;
+    let (task_manager, _temp_dir, project_id) = create_test_task_manager().await;
 
     // Submit multiple tasks
     let paths = ["/test/path1", "/test/path2", "/test/path3"];
@@ -520,7 +585,7 @@ mod tests {
 
     for path in &paths {
       let task_id = task_manager
-        .submit_task(std::path::Path::new(path))
+        .submit_task(project_id, std::path::Path::new(path))
         .await
         .unwrap();
       task_ids.push(task_id);
@@ -540,13 +605,13 @@ mod tests {
 
   #[tokio::test]
   async fn test_list_tasks_with_limit() {
-    let (task_manager, _temp_dir) = create_test_task_manager().await;
+    let (task_manager, _temp_dir, project_id) = create_test_task_manager().await;
 
     // Submit 5 tasks
     for i in 0..5 {
       let path = format!("/test/path{}", i);
       task_manager
-        .submit_task(std::path::Path::new(&path))
+        .submit_task(project_id, std::path::Path::new(&path))
         .await
         .unwrap();
     }
@@ -558,7 +623,7 @@ mod tests {
 
   #[tokio::test]
   async fn test_concurrent_task_submission() {
-    let (task_manager, _temp_dir) = create_test_task_manager().await;
+    let (task_manager, _temp_dir, project_id) = create_test_task_manager().await;
     let task_manager = Arc::new(task_manager);
 
     let num_tasks = 10;
@@ -569,7 +634,7 @@ mod tests {
       let tm = task_manager.clone();
       let handle = tokio::spawn(async move {
         let path = format!("/test/concurrent/{}", i);
-        tm.submit_task(std::path::Path::new(&path)).await
+        tm.submit_task(project_id, std::path::Path::new(&path)).await
       });
       handles.push(handle);
     }
@@ -595,11 +660,11 @@ mod tests {
 
   #[tokio::test]
   async fn test_reset_stuck_tasks() {
-    let (task_manager, _temp_dir) = create_test_task_manager().await;
+    let (task_manager, _temp_dir, project_id) = create_test_task_manager().await;
 
     // Create a task and manually set it to running with old timestamp
     let task_id = task_manager
-      .submit_task(std::path::Path::new("/test/stuck"))
+      .submit_task(project_id, std::path::Path::new("/test/stuck"))
       .await
       .unwrap();
 
@@ -640,11 +705,11 @@ mod tests {
 
   #[tokio::test]
   async fn test_claim_pending_task() {
-    let (task_manager, _temp_dir) = create_test_task_manager().await;
+    let (task_manager, _temp_dir, project_id) = create_test_task_manager().await;
 
     // Submit a task
     let task_id = task_manager
-      .submit_task(std::path::Path::new("/test/claim"))
+      .submit_task(project_id, std::path::Path::new("/test/claim"))
       .await
       .unwrap();
 
@@ -661,15 +726,16 @@ mod tests {
 
   #[tokio::test]
   async fn test_concurrent_task_claiming() {
-    let (task_manager, _temp_dir) = create_test_task_manager().await;
+    let (task_manager, _temp_dir, _project_id) = create_test_task_manager().await;
     let task_manager = Arc::new(task_manager);
 
-    // Submit multiple tasks
+    // Submit multiple tasks with different project IDs to avoid merging
     let num_tasks = 5;
     for i in 0..num_tasks {
       let path = format!("/test/claim/{}", i);
+      let project_id = Uuid::now_v7(); // Different project ID for each task
       task_manager
-        .submit_task(std::path::Path::new(&path))
+        .submit_task(project_id, std::path::Path::new(&path))
         .await
         .unwrap();
     }
@@ -712,10 +778,10 @@ mod tests {
 
   #[tokio::test]
   async fn test_update_task_completed() {
-    let (task_manager, _temp_dir) = create_test_task_manager().await;
+    let (task_manager, _temp_dir, project_id) = create_test_task_manager().await;
 
     let task_id = task_manager
-      .submit_task(std::path::Path::new("/test/complete"))
+      .submit_task(project_id, std::path::Path::new("/test/complete"))
       .await
       .unwrap();
 
@@ -732,10 +798,10 @@ mod tests {
 
   #[tokio::test]
   async fn test_update_task_failed() {
-    let (task_manager, _temp_dir) = create_test_task_manager().await;
+    let (task_manager, _temp_dir, project_id) = create_test_task_manager().await;
 
     let task_id = task_manager
-      .submit_task(std::path::Path::new("/test/fail"))
+      .submit_task(project_id, std::path::Path::new("/test/fail"))
       .await
       .unwrap();
 
@@ -753,7 +819,7 @@ mod tests {
 
   #[tokio::test]
   async fn test_worker_processes_task() {
-    let (task_manager, temp_dir) = create_test_task_manager().await;
+    let (task_manager, temp_dir, project_id) = create_test_task_manager().await;
     let task_manager = Arc::new(task_manager);
 
     // Create a real directory to index
@@ -764,7 +830,7 @@ mod tests {
       .unwrap();
 
     // Submit a task
-    let task_id = task_manager.submit_task(&test_dir).await.unwrap();
+    let task_id = task_manager.submit_task(project_id, &test_dir).await.unwrap();
 
     // Start worker with short timeout
     let shutdown_token = CancellationToken::new();
@@ -799,7 +865,7 @@ mod tests {
 
   #[tokio::test]
   async fn test_worker_shutdown() {
-    let (task_manager, _temp_dir) = create_test_task_manager().await;
+    let (task_manager, _temp_dir, _project_id) = create_test_task_manager().await;
 
     let shutdown_token = CancellationToken::new();
     let worker_shutdown = shutdown_token.clone();
@@ -816,25 +882,29 @@ mod tests {
 
   #[tokio::test]
   async fn test_oldest_pending_task_processed_first() {
-    let (task_manager, _temp_dir) = create_test_task_manager().await;
+    let (task_manager, _temp_dir, _project_id) = create_test_task_manager().await;
 
     // Submit tasks with small delays to ensure different timestamps
+    // Use different project IDs to avoid merging
+    let project1 = Uuid::now_v7();
     let task1_id = task_manager
-      .submit_task(std::path::Path::new("/test/first"))
+      .submit_task(project1, std::path::Path::new("/test/first"))
       .await
       .unwrap();
 
     tokio::time::sleep(Duration::from_millis(10)).await;
 
+    let project2 = Uuid::now_v7();
     let task2_id = task_manager
-      .submit_task(std::path::Path::new("/test/second"))
+      .submit_task(project2, std::path::Path::new("/test/second"))
       .await
       .unwrap();
 
     tokio::time::sleep(Duration::from_millis(10)).await;
 
+    let project3 = Uuid::now_v7();
     let task3_id = task_manager
-      .submit_task(std::path::Path::new("/test/third"))
+      .submit_task(project3, std::path::Path::new("/test/third"))
       .await
       .unwrap();
 
@@ -855,10 +925,10 @@ mod tests {
 
   #[tokio::test]
   async fn test_task_error_handling_with_quotes() {
-    let (task_manager, _temp_dir) = create_test_task_manager().await;
+    let (task_manager, _temp_dir, project_id) = create_test_task_manager().await;
 
     let task_id = task_manager
-      .submit_task(std::path::Path::new("/test/quotes"))
+      .submit_task(project_id, std::path::Path::new("/test/quotes"))
       .await
       .unwrap();
 
@@ -876,11 +946,11 @@ mod tests {
 
   #[tokio::test]
   async fn test_record_batch_to_task_conversion() {
-    let (task_manager, _temp_dir) = create_test_task_manager().await;
+    let (task_manager, _temp_dir, project_id) = create_test_task_manager().await;
 
     // Submit a task and update it to have all fields populated
     let task_id = task_manager
-      .submit_task(std::path::Path::new("/test/conversion"))
+      .submit_task(project_id, std::path::Path::new("/test/conversion"))
       .await
       .unwrap();
 
@@ -892,11 +962,39 @@ mod tests {
     // Retrieve and verify all fields are correctly converted
     let task = task_manager.get_task(&task_id).await.unwrap().unwrap();
     assert_eq!(task.id, task_id);
+    assert_eq!(task.project_id, project_id);
     assert_eq!(task.path, "/test/conversion");
     assert_eq!(task.status, TaskStatus::Completed);
     assert!(task.created_at > chrono::Utc::now().naive_utc() - chrono::Duration::seconds(10));
     assert!(task.completed_at.is_some());
     assert_eq!(task.files_indexed, Some(123));
     assert!(task.error.is_none());
+  }
+
+  #[tokio::test]
+  async fn test_has_active_task() {
+    let (task_manager, _temp_dir, project_id) = create_test_task_manager().await;
+    
+    // Initially no active tasks
+    assert!(!task_manager.has_active_task(project_id).await.unwrap());
+    
+    // Submit a task
+    let _task_id = task_manager
+      .submit_task(project_id, std::path::Path::new("/test/active"))
+      .await
+      .unwrap();
+    
+    // Still no active task (it's pending)
+    assert!(!task_manager.has_active_task(project_id).await.unwrap());
+    
+    // Claim the task to make it running
+    let _claimed = task_manager.claim_pending_task().await.unwrap();
+    
+    // Now should have active task
+    assert!(task_manager.has_active_task(project_id).await.unwrap());
+    
+    // Different project should not have active task
+    let other_project_id = Uuid::now_v7();
+    assert!(!task_manager.has_active_task(other_project_id).await.unwrap());
   }
 }

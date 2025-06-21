@@ -1510,6 +1510,7 @@ dependencies = [
  "hyperpolyglot",
  "ignore",
  "infer",
+ "memchr",
  "serde",
  "tempfile",
  "text-splitter",
@@ -1556,6 +1557,7 @@ dependencies = [
  "candle-nn",
  "candle-transformers",
  "chrono",
+ "dashmap",
  "flume",
  "futures",
  "futures-util",
@@ -1565,6 +1567,8 @@ dependencies = [
  "intel-mkl-src",
  "lancedb",
  "ndarray",
+ "notify",
+ "notify-debouncer-full",
  "num_cpus",
  "ort",
  "pin-project-lite",
@@ -1643,6 +1647,7 @@ dependencies = [
  "rustls 0.23.28",
  "rustls-acme",
  "rustls-pemfile 2.2.0",
+ "schemars",
  "serde",
  "serde_json",
  "tokio",
@@ -1653,6 +1658,7 @@ dependencies = [
  "tower-sessions",
  "tracing",
  "url",
+ "uuid",
 ]
 
 [[package]]
@@ -2384,6 +2390,8 @@ dependencies = [
  "lock_api",
  "once_cell",
  "parking_lot_core",
+ "rayon",
+ "serde",
 ]
 
 [[package]]
@@ -3330,6 +3338,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "37909eebbb50d72f9059c3b6d82c0463f2ff062c9e95845c43a6c9c0355411be"
 
 [[package]]
+name = "file-id"
+version = "0.2.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6bc904b9bbefcadbd8e3a9fb0d464a9b979de6324c03b3c663e8994f46a5be36"
+dependencies = [
+ "windows-sys 0.52.0",
+]
+
+[[package]]
 name = "filetime"
 version = "0.2.25"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3469,10 +3486,19 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "42703706b716c37f96a77aea830392ad231f44c9e9a67872fa5548707e11b11c"
 
 [[package]]
-name = "fsst"
-version = "0.29.0"
+name = "fsevent-sys"
+version = "4.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b456eec9a7cd44268f958006308a05d703c578ab5c86fa119f3bb5bc97d01899"
+checksum = "76ee7a02da4d231650c7cea31349b889be2f45ddb3ef3032d2ec8185f6313fd2"
+dependencies = [
+ "libc",
+]
+
+[[package]]
+name = "fsst"
+version = "0.30.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3b6a55335126d20524dc83cf0638b7ca1b5d9736f9064a89c47e4d028cbaccdb"
 dependencies = [
  "rand 0.8.5",
 ]
@@ -4635,6 +4661,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "inotify"
+version = "0.11.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f37dccff2791ab604f9babef0ba14fbe0be30bd368dc541e2b08d07c8aa908f3"
+dependencies = [
+ "bitflags 2.9.1",
+ "inotify-sys",
+ "libc",
+]
+
+[[package]]
+name = "inotify-sys"
+version = "0.1.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e05c02b5e89bff3b946cedeca278abc628fe811e604f027c45a8aa3cf793d0eb"
+dependencies = [
+ "libc",
+]
+
+[[package]]
 name = "instant"
 version = "0.1.13"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4764,10 +4810,30 @@ dependencies = [
 ]
 
 [[package]]
-name = "lance"
-version = "0.29.0"
+name = "kqueue"
+version = "1.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cc6acee7cab66a2fbb68238ba9dd83a8b4fea4bedad02e2ef2ebb8f35f0cdd09"
+checksum = "eac30106d7dce88daf4a3fcb4879ea939476d5074a9b7ddd0fb97fa4bed5596a"
+dependencies = [
+ "kqueue-sys",
+ "libc",
+]
+
+[[package]]
+name = "kqueue-sys"
+version = "1.0.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ed9625ffda8729b85e45cf04090035ac368927b8cebc34898e7c120f52e4838b"
+dependencies = [
+ "bitflags 1.3.2",
+ "libc",
+]
+
+[[package]]
+name = "lance"
+version = "0.30.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "84a9bf2cf9ff1d8b8a8c822cf4aaec7023fbe056d3348dce347957695470bd19"
 dependencies = [
  "arrow",
  "arrow-arith",
@@ -4830,9 +4896,9 @@ dependencies = [
 
 [[package]]
 name = "lance-arrow"
-version = "0.29.0"
+version = "0.30.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "866ae620f88cbbbebcd24cee23c41d0ac847652bbf38d467b8fb95302007723c"
+checksum = "82fc2b0dd2598f4b390445d63a3906f84d928c250b208d382d4cfc22681b23c0"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -4849,9 +4915,9 @@ dependencies = [
 
 [[package]]
 name = "lance-core"
-version = "0.29.0"
+version = "0.30.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4a41540cd34c16371d2e72f270cfd755f7677cdeb597925f151f9512a70673e6"
+checksum = "4118c6e2ac2d26ff80e55708f337c4593381a32751f2a79a03d92452885bd648"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -4887,9 +4953,9 @@ dependencies = [
 
 [[package]]
 name = "lance-datafusion"
-version = "0.29.0"
+version = "0.30.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f3cac3480432121d87ea77e50a08bd3a2d81bbe202844fbb0fd2b260216990e1"
+checksum = "ccf8b01e9a5f15d4975423ea1495df85cf36f9036c3ed999190d4631ffbd28b6"
 dependencies = [
  "arrow",
  "arrow-array",
@@ -4918,9 +4984,9 @@ dependencies = [
 
 [[package]]
 name = "lance-datagen"
-version = "0.29.0"
+version = "0.30.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3d498251ffd9da2eabb6b75e8bcd16f74c9b42a647c9388e6b00882ca4acf343"
+checksum = "3fbedb84243fb2fe255b4e9ac298019d2e93e83fcc9ce2eb67a4ac7cab427dda"
 dependencies = [
  "arrow",
  "arrow-array",
@@ -4935,9 +5001,9 @@ dependencies = [
 
 [[package]]
 name = "lance-encoding"
-version = "0.29.0"
+version = "0.30.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "904f17e867748ead2d2a7def04b88039ee4881159812f76e542899d28effe21f"
+checksum = "9a0e078414cce96da2e2b37290d0b38a81ba6b0ebcad6806b231c2cd8d04427a"
 dependencies = [
  "arrayref",
  "arrow",
@@ -4976,9 +5042,9 @@ dependencies = [
 
 [[package]]
 name = "lance-file"
-version = "0.29.0"
+version = "0.30.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ff100a7a4b8e13c59f5bf462df6d28e486f7c372269f70df2c0c2cc26371b365"
+checksum = "ce7deba5b59118f7ef726859ace192b7cc7da4e6639147d2a3908a2de621ce98"
 dependencies = [
  "arrow-arith",
  "arrow-array",
@@ -5012,9 +5078,9 @@ dependencies = [
 
 [[package]]
 name = "lance-index"
-version = "0.29.0"
+version = "0.30.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f715e3c1ed90a4d3d5d16eac94173dfdbffe328902dada01826bf1a289e1765c"
+checksum = "5bee1aecc60c759436d8f952e2d9c4e93d1940bfbdc1869068b4ac6b01e86b2f"
 dependencies = [
  "arrow",
  "arrow-array",
@@ -5034,7 +5100,7 @@ dependencies = [
  "datafusion-physical-expr",
  "datafusion-sql",
  "deepsize",
- "dirs 5.0.1",
+ "dirs 6.0.0",
  "fst",
  "futures",
  "half",
@@ -5069,9 +5135,9 @@ dependencies = [
 
 [[package]]
 name = "lance-io"
-version = "0.29.0"
+version = "0.30.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f36646da2c6db604971cda4e1a1932d67c2b7c3b1572a218f454f4df2502348d"
+checksum = "61a48f6a3f5433ca5095993fcd8bb47efbf473af852b9aca1e175a3d7bbf67fd"
 dependencies = [
  "arrow",
  "arrow-arith",
@@ -5110,9 +5176,9 @@ dependencies = [
 
 [[package]]
 name = "lance-linalg"
-version = "0.29.0"
+version = "0.30.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b020e1433361ddf73d82415065e4d1cff4d351ecc0dd57613e3fa91f909e395b"
+checksum = "620dedc792311862fc336b2651e825d2b450bbade7bfc819b7b182c3bb585c1e"
 dependencies = [
  "arrow-array",
  "arrow-ord",
@@ -5135,9 +5201,9 @@ dependencies = [
 
 [[package]]
 name = "lance-table"
-version = "0.29.0"
+version = "0.30.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3d7fb06ea96820c15e606bbf9bd9c85b97aecad3a8de85d1b36c64a38b990f31"
+checksum = "9b010312330943c5e81628722a50e3679688d96065348659b7913964f13765cf"
 dependencies = [
  "arrow",
  "arrow-array",
@@ -5176,9 +5242,9 @@ dependencies = [
 
 [[package]]
 name = "lance-testing"
-version = "0.29.0"
+version = "0.30.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "60b869111ee91597dbc3f140f3d1c6213c984d190b9103a151c72d166868bcfa"
+checksum = "efa10957cdadef40e853896a67282cd29898775b29715eec42dd49bc3b3c8554"
 dependencies = [
  "arrow-array",
  "arrow-schema",
@@ -5189,9 +5255,9 @@ dependencies = [
 
 [[package]]
 name = "lancedb"
-version = "0.20.0"
+version = "0.21.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8b1027dec7ce0ca77c0a43ea8933d52aa4361e94a0ae1b0fb5d62efc68320ff0"
+checksum = "49a018d26d0cdcb9f538ac1f05f459cf323c256d6bd08a505c386e3b966c3b8d"
 dependencies = [
  "arrow",
  "arrow-array",
@@ -5563,9 +5629,9 @@ dependencies = [
 
 [[package]]
 name = "memchr"
-version = "2.7.4"
+version = "2.7.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "78ca9ab1a0babb1e7d5695e3530886289c18cf2f87ec19a575a0abdce112e3a3"
+checksum = "32a282da65faaf38286cf3be983213fcf1d2e2a58700e808f83f4ea9a4804bc0"
 
 [[package]]
 name = "memmap2"
@@ -5654,6 +5720,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "78bed444cc8a2160f01cbcf811ef18cac863ad68ae8ca62092e8db51d51c761c"
 dependencies = [
  "libc",
+ "log",
  "wasi 0.11.0+wasi-snapshot-preview1",
  "windows-sys 0.59.0",
 ]
@@ -5864,6 +5931,44 @@ dependencies = [
  "memchr",
  "minimal-lexical",
 ]
+
+[[package]]
+name = "notify"
+version = "8.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2fee8403b3d66ac7b26aee6e40a897d85dc5ce26f44da36b8b73e987cc52e943"
+dependencies = [
+ "bitflags 2.9.1",
+ "filetime",
+ "fsevent-sys",
+ "inotify",
+ "kqueue",
+ "libc",
+ "log",
+ "mio",
+ "notify-types",
+ "walkdir",
+ "windows-sys 0.59.0",
+]
+
+[[package]]
+name = "notify-debouncer-full"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d2d88b1a7538054351c8258338df7c931a590513fb3745e8c15eb9ff4199b8d1"
+dependencies = [
+ "file-id",
+ "log",
+ "notify",
+ "notify-types",
+ "walkdir",
+]
+
+[[package]]
+name = "notify-types"
+version = "2.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5e0826a989adedc2a244799e823aece04662b66609d96af8dff7ac6df9a8925d"
 
 [[package]]
 name = "nu-ansi-term"
@@ -7837,6 +7942,7 @@ dependencies = [
  "schemars_derive",
  "serde",
  "serde_json",
+ "uuid",
 ]
 
 [[package]]

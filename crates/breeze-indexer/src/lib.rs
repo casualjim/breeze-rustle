@@ -4,8 +4,10 @@ mod bulk_indexer;
 mod converter;
 mod document_builder;
 mod embeddings;
+mod file_watcher;
 mod models;
 mod pipeline;
+mod project_manager;
 mod reqwestx;
 mod sinks;
 mod task_manager;
@@ -18,7 +20,8 @@ mod search;
 // Re-export only what's needed for the public API
 pub use config::*;
 pub use indexer::{Indexer, IndexerError};
-pub use models::{IndexTask, TaskStatus};
+pub use models::{IndexTask, TaskStatus, Project};
+pub use project_manager::ProjectManager;
 pub use search::{SearchResult, hybrid_search};
 pub use task_manager::TaskManager;
 
