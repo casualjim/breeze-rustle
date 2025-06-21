@@ -54,8 +54,8 @@ fn get_target_parser_path() -> Result<PathBuf, String> {
     let expected_filename = match target.as_str() {
       "aarch64-apple-darwin" => "libtree-sitter-parsers-all-macos-aarch64.a",
       "x86_64-apple-darwin" => "libtree-sitter-parsers-all-macos-x86_64.a",
-      "aarch64-unknown-linux-gnu" => "libtree-sitter-parsers-all-linux-aarch64.a",
-      "x86_64-unknown-linux-gnu" => "libtree-sitter-parsers-all-linux-x86_64.a",
+      "aarch64-unknown-linux-gnu" => "libtree-sitter-parsers-all-linux-aarch64-glibc.a",
+      "x86_64-unknown-linux-gnu" => "libtree-sitter-parsers-all-linux-x86_64-glibc.a",
       "aarch64-unknown-linux-musl" => "libtree-sitter-parsers-all-linux-aarch64-musl.a",
       "x86_64-unknown-linux-musl" => "libtree-sitter-parsers-all-linux-x86_64-musl.a",
       "aarch64-pc-windows-msvc" => "libtree-sitter-parsers-all-windows-aarch64.a",
@@ -159,7 +159,9 @@ fn use_npm_parsers(parser_lib_path: &Path, out_path: &Path) {
   let lib_name = parser_lib_path.file_stem().unwrap().to_str().unwrap();
   let lib_name = lib_name.strip_prefix("lib").unwrap_or(lib_name);
 
+  // Link the static library
   println!("cargo:rustc-link-lib=static={}", lib_name);
+  
   println!(
     "cargo:rustc-link-search=native={}",
     parser_lib_path.parent().unwrap().display()
@@ -171,7 +173,8 @@ fn use_npm_parsers(parser_lib_path: &Path, out_path: &Path) {
   } else if cfg!(target_os = "linux") {
     println!("cargo:rustc-link-lib=stdc++");
   } else if cfg!(target_os = "windows") {
-    // Windows doesn't need explicit C++ runtime linking with MSVC
+    // For GNU toolchain on Windows (MinGW), use the same approach as Linux
+    println!("cargo:rustc-link-lib=stdc++");
   }
 
   // Check if there's a metadata file alongside the library
