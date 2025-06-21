@@ -55,13 +55,13 @@ We cannot cast `fn() -> Language` to `LanguageFn` because:
 fn test_missing_language_apis() {
     // PHP works fine
     let php_lang: LanguageFn = tree_sitter_php::LANGUAGE_PHP;
-    
+
     // Kotlin returns Language, not LanguageFn
     let kotlin_lang = tree_sitter_kotlin::language();
-    
+
     // SQL also returns Language, not LanguageFn
     let sql_lang = tree_sitter_sql::language();
-    
+
     // PHP can convert to Language
     let php_as_lang: tree_sitter::Language = php_lang.into();
 }

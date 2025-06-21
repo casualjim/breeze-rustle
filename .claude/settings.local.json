@@ -24,7 +24,25 @@
       "Bash(grep:*)",
       "Bash(cargo nextest:*)",
       "Bash(gh run list:*)",
-      "Bash(gh run view:*)"
+      "Bash(gh run view:*)",
+      "mcp__zep__search_memory_nodes",
+      "mcp__zep__add_memory",
+      "Bash(cargo:*)",
+      "mcp__github__search_repositories",
+      "Bash(nm:*)",
+      "Bash(find:*)",
+      "Bash(rg:*)",
+      "Bash(RUST_LOG=breeze=debug cargo test:*)",
+      "mcp__github__list_commits",
+      "Bash(gh api:*)",
+      "mcp__zep__search_memory_facts",
+      "mcp__code-index__search_code",
+      "mcp__code-index__find_files",
+      "WebFetch(domain:docs.rs)",
+      "mcp__github__search_issues",
+      "WebFetch(domain:ort.pyke.io)",
+      "mcp__code-index__set_project_path",
+      "Bash(prefligit run --all-files)"
     ],
     "deny": []
   }

@@ -28,6 +28,7 @@ venv/
 *.egg-info/
 .installed.cfg
 *.egg
+.ruff_cache/
 
 # Installer logs
 pip-log.txt
@@ -73,4 +74,17 @@ docs/_build/
 
 # Local benchmarks with hardcoded paths
 benchmarks/
-test_*.py
+/test_*.py
+/notused
+node_modules/
+
+*.db
+.env
+.env.*
+.env.*
+!.env.example
+
+# Code Index MCP cache directory
+.code_indexer/
+*.pem
+output.map

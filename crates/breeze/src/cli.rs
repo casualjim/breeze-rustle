@@ -1,0 +1,140 @@
+use clap::{Parser, Subcommand};
+use std::path::PathBuf;
+
+#[derive(Parser)]
+#[command(name = "breeze")]
+#[command(about = "High-performance semantic code indexing and search", long_about = None)]
+#[command(version)]
+pub struct Cli {
+  /// Path to configuration file
+  #[arg(short, long, global = true)]
+  pub config: Option<PathBuf>,
+
+  #[command(subcommand)]
+  pub command: Commands,
+}
+
+#[derive(Subcommand)]
+pub enum Commands {
+  /// Index a codebase for semantic search
+  Index {
+    /// Path to the codebase to index
+    path: PathBuf,
+  },
+
+  /// Search indexed codebase
+  Search {
+    /// Search query
+    query: String,
+
+    /// Number of results to return
+    #[arg(short = 'n', long, default_value = "10")]
+    limit: usize,
+
+    /// Show full file content in results
+    #[arg(short, long)]
+    full: bool,
+  },
+
+  /// Initialize configuration file
+  Init {
+    /// Force overwrite existing config file
+    #[arg(short, long)]
+    force: bool,
+  },
+
+  /// Show current configuration
+  Config {
+    /// Show default configuration
+    #[arg(long)]
+    defaults: bool,
+  },
+
+  /// Debug utilities
+  #[cfg(feature = "perfprofiling")]
+  Debug {
+    #[command(subcommand)]
+    command: DebugCommands,
+  },
+
+  /// Run the API server (uses config file for all settings)
+  Serve,
+}
+
+#[cfg(feature = "perfprofiling")]
+#[derive(Subcommand)]
+pub enum DebugCommands {
+  /// Chunk a directory and show statistics
+  ChunkDirectory {
+    /// Path to the directory to chunk
+    path: PathBuf,
+
+    /// Maximum chunk size in tokens
+    #[arg(long, default_value = "2048")]
+    max_chunk_size: usize,
+
+    /// Maximum file size in bytes
+    #[arg(long)]
+    max_file_size: Option<u64>,
+
+    /// Number of files to process in parallel
+    #[arg(long, default_value = "16")]
+    max_parallel: usize,
+
+    /// Tokenizer to use: characters, tiktoken:model_name, or hf:org/repo
+    #[arg(long, default_value = "hf:ibm-granite/granite-embedding-125m-english")]
+    tokenizer: String,
+  },
+}
+
+impl Cli {
+  pub fn parse() -> Self {
+    <Self as Parser>::parse()
+  }
+}
+
+/// Format search results for display
+pub fn format_results(results: &[breeze_indexer::SearchResult], show_full_content: bool) -> String {
+  let mut output = String::new();
+
+  for (idx, result) in results.iter().enumerate() {
+    output.push_str(&format!("\n[{}] {}\n", idx + 1, result.file_path));
+
+    // Only show score if it's meaningful (not 0.0)
+    if result.relevance_score > 0.0 {
+      output.push_str(&format!(
+        "   Score: {:.4} | Size: {} bytes\n",
+        result.relevance_score, result.file_size
+      ));
+    } else {
+      output.push_str(&format!("   Size: {} bytes\n", result.file_size));
+    }
+
+    if show_full_content {
+      output.push('\n');
+      output.push_str(&result.content);
+      output.push('\n');
+    } else {
+      // Show first 5 lines as preview
+      let preview_lines: Vec<&str> = result.content.lines().take(5).collect();
+
+      if !preview_lines.is_empty() {
+        output.push('\n');
+        for line in preview_lines {
+          output.push_str("   ");
+          output.push_str(line);
+          output.push('\n');
+        }
+
+        let total_lines = result.content.lines().count();
+        if total_lines > 5 {
+          output.push_str(&format!("   ... ({} more lines)\n", total_lines - 5));
+        }
+      }
+    }
+
+    output.push_str(&format!("{}\n", "-".repeat(80)));
+  }
+
+  output
+}

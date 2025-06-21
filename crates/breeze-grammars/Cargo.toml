@@ -1,0 +1,19 @@
+[package]
+name = "breeze-grammars"
+version = "0.1.0"
+edition = "2021"
+build = "build.rs"
+
+[dependencies]
+tree-sitter.workspace = true
+tree-sitter-language.workspace = true
+
+[build-dependencies]
+cc = { version = "1.0", features = ["parallel"] }
+flate2 = "1.0"
+num_cpus.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tar = "0.4"
+ureq = "3.0"
+which = "8.0"

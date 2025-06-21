@@ -1,0 +1,139 @@
+# Example configuration for Breeze
+
+# Database configuration
+db_dir = "./embeddings.db"
+
+[server]
+
+[server.ports]
+http = 8080  # HTTP port
+https = 8443  # HTTPS port
+
+[server.tls]
+disabled = true
+
+# use keypair files, this does not support automatic cert rotation atm
+[server.tls.keypair]
+# disabled = false   # Disable TLS
+tls_cert = "breeze.local.wagyu.icu+3.pem"  # Path to the TLS certificate
+tls_key = "breeze.local.wagyu.icu+3-key.pem"  # Path to the TLS private key
+
+# Or use letsencrypt over http-01 challenge
+# [server.letsencrypt]
+# domains = ["example.com", "www.example.com"]  # List of domains for TLS
+# emails = ["someone@example.com"]  # List of contacts for TLS
+# production = true  # Use production Let's Encrypt servers
+# cert_dir = "./certs"  # Directory to store certificates
+
+
+
+[indexer]
+# Optional: Number of overlapping tokens between chunks (helps preserve context)
+# chunk_overlap = 0.1
+
+[indexer.limits]
+file_size = "5M"  # 5M - files larger than this are skipped
+# Optional: Override the automatic chunk size calculation
+# max_chunk_size = 512  # Maximum tokens per chunk
+
+[indexer.workers]
+small_file = 8   # Number of files to process concurrently
+large_file = 4  # Number of large files to process concurrently
+batch_size = 256 # Number of chunks to collect in a batch betfore sending to the embeddings workers
+
+[embeddings]
+# The selected embedding provider, from the providers defined below
+# provider = "local" | "openai" | "ollama"  | "llamacpp"| "voyage" | "cohere" | "my-provider"
+provider = "voyage"  # Default embedding provider, can be overridden in indexer
+workers = 10  # Number of concurrent embedding requests
+
+# [embeddings.local]
+# model = "ibm-granite/granite-embedding-125m-english"  # Local model for embeddings
+# tokenizer = "characters"
+# Optional: Override if auto-detection fails
+# context_length = 512
+# embedding_dim = 384
+
+
+# [embeddings.openai]
+# model = "text-embedding-ada-002"
+# Optional: API key can also be set via OPENAI_API_KEY env var
+# api_key = "sk-..."
+# Optional: Override defaults
+# api_base = "https://api.openai.com/v1"  # For API-compatible providers
+# context_length = 8191
+# embedding_dim = 1536
+# max_batch_size = 2048  # OpenAI allows large batches
+
+# Rate limiting for the provider
+# requests_per_minute = 3000
+# tokens_per_minute = 1000000
+# max_concurrent_requests = 50
+
+[embeddings.ollama]
+model = "nomic-embed-text"  # Ollama model for embeddings
+api_base = "http://localhost:11434/v1"  # Ollama API base URL
+# Optional: Override if auto-detection fails
+context_length = 8192
+embedding_dim = 768
+max_batch_size = 30  # Local servers might need smaller batches
+tokenizer = "hf:nomic-ai/nomic-embed-text-v1.5"  # huggingface tokenizer for Ollama model
+
+# Rate limiting for the provider
+requests_per_minute = 3000
+tokens_per_minute = 1_000_000
+max_concurrent_requests = 15
+
+[embeddings.llamacpp]
+model = "nomic-embed-text-v2-moe"  # llama.cpp model for embeddings
+api_base = "http://voltaire:8080/v1"  # llama.cpp API base URL
+# Optional: Override if auto-detection fails
+context_length = 4096
+embedding_dim = 768
+max_batch_size = 50  # Local servers might need smaller batches
+tokenizer = "hf:nomic-ai/nomic-embed-text-v2-moe"  # huggingface tokenizer for llama.cpp model
+
+# Rate limiting for the provider
+requests_per_minute = 3000
+tokens_per_minute = 1_000_000
+max_concurrent_requests = 15
+
+[embeddings.voyage]
+# api_key = "${VOYAGE_API_KEY}"  # Set your Voyage API key in the environment
+tier = "tier-1"  # "free" | "tier-1" | "tier-2" | "tier-3" - affects rate limits
+model = "voyage-code-3" # Best for code embeddings
+
+# Optional overrides (Voyage has good auto-detection)
+# context_length = 16000
+# embedding_dim = 1024
+
+# Voyage automatically adjusts batch sizes based on tier:
+# - free: conservative batching
+# - tier1-3: progressively larger batches
+# max_batch_size = 128  # Override only if needed
+
+# [embeddings.cohere]
+# api_base = "https://api.cohere.com/v1"
+# model = "embed-english-v3.0"
+# Optional: API key can also be set via COHERE_API_KEY env var
+# api_key = "..."
+# context_length = 512
+# embedding_dim = 1024
+
+# Rate limiting for the provider
+# requests_per_minute = 3000
+# tokens_per_minute = 1000000
+# max_concurrent_requests = 50
+
+# [embeddings.my-provider]
+# api_base = "https://api.myprovider.com/v1"
+# model = "my-embedding-model"
+# Optional: API key can also be set via MY_PROVIDER_API_KEY env var
+# api_key = "..."
+# context_length = 512
+# embedding_dim = 1024
+
+# Rate limiting for the provider
+# requests_per_minute = 3000
+# tokens_per_minute = 1000000
+# max_concurrent_requests = 50

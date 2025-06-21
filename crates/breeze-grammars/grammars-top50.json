@@ -1,0 +1,230 @@
+{
+  "grammars": [
+    {
+      "name": "actionscript",
+      "repo": "https://github.com/Rileran/tree-sitter-actionscript",
+      "rev": "24919034fc78fdf9bedaac6616b6a60af20ab9b5"
+    },
+    {
+      "name": "ada",
+      "repo": "https://github.com/briot/tree-sitter-ada",
+      "rev": "e8e2515465cc2d7c444498e68bdb9f1d86767f95"
+    },
+    {
+      "name": "apex",
+      "repo": "https://github.com/aheber/tree-sitter-sfapex",
+      "rev": "3597575a429766dd7ecce9f5bb97f6fec4419d5d",
+      "path": "apex"
+    },
+    {
+      "name": "asm",
+      "repo": "https://github.com/rush-rs/tree-sitter-asm",
+      "rev": "04962e15f6b464cf1d75eada59506dc25090e186"
+    },
+    {
+      "name": "bash",
+      "repo": "https://github.com/tree-sitter/tree-sitter-bash",
+      "rev": "0c46d792d54c536be5ff7eb18eb95c70fccdb232"
+    },
+    {
+      "name": "c",
+      "repo": "https://github.com/tree-sitter/tree-sitter-c",
+      "rev": "2a265d69a4caf57108a73ad2ed1e6922dd2f998c"
+    },
+    {
+      "name": "clojure",
+      "repo": "https://github.com/sogaiu/tree-sitter-clojure",
+      "rev": "f4236d4da8aa92bc105d9c118746474c608e6af7"
+    },
+    {
+      "name": "commonlisp",
+      "repo": "https://github.com/theHamsta/tree-sitter-commonlisp",
+      "rev": "32323509b3d9fe96607d151c2da2c9009eb13a2f"
+    },
+    {
+      "name": "cpp",
+      "repo": "https://github.com/tree-sitter/tree-sitter-cpp",
+      "rev": "e5cea0ec884c5c3d2d1e41a741a66ce13da4d945"
+    },
+    {
+      "name": "csharp",
+      "repo": "https://github.com/tree-sitter/tree-sitter-c-sharp",
+      "rev": "dd5e59721a5f8dae34604060833902b882023aaf",
+      "symbol_name": "c_sharp"
+    },
+    {
+      "name": "css",
+      "repo": "https://github.com/tree-sitter/tree-sitter-css",
+      "rev": "6e327db434fec0ee90f006697782e43ec855adf5"
+    },
+    {
+      "name": "dart",
+      "repo": "https://github.com/UserNobody14/tree-sitter-dart",
+      "rev": "80e23c07b64494f7e21090bb3450223ef0b192f4"
+    },
+    {
+      "name": "elixir",
+      "repo": "https://github.com/elixir-lang/tree-sitter-elixir",
+      "rev": "450a8194f5a66561135962cfc8d7545a27b61c4c"
+    },
+    {
+      "name": "erlang",
+      "repo": "https://github.com/WhatsApp/tree-sitter-erlang",
+      "rev": "067d66937c8eeb6651e349f400c1756c2ea90b2e"
+    },
+    {
+      "name": "fortran",
+      "repo": "https://github.com/stadelmanma/tree-sitter-fortran",
+      "rev": "d738334e4a21866a1ab81fb3f27f9b0b2ad2e515"
+    },
+    {
+      "name": "go",
+      "repo": "https://github.com/tree-sitter/tree-sitter-go",
+      "rev": "5e73f476efafe5c768eda19bbe877f188ded6144"
+    },
+    {
+      "name": "groovy",
+      "repo": "https://github.com/Decodetalkers/tree-sitter-groovy",
+      "rev": "a6cf8f80dd3d5246398ad4011c2e2caf995ee17f"
+    },
+    {
+      "name": "haskell",
+      "repo": "https://github.com/tree-sitter/tree-sitter-haskell",
+      "rev": "0975ef72fc3c47b530309ca93937d7d143523628"
+    },
+    {
+      "name": "html",
+      "repo": "https://github.com/tree-sitter/tree-sitter-html",
+      "rev": "cbb91a0ff3621245e890d1c50cc811bffb77a26b"
+    },
+    {
+      "name": "java",
+      "repo": "https://github.com/tree-sitter/tree-sitter-java",
+      "rev": "a7db5227ec40fcfe94489559d8c9bc7c8181e25a"
+    },
+    {
+      "name": "javascript",
+      "repo": "https://github.com/tree-sitter/tree-sitter-javascript",
+      "rev": "6fbef40512dcd9f0a61ce03a4c9ae7597b36ab5c"
+    },
+    {
+      "name": "julia",
+      "repo": "https://github.com/tree-sitter/tree-sitter-julia",
+      "rev": "12a3aede757bc7fbdfb1909507c7a6fddd31df37"
+    },
+    {
+      "name": "kotlin",
+      "repo": "https://github.com/fwcd/tree-sitter-kotlin",
+      "rev": "57fb4560ba8641865bc0baa6b3f413b236112c4c"
+    },
+    {
+      "name": "lua",
+      "repo": "https://github.com/MunifTanjim/tree-sitter-lua",
+      "rev": "db16e76558122e834ee214c8dc755b4a3edc82a9"
+    },
+    {
+      "name": "matlab",
+      "repo": "https://github.com/acristoffers/tree-sitter-matlab",
+      "rev": "bbf1b3f0bd7417c1efb8958fe95be3d0d540207a"
+    },
+    {
+      "name": "objc",
+      "repo": "https://github.com/tree-sitter-grammars/tree-sitter-objc",
+      "rev": "181a81b8f23a2d593e7ab4259981f50122909fda"
+    },
+    {
+      "name": "ocaml",
+      "repo": "https://github.com/tree-sitter/tree-sitter-ocaml",
+      "rev": "91708deb10cb4fe68ab3c50891426b9967dbf35a",
+      "path": "grammars/ocaml"
+    },
+    {
+      "name": "pascal",
+      "repo": "https://github.com/Isopod/tree-sitter-pascal",
+      "rev": "78426d96bde7114af979e314283e45d087603428"
+    },
+    {
+      "name": "perl",
+      "repo": "https://github.com/tree-sitter-perl/tree-sitter-perl",
+      "rev": "ecd90bd8b381bcc7219fed4fe351903630e761c6"
+    },
+    {
+      "name": "php",
+      "repo": "https://github.com/tree-sitter/tree-sitter-php",
+      "rev": "576a56fa7f8b68c91524cdd211eb2ffc43e7bb11",
+      "path": "php"
+    },
+    {
+      "name": "powershell",
+      "repo": "https://github.com/airbus-cert/tree-sitter-powershell",
+      "rev": "66d5e61126989c0aca57ff77d19b2064919b51e1"
+    },
+    {
+      "name": "python",
+      "repo": "https://github.com/tree-sitter/tree-sitter-python",
+      "rev": "710796b8b877a970297106e5bbc8e2afa47f86ec"
+    },
+    {
+      "name": "r",
+      "repo": "https://github.com/r-lib/tree-sitter-r",
+      "rev": "a0d3e3307489c3ca54da8c7b5b4e0c5f5fd6953a"
+    },
+    {
+      "name": "ruby",
+      "repo": "https://github.com/tree-sitter/tree-sitter-ruby",
+      "rev": "89bd7a8e5450cb6a942418a619d30469f259e5d6"
+    },
+    {
+      "name": "rust",
+      "repo": "https://github.com/tree-sitter/tree-sitter-rust",
+      "rev": "377ca9607970a5961201158a7bf620fb39038e14"
+    },
+    {
+      "name": "scala",
+      "repo": "https://github.com/tree-sitter/tree-sitter-scala",
+      "rev": "c1189954df854977c3a52003ca8a247c5f4729ba"
+    },
+    {
+      "name": "scheme",
+      "repo": "https://github.com/6cdh/tree-sitter-scheme",
+      "rev": "63e25a4a84142ae7ee0ee01fe3a32c985ca16745"
+    },
+    {
+      "name": "solidity",
+      "repo": "https://github.com/JoranHonig/tree-sitter-solidity",
+      "rev": "d38dcd0b58b223c43e3f9265914fb3167dc624c6"
+    },
+    {
+      "name": "sql",
+      "repo": "https://github.com/DerekStride/tree-sitter-sql",
+      "rev": "b0bf4ffab7bec3a97bab31833e50b5671206d40c"
+    },
+    {
+      "name": "swift",
+      "repo": "https://github.com/alex-pinkus/tree-sitter-swift",
+      "rev": "f67f569270ce8664a065313f1086a3484a3bec77"
+    },
+    {
+      "name": "tcl",
+      "repo": "https://github.com/lewis6991/tree-sitter-tcl",
+      "rev": "ce03bbd6bb74f902adfaa37a294c34cbe05ef940"
+    },
+    {
+      "name": "tsx",
+      "repo": "https://github.com/tree-sitter/tree-sitter-typescript",
+      "rev": "75b3874edb2dc714fb1fd77a32013d0f8699989f",
+      "path": "tsx"
+    },
+    {
+      "name": "typescript",
+      "repo": "https://github.com/tree-sitter/tree-sitter-typescript",
+      "rev": "75b3874edb2dc714fb1fd77a32013d0f8699989f",
+      "path": "typescript"
+    },
+    {
+      "name": "zig",
+      "repo": "https://github.com/maxxnino/tree-sitter-zig",
+      "rev": "a80a6e9be81b33b182ce6305ae4ea28e29211bd5"
+    }
+  ]
+}

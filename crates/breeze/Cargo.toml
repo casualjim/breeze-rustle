@@ -1,0 +1,62 @@
+[package]
+name = "breeze"
+version = "0.1.0"
+edition = "2024"
+
+[features]
+default = []
+local-embeddings = ["breeze-indexer/local-embeddings"]
+cuda = ["breeze-indexer/cuda"]
+cudnn = ["breeze-indexer/cudnn"]
+flash-attn = ["breeze-indexer/flash-attn"]
+mkl = [
+    "breeze-indexer/mkl",
+]
+accelerate = [
+    "breeze-indexer/accelerate",
+]
+metal = ["breeze-indexer/metal"]
+perfprofiling = [
+    "dep:hyperpolyglot",
+    "dep:ignore",
+    "dep:infer",
+    "breeze-chunkers/perfprofiling",
+] # only used during development to debug performance issues, not generally useful
+
+[dependencies]
+anyhow.workspace = true
+
+# Embedding providers
+breeze-chunkers = { path = "../breeze-chunkers" }
+breeze-indexer = { path = "../breeze-indexer" }
+breeze-server = { path = "../breeze-server" }
+bytes.workspace = true
+chrono.workspace = true
+
+# Configuration and CLI
+clap = { version = "4.5", features = ["derive", "env"] }
+config = "0.15"
+console-subscriber = "0.4.1"
+
+dirs = "6.0"
+
+human-units = { version = "0.3.0", features = ["serde", "si-units"] }
+
+hyperpolyglot = { version = "0.1.7", optional = true }     # Language detection
+ignore = { version = "0.4.23", features = ["simd-accel"], optional = true }
+infer = { version = "0.19.0", optional = true }            # File type detection
+
+num_cpus.workspace = true
+rustls = { version = "0.23.28", features = ["aws-lc-rs", "brotli", "zlib"] }
+
+serde.workspace = true
+
+tokio = { workspace = true }
+tokio-util = { workspace = true }
+toml = "0.8"
+tracing.workspace = true
+tracing-subscriber = { version = "0.3.19", features = ["env-filter", "fmt"] }
+
+[dev-dependencies]
+breeze-indexer = { path = "../breeze-indexer", features = ["testing"] }
+tempfile = "3"

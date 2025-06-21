@@ -2,281 +2,287 @@
 
 ## Overview
 
-`breeze-rustle` is a Rust library with Python bindings that provides semantic code chunking using text-splitter's CodeSplitter with tree-sitter parsers.
+`breeze-rustle` is a high-performance Rust library for semantic code chunking and embedding. It provides:
 
-## Current Implementation Status
+- Semantic code chunking using tree-sitter parsers (163 languages)
+- Smart batching for different embedding providers
+- Streaming pipeline architecture for processing large codebases
+- Python bindings via PyO3
+- Hybrid search combining vector similarity and full-text search
 
-### ✅ Completed Tasks
+## Current Architecture
 
-1. **Removed syntastica dependencies**
-   - Removed syntastica-parsers-git, syntastica-queries, syntastica-core from Cargo.toml
-   - Replaced with direct tree-sitter-* crates for each language
+### Core Components
 
-2. **Created language registry** (`src/languages.rs`)
-   - Maps language names to tree-sitter parsers using LanguageFn type
-   - Supports 16 languages (PHP, Kotlin, SQL excluded due to broken crates)
-   - Includes case-insensitive aliases (e.g., "python" → "Python")
-   - Uses tree-sitter-language crate to handle LanguageFn → Language conversions
+1. **breeze-chunkers**: High-performance chunking library
+   - Leverages text-splitter for core chunking logic
+   - Adds semantic metadata extraction
+   - Supports both code and text chunking
+   - Streaming API with async iterators
 
-3. **Implemented core types** (`src/types.rs`)
-   - `ChunkMetadata`: PyO3 class with node_type, node_name, language, parent_context, scope_path, definitions, references
-   - `SemanticChunk`: PyO3 class with text, byte/line offsets, and metadata
-   - `ChunkError`: Error enum for unsupported languages, parse errors, IO errors, query errors
-   - `ChunkType`: Enum for discriminating between semantic and text chunks
-   - `ProjectChunk`: Class containing file path, chunk type, and chunk data
+2. **breeze-grammars**: Tree-sitter grammar compilation
+   - 163 language support via precompiled binaries
+   - ~5 second build times with precompilation
+   - Cross-platform support
 
-4. **Enhanced chunker implementation** (`src/chunker.rs`)
-   - `InnerChunker` wraps text-splitter's CodeSplitter
-   - `chunk_code()` method creates chunks with rich metadata
-   - `chunk_text()` method for plain text chunking
-   - Both methods now accept owned strings and return streams
-   - Integrates with metadata extractor for AST analysis
+3. **breeze**: Main application with embedding pipeline
+   - Trait-based pipeline architecture
+   - Provider-specific batching and rate limiting
+   - LanceDB integration for storage
 
-5. **Implemented Python bindings** (`src/lib.rs`)
-   - `SemanticChunker` PyO3 class with async support
-   - `chunk_code` and `chunk_text` methods return async iterators (`ChunkStream`)
-   - `walk_project` method returns async iterator (`ProjectWalker`)
-   - Static methods for language support checking
-   - Proper error mapping from Rust to Python exceptions
+4. **breeze-napi**: Node.js bindings
 
-6. **Added metadata extraction** (`src/metadata_extractor.rs`)
-   - Extracts actual node_type from tree-sitter AST nodes
-   - Extracts node_name from identifier nodes (functions, classes, methods, structs)
-   - Builds scope_path by traversing parent nodes
-   - Extracts parent_context (e.g., class name for methods)
-   - Extracts definitions and references within chunks
-   - Special handling for Rust structs and impl blocks
+5. **breeze-py**: Python bindings via PyO3
 
-7. **Text chunking support** (`chunk_text` method)
-   - Added separate method for plain text chunking
-   - Works for any content regardless of language support
-   - Returns chunks with minimal metadata (text_chunk type)
-   - Allows users to handle unsupported languages gracefully
+## Pipeline Architecture
 
-8. **Tokenizer support**
-   - Implemented multiple tokenizers via `TokenizerType` enum:
-     - `TokenizerType.CHARACTERS` - Character-based chunking (default)
-     - `TokenizerType.TIKTOKEN` - OpenAI's cl100k_base tokenizer
-     - `TokenizerType.HUGGINGFACE` - HuggingFace tokenizers with model specification
-   - Clean API with type-safe enum values
-   - Proper error handling for missing HuggingFace model names
+### Current Design
 
-9. **Created Python type stubs** (`python/breeze_rustle/__init__.pyi`)
-   - Complete type annotations for all classes and methods
-   - Includes all enums (`TokenizerType`, `ChunkType`)
-   - Includes all async iterator classes (`ChunkStream`, `ProjectWalker`)
-   - Comprehensive docstrings for IDE support
-
-10. **Comprehensive test suite**
-    - Tests updated for async iterator API
-    - Language registry tests
-    - Type system tests
-    - Basic chunking tests
-    - Metadata extraction tests
-    - Multi-language chunking tests (Python, JavaScript, TypeScript, Rust)
-    - Performance test (1MB file in ~25s - needs optimization)
-    - Scope and definition extraction tests
-    - Text chunking tests
-    - Tokenizer enum tests
-    - Async walker tests
-
-11. **Async generators throughout**
-    - All methods now return async iterators instead of collecting into lists
-    - True streaming architecture for memory efficiency
-    - `chunk_code` returns `ChunkStream`
-    - `chunk_text` returns `ChunkStream`
-    - `walk_project` returns `ProjectWalker`
-
-### 📋 Remaining Tasks
-
-- ~~Performance optimization (current: ~25s for 1MB file, target: <100ms)~~ ✅ Achieved! Processing 337k chunks in 26s
-- ~~Investigate broken language crates (PHP, Kotlin, SQL)~~ ✅ Fixed by using correct versions
-- Add more sophisticated definitions/references extraction
-- ~~Create benchmark test to index entire kuzu project~~ ✅ test_async_walker.py benchmarks full project
-
-## ✅ Project Directory Walker
-
-### Overview
-
-A feature to walk entire project directories and automatically process all files, yielding semantic chunks for supported languages and text chunks for other files. This feature is fully implemented with async iteration support.
-
-### Key Features
-
-- **Automatic file filtering**: Uses `hyperpolyglot` for language detection and `infer` for file type detection
-- **Smart chunking**: Automatically uses semantic chunking for supported languages, falls back to text chunking
-- **Respects .gitignore**: Uses the `ignore` crate for gitignore-aware traversal
-- **Parallel processing**: Configurable parallelism for performance
-- **Discriminated types**: Returns `ProjectChunk` that clearly indicates whether it's semantic or text
-
-### New Types
-
-```python
-class ChunkType(Enum):
-    SEMANTIC = "SEMANTIC"  # Properly parsed code
-    TEXT = "TEXT"          # Plain text chunking
-
-class ProjectChunk:
-    file_path: str         # Path to source file
-    chunk_type: ChunkType  # Type of chunk
-    chunk: SemanticChunk   # The actual chunk data
-    is_semantic: bool      # Helper property
-    is_text: bool          # Helper property
+```text
+                  ┌─> TEI Embedder (local)    ─┐
+                  │                             │
+PathWalker ────>─├─> Voyage Embedder (remote) ├─> DocumentBuilder → RecordBatchConverter → Sink
+                  │                             │
+                  └─> OpenAI Embedder (remote) ─┘
 ```
 
-### Python API
+### Key Design Principles
 
-```python
-# Create a chunker
-chunker = SemanticChunker(
-    max_chunk_size=1500,
-    tokenizer=TokenizerType.CHARACTERS
-)
+1. **Chunking for Embedder Constraints**: Files are chunked to respect embedder token limits
+2. **Semantic Boundaries**: Chunks split at function/class boundaries, preserving code structure
+3. **File-Level Storage**: Despite chunking, we store one embedding per file via aggregation
+4. **Token Optimization**: Store tokens in chunks to avoid double tokenization
+5. **Multiple Providers**: Support local (TEI), Voyage, and OpenAI embedders
+6. **Aggregation Strategy**: Weighted average by token count (pluggable for future strategies)
+7. **Single File Read**: EOF chunks include file content and hash to avoid multiple file reads
 
-# Walk a project - returns an async iterator
-walker = await chunker.walk_project(
-    path="./my_project",
-    max_chunk_size=1500,  # Optional, defaults to chunker setting
-    tokenizer=TokenizerType.CHARACTERS,  # Optional
-    hf_model=None,  # Required if tokenizer is HUGGINGFACE
-    max_parallel=8  # Number of files to process in parallel
-)
+### Key Pipeline Traits
 
-# Iterate over chunks
-async for chunk in walker:
-    # chunk is a ProjectChunk with file_path, chunk_type, and chunk
-    pass
+```rust
+pub trait PathWalker {
+    fn walk(&self, path: &Path) -> BoxStream<ProjectFile>;
+}
+
+pub trait Embedder {
+    fn embed(&self, files: BoxStream<ProjectFile>) -> BoxStream<ProjectFileWithEmbeddings>;
+}
+
+pub trait DocumentBuilder {
+    fn build_documents(&self, files: BoxStream<ProjectFileWithEmbeddings>) -> BoxStream<CodeDocument>;
+}
+
+pub trait RecordBatchConverter {
+    fn convert(&self, documents: BoxStream<CodeDocument>) -> BoxStream<RecordBatch>;
+}
+
+pub trait Sink {
+    fn sink(&self, batches: BoxStream<RecordBatch>) -> BoxStream<()>;
+}
 ```
 
-### Usage Example
+## Embedding System Design
 
-```python
-# Process entire project
-chunker = SemanticChunker()
-walker = await chunker.walk_project("./my_project")
+### Provider Types
 
-async for chunk in walker:
-    if chunk.chunk_type == ChunkType.SEMANTIC:
-        print(f"Code: {chunk.file_path} - {chunk.chunk.metadata.node_type}")
-    else:
-        print(f"Text: {chunk.file_path}")
+1. **Local Provider (TEI)**
+   - Text-embeddings-inference backend
+   - 20+ model architectures (BERT, DistilBERT, JinaBERT, MPNet, etc.)
+   - Hardware acceleration (CUDA, Metal, MKL)
+   - Token optimization via pre-tokenized input
+
+2. **Remote Providers** (via async_openai)
+   - OpenAI: Standard limits, text-embedding-3-small/large
+   - Voyage: High limits (3M tokens/min), voyage-code-2
+   - Built-in retry logic and error handling
+
+### Processing Strategy
+
+| Provider | Token Handling | Optimization | Hardware |
+|----------|---------------|--------------|----------|
+| TEI      | Pre-tokenized | Flash attention | CUDA/Metal/CPU |
+| Voyage   | Text chunks   | Large batches | Cloud API |
+| OpenAI   | Text chunks   | Standard batches | Cloud API |
+
+### Key Improvements in Progress
+
+1. **Token storage in chunks**: Store token IDs in chunks to avoid double tokenization
+2. **TEI integration**: Replace custom local embedder with text-embeddings-inference
+3. **Multiple provider support**: Local (TEI), Voyage, and OpenAI embedders
+4. **DocumentBuilder pattern**: Separate chunk embedding from file aggregation
+5. **Tokenizer compatibility**: Ensure chunking and embedding use same tokenizer
+
+## Code Document Model
+
+```rust
+pub struct CodeDocument {
+    pub id: String,
+    pub file_path: String,
+    pub content: String,
+    pub content_hash: [u8; 32],
+    pub content_embedding: Vec<f32>,
+    pub file_size: u64,
+    pub last_modified: chrono::NaiveDateTime,
+    pub indexed_at: chrono::NaiveDateTime,
+}
 ```
 
-## Key Technical Decisions
+## Configuration System
 
-### Language Support
+```toml
+[repository]
+path = "."
+max_file_size = 5242880  # 5MB
+exclude_patterns = ["*.git*", "node_modules", "target"]
 
-- Using LanguageFn type from tree-sitter-language crate
-- Direct tree-sitter-* crate dependencies instead of syntastica
-- Currently supporting: Python, JavaScript, TypeScript, TSX, Java, C++, C, C#, Go, Rust, Ruby, Swift, Scala, Shell/Bash, R
-- Removed: PHP (unclear API), Kotlin (compilation issues), SQL (compilation issues)
+[embedding]
+provider = { type = "voyage", model = "voyage-code-2" }
 
-### Architecture
+[embedding.chunking]
+max_chunk_size = 2048
+chunk_overlap = 0.1
+use_semantic_chunking = true
 
-- text-splitter handles the core chunking logic
-- We add metadata extraction on top
-- Using pyo3-async-runtimes (not pyo3-asyncio which is unmaintained)
-- Async Python API for better performance
+[embedding.processing]
+max_concurrent_requests = 10
+retry_attempts = 3
+batch_timeout_seconds = 5
 
-### Dependencies
+[storage]
+database_path = "./embeddings.db"
+table_name = "code_embeddings"
 
-Key dependencies in Cargo.toml:
-
-- text-splitter 0.27 with code, tiktoken-rs, tokenizers features
-- tree-sitter 0.25 and individual language crates
-- pyo3 0.25.0 with extension-module, abi3-py39
-- pyo3-async-runtimes 0.25.0 with tokio
-- tree-sitter-language 0.1.5 (critical for LanguageFn support)
-
-## Common Issues & Solutions
-
-1. **Tree-sitter version conflicts**: Use specific versions in Cargo.toml
-2. **LanguageFn vs Language**: Use tree-sitter-language crate and convert with `.into()`
-3. **Language API differences**: Some use LANGUAGE constants, others use language() functions
-
-## Build & Test Commands
-
-```bash
-# Build Python package
-maturin develop --release
-
-# Run Rust tests
-cargo nextest run
-
-# Check for issues
-cargo check
-cargo clippy
+[processing]
+max_parallel_files = 16
+progress_report_interval = 100
 ```
 
-## API Usage Examples
+## Implementation Status
 
-### Basic Usage
+### ✅ Completed
 
-```python
-from breeze_rustle import SemanticChunker, TokenizerType, ChunkType
-import asyncio
+- Core chunking with breeze-chunkers
+- 163 language support via breeze-grammars
+- Python bindings with async support
+- Project directory walker
+- Basic pipeline traits
+- Configuration system
+- PassthroughBatcher implementation
+- **LanceDB sink implementation** ✨
+  - Arc<RwLock<Table>> based design
+  - Merge insert for upsert behavior
+  - Streaming batch processing
+  - Full test coverage
+- **EOF chunks with content and hash** ✨
+  - Single file read optimization
+  - Content and Blake3 hash in EOF chunks
+  - Updated Python and Node.js bindings
+  - Full test coverage
+- **Comprehensive Indexer Testing** ✨
+  - Mock implementations for TEIEmbedder, Table, and walk_project
+  - Pipeline error propagation and cancellation
+  - Channel backpressure and bounded capacity
+  - Batch processing logic (accumulation, flushing, EOF handling)
+  - Pipeline resilience (stage panics, receiver drops)
+  - Stats tracking accuracy
+  - Edge cases (empty input, EOF-only files)
+  - Real embedding model integration (sentence-transformers/all-MiniLM-L6-v2)
+  - Performance profiling (identified chunking as bottleneck, not parsing)
+- **Hybrid Search Implementation** ✨
+  - Integrated vector search and full-text search using LanceDB
+  - FTS index creation added to CodeDocument::ensure_table
+  - Uses RRF (Reciprocal Rank Fusion) reranking with k=60
+  - Single query builder with full_text_search() and nearest_to()
+  - Proper RecordBatch stream processing
+  - CLI search command integration in main.rs
+  - SearchResult struct with full metadata (id, content_hash, timestamps)
+  - Comprehensive test suite for search functionality
+  - Score-based result formatting in CLI
+- **Token Storage in Chunks** ✨
+  - Added `tokens: Option<Vec<u32>>` to SemanticChunk
+  - Chunker populates tokens during chunking when using tokenizers
+  - Supports character, tiktoken, and HuggingFace tokenizers
+- **TEI Embedder Implementation** ✨
+  - Full text-embeddings-inference backend integration
+  - Supports pre-tokenized input for performance
+  - Hardware acceleration (CUDA/Metal/CPU auto-detection)
+  - Batch processing with configurable limits
+  - Proper error handling and type safety
 
-async def main():
-    # Default character-based chunking
-    chunker = SemanticChunker(max_chunk_size=1500)
-    
-    # With tiktoken tokenizer
-    chunker = SemanticChunker(tokenizer=TokenizerType.TIKTOKEN)
-    
-    # With HuggingFace tokenizer
-    chunker = SemanticChunker(
-        tokenizer=TokenizerType.HUGGINGFACE,
-        hf_model="bert-base-uncased"
-    )
-    
-    # Check language support
-    if SemanticChunker.is_language_supported("Python"):
-        # Get an async iterator for code chunks
-        chunk_stream = await chunker.chunk_code(content, "Python", "example.py")
-        
-        # Iterate over chunks
-        async for chunk in chunk_stream:
-            print(f"Lines {chunk.start_line}-{chunk.end_line}: {chunk.metadata.node_type}")
-    else:
-        # Use text chunking for unsupported languages
-        text_stream = await chunker.chunk_text(content, "example.txt")
-        
-        async for chunk in text_stream:
-            print(f"Text chunk: {len(chunk.text)} chars")
+### 🚧 In Progress
 
-asyncio.run(main())
-```
+- **Remote embedders** - Implement Voyage and OpenAI providers with rate limiting
+- **CLI application** - Create the main breeze executable with commands for indexing
+- **Configuration loading** - Wire up TOML config to select providers and models
 
-### Project Walking Example
+### 📋 TODO
 
-```python
-async def index_project(project_path: str):
-    chunker = SemanticChunker(tokenizer=TokenizerType.TIKTOKEN)
-    walker = await chunker.walk_project(project_path, max_parallel=16)
-    
-    async for project_chunk in walker:
-        if project_chunk.chunk_type == ChunkType.SEMANTIC:
-            # This is parsed code with full metadata
-            print(f"Code: {project_chunk.chunk.metadata.node_type} in {project_chunk.file_path}")
-            # Generate embeddings, store in vector DB, etc.
-        else:
-            # This is text content
-            print(f"Text: {project_chunk.file_path}")
-```
+- **Documentation** - User guide, API docs, and examples
+- **Python package publishing** - PyPI release workflow
+- **Node.js package publishing** - npm release workflow
+- **Integration tests** - End-to-end tests with real models and databases
+- **Error recovery** - Retry logic and circuit breakers for remote providers
 
-## Performance Results
+## Performance Benchmarks
 
-With 512-character chunks on the kuzu project:
+Current performance (kuzu project):
 
 - **337,327 chunks** from 4,457 files
 - **26.2 seconds** total time
 - **12,883 chunks/second** throughput
-- 27.7% semantic chunks, 72.3% text chunks
-- Files include: .h (32.7%), .cpp (25.2%), .test (11.9%), .csv (7.8%)
 
-## Next Steps
+## Hybrid Search Design
 
-1. ~~Write comprehensive Python acceptance tests~~ ✅ Done
-2. ~~Optimize performance~~ ✅ Achieved 12,883 chunks/s
-3. Set up CI/CD with GitHub Actions
-4. Package and publish to PyPI using maturin
-5. Add streaming file reader for files >5MB (currently skipped)
+### Overview
+
+Implement hybrid search that combines vector similarity search and full-text search (FTS) using LanceDB's capabilities, with results combined using Reciprocal Rank Fusion (RRF).
+
+### Key Components
+
+1. **HybridSearcher**: Main search implementation that orchestrates both search types
+2. **Vector Search**: Uses our existing embeddings with LanceDB's vector search
+3. **Full-Text Search**: Uses LanceDB's built-in FTS capabilities
+4. **RRF Reranking**: Combines results using reciprocal rank fusion (k=60)
+
+### Search Flow
+
+1. Execute FTS query with 2x requested limit
+2. Execute vector search with 2x requested limit
+3. Normalize scores from both searches to [0,1] range
+4. Apply RRF formula: `score = 1 / (rank + k)` where k=60
+5. Merge results, removing duplicates
+6. Sort by combined RRF score
+7. Return top N results
+
+### Technical Details
+
+- FTS index on `content` field for text search
+- Vector search on `content_embedding` field
+- Score normalization using min-max scaling
+- Configurable result limit and display modes
+- Error handling for missing indexes
+
+## Key Technical Decisions
+
+1. **Streaming-first**: All operations use async streams
+2. **Provider-specific optimization**: Different strategies for different providers
+3. **Token counting**: Essential for API optimization
+4. **Leverage text-splitter**: Don't reinvent chunking logic
+5. **Arrow/LanceDB**: Efficient storage with vector search
+6. **Hybrid search**: Combine vector and FTS for better results
+
+## Development Commands
+
+```bash
+# Build and install Python package
+maturin develop --release
+
+# Run tests
+cargo test
+pytest tests/
+
+# Build all grammars
+./tools/build-grammars --all-platforms
+
+# Run benchmarks
+cargo bench
+```
