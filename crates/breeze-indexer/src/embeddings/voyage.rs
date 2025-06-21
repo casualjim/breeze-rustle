@@ -23,7 +23,7 @@ impl VoyageEmbeddingProvider {
     config: &VoyageConfig,
     _worker_count: usize,
     _chunk_size: usize,
-  ) -> Result<Self, Box<dyn std::error::Error>> {
+  ) -> super::EmbeddingResult<Self> {
     let client_config = VoyageClientConfig::new(config.api_key.clone(), config.tier, config.model);
 
     let client = new_client(client_config)?;
@@ -32,7 +32,7 @@ impl VoyageEmbeddingProvider {
     let repo_id = format!("voyageai/{}", config.model.api_name());
     tracing::debug!("Loading tokenizer for Voyage model from: {}", repo_id);
     let tokenizer = Tokenizer::from_pretrained(&repo_id, None)
-      .map_err(|e| format!("Failed to load tokenizer for {}: {}", repo_id, e))?;
+      .map_err(|e| super::EmbeddingError::TokenizationError(format!("Failed to load tokenizer for {}: {}", repo_id, e)))?;
     tracing::info!("Successfully loaded Voyage tokenizer");
 
     Ok(Self {
@@ -48,7 +48,7 @@ impl EmbeddingProvider for VoyageEmbeddingProvider {
   async fn embed(
     &self,
     inputs: &[super::EmbeddingInput<'_>],
-  ) -> Result<Vec<Vec<f32>>, Box<dyn std::error::Error + Send + Sync>> {
+  ) -> super::EmbeddingResult<Vec<Vec<f32>>> {
     // Prepare request
     let request = EmbeddingRequest {
       input: inputs.iter().map(|input| input.text.to_string()).collect(),
@@ -84,7 +84,7 @@ impl EmbeddingProvider for VoyageEmbeddingProvider {
       .client
       .embed(request, estimated_tokens)
       .await
-      .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?;
+      .map_err(|e| super::EmbeddingError::ApiError(e.to_string()))?;
 
     // Log usage information
     tracing::debug!(

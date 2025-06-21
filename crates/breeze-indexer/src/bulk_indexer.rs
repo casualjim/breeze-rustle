@@ -17,6 +17,7 @@ use crate::embeddings::EmbeddingProvider;
 use crate::models::CodeDocument;
 use crate::pipeline::{ChunkBatch, EmbeddedChunk, EmbeddedChunkWithFile, FileAccumulator};
 use crate::sinks::lancedb_sink::LanceDbSink;
+use crate::IndexerError;
 
 pub struct BulkIndexer {
   config: Arc<Config>,
@@ -44,7 +45,7 @@ impl BulkIndexer {
     &self,
     path: &Path,
     cancel_token: Option<CancellationToken>,
-  ) -> Result<usize, Box<dyn std::error::Error + Send + Sync>> {
+  ) -> Result<usize, IndexerError> {
     let start_time = Instant::now();
     info!(path = %path.display(), "Starting channel-based indexing");
 
@@ -95,7 +96,7 @@ impl BulkIndexer {
     + 'static,
     max_batch_size: usize,
     external_cancel_token: Option<CancellationToken>,
-  ) -> Result<usize, Box<dyn std::error::Error + Send + Sync>> {
+  ) -> Result<usize, IndexerError> {
     let embedding_dim = self.embedding_dim;
 
     // Create channels with bounded capacity for backpressure
@@ -157,25 +158,25 @@ impl BulkIndexer {
     // Check all results and report errors, cancelling other tasks on first error
     if let Err(e) = walk_result {
       cancel_token.cancel();
-      return Err(format!("Stream processor task failed: {}", e).into());
+      return Err(IndexerError::Task(format!("Stream processor task failed: {}", e)));
     }
 
     // Check embedding worker results
     for (i, result) in embed_results.iter().enumerate() {
       if let Err(e) = result {
         cancel_token.cancel();
-        return Err(format!("Embedder task {} failed: {}", i, e).into());
+        return Err(IndexerError::Task(format!("Embedder task {} failed: {}", i, e)));
       }
     }
 
     if let Err(e) = doc_result {
       cancel_token.cancel();
-      return Err(format!("Document builder task failed: {}", e).into());
+      return Err(IndexerError::Task(format!("Document builder task failed: {}", e)));
     }
 
     let documents_written = sink_result
-      .map_err(|e| format!("Sink task panicked: {}", e))?
-      .map_err(|e| format!("Sink task failed: {}", e))?;
+      .map_err(|e| IndexerError::Task(format!("Sink task panicked: {}", e)))?
+      .map_err(|e| IndexerError::Task(format!("Sink task failed: {}", e)))?;
 
     // Report results
     info!(
@@ -312,7 +313,7 @@ impl BulkIndexer {
     doc_rx: mpsc::Receiver<CodeDocument>,
     stats: IndexingStats,
     embedding_dim: usize,
-  ) -> tokio::task::JoinHandle<Result<usize, Box<dyn std::error::Error + Send + Sync>>> {
+  ) -> tokio::task::JoinHandle<Result<usize, IndexerError>> {
     let table = self.table.clone();
     tokio::spawn(sink_task(doc_rx, table, embedding_dim, stats))
   }
@@ -1091,7 +1092,7 @@ async fn sink_task(
   table: Arc<RwLock<Table>>,
   embedding_dim: usize,
   _stats: IndexingStats,
-) -> Result<usize, Box<dyn std::error::Error + Send + Sync>> {
+) -> Result<usize, IndexerError> {
   let _guard = TaskGuard::new("Sink");
   let converter = BufferedRecordBatchConverter::<CodeDocument>::default()
     .with_schema(Arc::new(CodeDocument::schema(embedding_dim)));
@@ -1210,7 +1211,7 @@ mod tests {
     async fn embed(
       &self,
       inputs: &[crate::embeddings::EmbeddingInput<'_>],
-    ) -> Result<Vec<Vec<f32>>, Box<dyn std::error::Error + Send + Sync>> {
+    ) -> crate::embeddings::EmbeddingResult<Vec<Vec<f32>>> {
       Ok(
         inputs
           .iter()

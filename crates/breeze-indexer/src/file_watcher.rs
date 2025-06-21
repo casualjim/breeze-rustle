@@ -10,7 +10,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::{error, info};
 use uuid::Uuid;
 
-use crate::task_manager::TaskManager;
+use crate::{task_manager::TaskManager, IndexerError};
 
 /// Manages file watching for a project
 pub struct ProjectWatcher {
@@ -26,12 +26,13 @@ impl ProjectWatcher {
     project_path: P,
     task_manager: Arc<TaskManager>,
     max_file_size: Option<u64>,
-  ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
+  ) -> Result<Self, IndexerError> {
     let project_path = project_path.as_ref();
     let project_path_buf = project_path.to_path_buf();
 
     // Create candidate matcher
-    let candidate_matcher = Arc::new(CandidateMatcher::new(project_path, max_file_size)?);
+    let candidate_matcher = Arc::new(CandidateMatcher::new(project_path, max_file_size)
+      .map_err(|e| IndexerError::Config(e.to_string()))?);
     let candidate_matcher_clone = candidate_matcher.clone();
 
     // Clone references for the event handler

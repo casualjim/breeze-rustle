@@ -40,7 +40,7 @@ enum TokenizerWrapper {
 
 impl TokenizerWrapper {
   /// Count tokens in text
-  fn count_tokens(&self, text: &str) -> Result<usize, Box<dyn std::error::Error + Send + Sync>> {
+  fn count_tokens(&self, text: &str) -> Result<usize, tokenizers::Error> {
     match self {
       Self::Tiktoken(encoder) => Ok(encoder.encode_ordinary(text).len()),
       Self::HuggingFace(tokenizer) => tokenizer.encode(text, false).map(|encoding| encoding.len()),
@@ -59,7 +59,7 @@ pub struct OpenAILikeEmbeddingProvider {
 }
 
 impl OpenAILikeEmbeddingProvider {
-  pub async fn new(config: &OpenAILikeConfig) -> Result<Self, Box<dyn std::error::Error>> {
+  pub async fn new(config: &OpenAILikeConfig) -> super::EmbeddingResult<Self> {
     // Create API client configuration
     let api_config = ApiClientConfig {
       base_url: config.api_base.clone(),
@@ -81,7 +81,7 @@ impl OpenAILikeEmbeddingProvider {
           "p50k_base" => p50k_base()?,
           "r50k_base" => r50k_base()?,
           "o200k_base" => o200k_base()?,
-          _ => return Err(format!("Unknown tiktoken encoding: {}", encoding).into()),
+          _ => return Err(super::EmbeddingError::InvalidConfig(format!("Unknown tiktoken encoding: {}", encoding))),
         };
         TokenizerWrapper::Tiktoken(encoder)
       }
@@ -90,14 +90,14 @@ impl OpenAILikeEmbeddingProvider {
       ),
       breeze_chunkers::Tokenizer::HuggingFace(model_id) => {
         let tokenizer = Tokenizer::from_pretrained(model_id, None)
-          .map_err(|e| format!("Failed to load tokenizer {}: {}", model_id, e))?;
+          .map_err(|e| super::EmbeddingError::ModelLoadFailed(format!("Failed to load tokenizer {}: {}", model_id, e)))?;
         TokenizerWrapper::HuggingFace(Arc::new(tokenizer))
       }
       breeze_chunkers::Tokenizer::PreloadedHuggingFace(tokenizer) => {
         TokenizerWrapper::HuggingFace(tokenizer.clone())
       }
       breeze_chunkers::Tokenizer::Characters => {
-        return Err("Character tokenizer not supported for embeddings API".into());
+        return Err(super::EmbeddingError::InvalidConfig("Character tokenizer not supported for embeddings API".to_string()));
       }
     };
 
@@ -117,7 +117,7 @@ impl EmbeddingProvider for OpenAILikeEmbeddingProvider {
   async fn embed(
     &self,
     inputs: &[EmbeddingInput<'_>],
-  ) -> Result<Vec<Vec<f32>>, Box<dyn std::error::Error + Send + Sync>> {
+  ) -> super::EmbeddingResult<Vec<Vec<f32>>> {
     let request = EmbeddingRequest {
       input: inputs.iter().map(|input| input.text.to_string()).collect(),
       model: self.model.clone(),
@@ -150,7 +150,8 @@ impl EmbeddingProvider for OpenAILikeEmbeddingProvider {
     let embedding_response: EmbeddingResponse = self
       .client
       .post_json("/embeddings", &request, estimated_tokens)
-      .await?;
+      .await
+      .map_err(|e| super::EmbeddingError::ApiError(e.to_string()))?;
 
     // Extract embeddings in order
     let mut embeddings = vec![vec![]; embedding_response.data.len()];

@@ -1,14 +1,14 @@
 #[cfg(feature = "local-embeddings")]
 use super::local::LocalEmbeddingProvider;
 use super::{
-  EmbeddingProvider, openailike::OpenAILikeEmbeddingProvider, voyage::VoyageEmbeddingProvider,
+  EmbeddingError, EmbeddingResult, EmbeddingProvider, openailike::OpenAILikeEmbeddingProvider, voyage::VoyageEmbeddingProvider,
 };
 use crate::config::{Config, EmbeddingProvider as EmbeddingProviderType};
 
 /// Create an embedding provider based on configuration
 pub async fn create_embedding_provider(
   config: &Config,
-) -> Result<Box<dyn EmbeddingProvider>, Box<dyn std::error::Error>> {
+) -> EmbeddingResult<Box<dyn EmbeddingProvider>> {
   match &config.embedding_provider {
     EmbeddingProviderType::Local => {
       #[cfg(feature = "local-embeddings")]
@@ -18,18 +18,18 @@ pub async fn create_embedding_provider(
       }
       #[cfg(not(feature = "local-embeddings"))]
       {
-        Err("Local embeddings support not enabled. Enable the 'local-embeddings' feature to use local embedding models.".into())
+        Err(EmbeddingError::ProviderNotAvailable("Local embeddings support not enabled. Enable the 'local-embeddings' feature to use local embedding models.".to_string()))
       }
     }
     EmbeddingProviderType::Voyage => {
       let voyage_config = config
         .voyage
         .as_ref()
-        .ok_or("Voyage configuration required for Voyage provider")?;
+        .ok_or_else(|| EmbeddingError::InvalidConfig("Voyage configuration required for Voyage provider".to_string()))?;
 
       // Check that API key is provided
       if voyage_config.api_key.is_empty() {
-        return Err("Voyage API key is required. Set BREEZE_VOYAGE_API_KEY or VOYAGE_API_KEY environment variable".into());
+        return Err(EmbeddingError::InvalidConfig("Voyage API key is required. Set BREEZE_VOYAGE_API_KEY or VOYAGE_API_KEY environment variable".to_string()));
       }
 
       let chunk_size = config.optimal_chunk_size();
@@ -39,10 +39,10 @@ pub async fn create_embedding_provider(
     }
     EmbeddingProviderType::OpenAILike(provider_name) => {
       let openai_config = config.openai_providers.get(provider_name).ok_or_else(|| {
-        format!(
+        EmbeddingError::InvalidConfig(format!(
           "OpenAI provider '{}' not found in openai_providers",
           provider_name
-        )
+        ))
       })?;
 
       let provider = OpenAILikeEmbeddingProvider::new(openai_config).await?;

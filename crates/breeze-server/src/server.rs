@@ -151,7 +151,7 @@ pub async fn run(
   // let cors_origin: HeaderValue = (&args.cors_origin).parse()?;
 
   // Create MCP HTTP service
-  // let mcp_http_service = crate::mcp::create_http_service(state.indexer.clone());
+  let mcp_http_service = crate::mcp::create_http_service(state.indexer.clone());
 
   // Create MCP SSE server and router
   // let bind_addr = SocketAddr::from((Ipv4Addr::UNSPECIFIED, http_port));
@@ -164,7 +164,7 @@ pub async fn run(
 
   let app = Router::new()
     .merge(api_routes)
-    // .nest_service("/mcp", mcp_http_service)
+    .nest_service("/mcp", mcp_http_service)
     .route("/api/openapi.json", get(serve_openapi))
     .route(
       "/api/docs",

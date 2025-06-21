@@ -68,5 +68,7 @@ uuid = { workspace = true, features = ["serde"] }
 schemars = { version = "0.9", features = ["uuid1", "chrono04"] }
 aide = { version = "0.15", features = ["axum-json", "axum-query", "axum-matched-path", "axum-tokio", "axum-extra-query", "axum-extra-json-deserializer", "redoc", "scalar"] }
 
+rmcp = { git= "https://github.com/casualjim/rust-sdk", branch = "update-schemars", features = ["transport-worker", "transport-streamable-http-server", "transport-streamable-http-server-session"]}
+
 [dev-dependencies]
 axum-test = "17"

@@ -12,7 +12,7 @@ use uuid::Uuid;
 use crate::{
   Config, SearchResult,
   bulk_indexer::BulkIndexer,
-  embeddings::{EmbeddingProvider, factory::create_embedding_provider},
+  embeddings::{EmbeddingError, EmbeddingProvider, factory::create_embedding_provider},
   file_watcher::ProjectWatcher,
   hybrid_search,
   models::{CodeDocument, FileChange, FileOperation, Project},
@@ -30,7 +30,7 @@ pub enum IndexerError {
   Storage(#[from] lancedb::Error),
 
   #[error("Embedding provider error")]
-  Embedding(#[from] Box<dyn std::error::Error + Send + Sync>),
+  Embedding(#[from] EmbeddingError),
 
   #[error("IO error")]
   Io(#[from] std::io::Error),
@@ -43,6 +43,24 @@ pub enum IndexerError {
 
   #[error("File outside project directory")]
   FileOutsideProject { file: String, project_dir: String },
+
+  #[error("Search error: {0}")]
+  Search(String),
+
+  #[error("Path must be absolute: {0}")]
+  PathNotAbsolute(String),
+
+  #[error("Arrow conversion error")]
+  Arrow(#[from] arrow::error::ArrowError),
+
+  #[error("Task execution error: {0}")]
+  Task(String),
+
+  #[error("Serialization error")]
+  Serialization(#[from] serde_json::Error),
+
+  #[error("File watcher error")]
+  FileWatcher(#[from] notify::Error),
 }
 
 /// Main public interface for indexing and searching code
@@ -63,9 +81,7 @@ impl Indexer {
     shutdown_token: CancellationToken,
   ) -> Result<Self, IndexerError> {
     // Initialize embedding provider
-    let embedding_provider = create_embedding_provider(&config)
-      .await
-      .map_err(|e| IndexerError::Embedding(Box::new(e)))?;
+    let embedding_provider = create_embedding_provider(&config).await?;
 
     let embedding_dim = embedding_provider.embedding_dim();
 
@@ -81,15 +97,12 @@ impl Indexer {
     .await?;
 
     // Ensure tables exist
-    let table = CodeDocument::ensure_table(&connection, "code_embeddings", embedding_dim)
-      .await?;
+    let table = CodeDocument::ensure_table(&connection, "code_embeddings", embedding_dim).await?;
 
-    let task_table = crate::models::IndexTask::ensure_table(&connection, "index_tasks")
-      .await?;
+    let task_table = crate::models::IndexTask::ensure_table(&connection, "index_tasks").await?;
 
     // Ensure projects table exists
-    let project_table = Project::ensure_table(&connection, "projects")
-      .await?;
+    let project_table = Project::ensure_table(&connection, "projects").await?;
 
     let project_table = Arc::new(RwLock::new(project_table));
     let task_table = Arc::new(RwLock::new(task_table));
@@ -129,23 +142,18 @@ impl Indexer {
   }
 
   /// Index a single file by submitting a partial index task
-  pub async fn index_file(
-    &self,
-    project_id: Uuid,
-    file_path: &Path,
-  ) -> Result<Uuid, IndexerError> {
+  pub async fn index_file(&self, project_id: Uuid, file_path: &Path) -> Result<Uuid, IndexerError> {
     info!(path = %file_path.display(), project_id = %project_id, "Submitting single file index task");
 
     // Get the project to validate the file belongs to it
     let project = self
       .project_manager
       .get_project(project_id)
-      .await
-      .map_err(|e| IndexerError::Embedding(e))?
+      .await?
       .ok_or(IndexerError::ProjectNotFound(project_id))?;
 
     let project_dir = Path::new(&project.directory);
-    
+
     // Canonicalize paths to resolve .. and symlinks
     let canonical_project = project_dir.canonicalize()?;
     let canonical_file = file_path.canonicalize()?;
@@ -159,7 +167,6 @@ impl Indexer {
     }
 
     // Check that file exists is handled by canonicalize() which returns an error if file doesn't exist
-
 
     let mut changes = BTreeSet::new();
     let operation = FileOperation::Update;
@@ -177,8 +184,7 @@ impl Indexer {
         &canonical_project,
         crate::models::TaskType::PartialUpdate { changes },
       )
-      .await
-      .map_err(|e| IndexerError::Embedding(e))?;
+      .await?;
 
     info!(task_id = %task_id, path = %file_path.display(), "Submitted partial index task for file");
     Ok(task_id)
@@ -190,19 +196,13 @@ impl Indexer {
     let project = self
       .project_manager
       .get_project(project_id)
-      .await
-      .map_err(|e| IndexerError::Embedding(e))?
+      .await?
       .ok_or(IndexerError::ProjectNotFound(project_id))?;
 
     info!(project_id = %project_id, path = %project.directory, "Submitting project indexing task");
 
     // Check if project already has an active task
-    if self
-      .task_manager
-      .has_active_task(project_id)
-      .await
-      .map_err(|e| IndexerError::Embedding(e))?
-    {
+    if self.task_manager.has_active_task(project_id).await? {
       return Err(IndexerError::Config(
         "Project already has an active indexing task".to_string(),
       ));
@@ -211,8 +211,7 @@ impl Indexer {
     let task_id = self
       .task_manager
       .submit_task(project_id, Path::new(&project.directory))
-      .await
-      .map_err(|e| IndexerError::Embedding(e))?;
+      .await?;
 
     // Start file watcher for the project
     if let Err(e) = self.start_file_watcher(project_id).await {
@@ -235,8 +234,7 @@ impl Indexer {
     let project = self
       .project_manager
       .get_project(project_id)
-      .await
-      .map_err(|e| IndexerError::Embedding(e))?
+      .await?
       .ok_or(IndexerError::ProjectNotFound(project_id))?;
 
     info!(project_id = %project_id, path = %project.directory, "Starting file watcher");
@@ -268,11 +266,7 @@ impl Indexer {
 
   /// Start file watchers for all existing projects
   pub async fn start_all_project_watchers(&self) -> Result<(), IndexerError> {
-    let projects = self
-      .project_manager
-      .list_projects()
-      .await
-      .map_err(|e| IndexerError::Embedding(e))?;
+    let projects = self.project_manager.list_projects().await?;
 
     info!("Starting file watchers for {} projects", projects.len());
 
@@ -301,7 +295,7 @@ impl Indexer {
       limit,
     )
     .await
-    .map_err(|e| IndexerError::Embedding(Box::new(e)))
+    .map_err(|e| IndexerError::Search(e.to_string()))
   }
 
   /// Find a document by file path

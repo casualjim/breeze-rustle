@@ -702,78 +702,112 @@ impl IndexTask {
   pub fn from_record_batch(
     batch: &arrow::record_batch::RecordBatch,
     row: usize,
-  ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
+  ) -> Result<Self, lancedb::Error> {
     use arrow::array::*;
 
     let id_array = batch
       .column_by_name("id")
       .and_then(|col| col.as_any().downcast_ref::<StringArray>())
-      .ok_or("Invalid id column")?;
+      .ok_or_else(|| lancedb::Error::Runtime {
+        message: "Invalid id column".to_string(),
+      })?;
     
     let id_str = id_array.value(row);
-    let id = Uuid::parse_str(id_str)?;
+    let id = Uuid::parse_str(id_str).map_err(|e| lancedb::Error::Runtime {
+      message: format!("Invalid UUID in id column: {}", e),
+    })?;
 
     let project_id_array = batch
       .column_by_name("project_id")
       .and_then(|col| col.as_any().downcast_ref::<StringArray>())
-      .ok_or("Invalid project_id column")?;
+      .ok_or_else(|| lancedb::Error::Runtime {
+        message: "Invalid project_id column".to_string(),
+      })?;
 
     let project_id_str = project_id_array.value(row);
-    let project_id = Uuid::parse_str(project_id_str)?;
+    let project_id = Uuid::parse_str(project_id_str).map_err(|e| lancedb::Error::Runtime {
+      message: format!("Invalid UUID in project_id column: {}", e),
+    })?;
 
     let path_array = batch
       .column_by_name("path")
       .and_then(|col| col.as_any().downcast_ref::<StringArray>())
-      .ok_or("Invalid path column")?;
+      .ok_or_else(|| lancedb::Error::Runtime {
+        message: "Invalid path column".to_string(),
+      })?;
 
     let task_type_array = batch
       .column_by_name("task_type")
       .and_then(|col| col.as_any().downcast_ref::<StringArray>())
-      .ok_or("Invalid task_type column")?;
+      .ok_or_else(|| lancedb::Error::Runtime {
+        message: "Invalid task_type column".to_string(),
+      })?;
     
-    let task_type: TaskType = serde_json::from_str(task_type_array.value(row))?;
+    let task_type: TaskType = serde_json::from_str(task_type_array.value(row))
+      .map_err(|e| lancedb::Error::Runtime {
+        message: format!("Failed to parse task_type JSON: {}", e),
+      })?;
 
     let status_array = batch
       .column_by_name("status")
       .and_then(|col| col.as_any().downcast_ref::<StringArray>())
-      .ok_or("Invalid status column")?;
+      .ok_or_else(|| lancedb::Error::Runtime {
+        message: "Invalid status column".to_string(),
+      })?;
 
-    let status = status_array.value(row).parse()?;
+    let status = status_array.value(row).parse()
+      .map_err(|_| lancedb::Error::Runtime {
+        message: format!("Invalid status value: {}", status_array.value(row)),
+      })?;
 
     let created_at_array = batch
       .column_by_name("created_at")
       .and_then(|col| col.as_any().downcast_ref::<TimestampMicrosecondArray>())
-      .ok_or("Invalid created_at column")?;
+      .ok_or_else(|| lancedb::Error::Runtime {
+        message: "Invalid created_at column".to_string(),
+      })?;
 
     let started_at_array = batch
       .column_by_name("started_at")
       .and_then(|col| col.as_any().downcast_ref::<TimestampMicrosecondArray>())
-      .ok_or("Invalid started_at column")?;
+      .ok_or_else(|| lancedb::Error::Runtime {
+        message: "Invalid started_at column".to_string(),
+      })?;
 
     let completed_at_array = batch
       .column_by_name("completed_at")
       .and_then(|col| col.as_any().downcast_ref::<TimestampMicrosecondArray>())
-      .ok_or("Invalid completed_at column")?;
+      .ok_or_else(|| lancedb::Error::Runtime {
+        message: "Invalid completed_at column".to_string(),
+      })?;
 
     let error_array = batch
       .column_by_name("error")
       .and_then(|col| col.as_any().downcast_ref::<StringArray>())
-      .ok_or("Invalid error column")?;
+      .ok_or_else(|| lancedb::Error::Runtime {
+        message: "Invalid error column".to_string(),
+      })?;
 
     let files_indexed_array = batch
       .column_by_name("files_indexed")
       .and_then(|col| col.as_any().downcast_ref::<UInt64Array>())
-      .ok_or("Invalid files_indexed column")?;
+      .ok_or_else(|| lancedb::Error::Runtime {
+        message: "Invalid files_indexed column".to_string(),
+      })?;
 
     let merged_into_array = batch
       .column_by_name("merged_into")
       .and_then(|col| col.as_any().downcast_ref::<StringArray>())
-      .ok_or("Invalid merged_into column")?;
+      .ok_or_else(|| lancedb::Error::Runtime {
+        message: "Invalid merged_into column".to_string(),
+      })?;
 
     let merged_into = if merged_into_array.is_null(row) {
       None
     } else {
-      Some(Uuid::parse_str(merged_into_array.value(row))?)
+      Some(Uuid::parse_str(merged_into_array.value(row)).map_err(|e| lancedb::Error::Runtime {
+        message: format!("Invalid UUID in merged_into column: {}", e),
+      })?)
     };
 
     Ok(IndexTask {
@@ -783,14 +817,18 @@ impl IndexTask {
       task_type,
       status,
       created_at: chrono::DateTime::from_timestamp_micros(created_at_array.value(row))
-        .ok_or("Invalid created_at timestamp")?
+        .ok_or_else(|| lancedb::Error::Runtime {
+          message: "Invalid created_at timestamp".to_string(),
+        })?
         .naive_utc(),
       started_at: if started_at_array.is_null(row) {
         None
       } else {
         Some(
           chrono::DateTime::from_timestamp_micros(started_at_array.value(row))
-            .ok_or("Invalid started_at timestamp")?
+            .ok_or_else(|| lancedb::Error::Runtime {
+            message: "Invalid started_at timestamp".to_string(),
+          })?
             .naive_utc(),
         )
       },
@@ -799,7 +837,9 @@ impl IndexTask {
       } else {
         Some(
           chrono::DateTime::from_timestamp_micros(completed_at_array.value(row))
-            .ok_or("Invalid completed_at timestamp")?
+            .ok_or_else(|| lancedb::Error::Runtime {
+            message: "Invalid completed_at timestamp".to_string(),
+          })?
             .naive_utc(),
         )
       },

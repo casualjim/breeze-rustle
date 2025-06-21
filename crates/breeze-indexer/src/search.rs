@@ -134,7 +134,7 @@ mod tests {
     async fn embed(
       &self,
       inputs: &[crate::embeddings::EmbeddingInput<'_>],
-    ) -> Result<Vec<Vec<f32>>, Box<dyn std::error::Error + Send + Sync>> {
+    ) -> crate::embeddings::EmbeddingResult<Vec<Vec<f32>>> {
       Ok(
         inputs
           .iter()

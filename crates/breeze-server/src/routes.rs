@@ -170,8 +170,8 @@ async fn list_projects(State(state): State<AppState>) -> impl IntoApiResponse {
     Ok(projects) => Json(
       projects
         .into_iter()
-        .map(Into::<Project>::into)
-        .collect::<Vec<_>>(),
+        .map(Into::into)
+        .collect::<Vec<Project>>(),
     )
     .into_response(),
     Err(e) => ApiError::from(e).into_response(),
@@ -236,12 +236,8 @@ async fn index_file(
   info!(project_id = %project_id, path = %req.path, "Submitting file index task");
 
   let file_path = PathBuf::from(&req.path);
-  
-  match state
-    .indexer
-    .index_file(project_id, &file_path)
-    .await
-  {
+
+  match state.indexer.index_file(project_id, &file_path).await {
     Ok(task_id) => {
       info!(task_id = %task_id, "File index task submitted successfully");
       (
@@ -271,8 +267,8 @@ async fn search(
       Json(
         results
           .into_iter()
-          .map(Into::<SearchResult>::into)
-          .collect::<Vec<_>>(),
+          .map(Into::into)
+          .collect::<Vec<SearchResult>>(),
       )
       .into_response()
     }
@@ -284,10 +280,21 @@ async fn get_task(
   State(state): State<AppState>,
   Path(task_id): Path<Uuid>,
 ) -> impl IntoApiResponse {
-  match state.indexer.task_manager().get_task(&task_id).await {
-    Ok(Some(task)) => Json(Into::<Task>::into(task)).into_response(),
-    Ok(None) => ApiError::TaskNotFound(task_id).into_response(),
-    Err(e) => ApiError::from(e).into_response(),
+  let result = state
+    .indexer
+    .task_manager()
+    .get_task(&task_id)
+    .await
+    .map_err(ApiError::from)
+    .and_then(|task| {
+      task
+        .map(Into::<Task>::into)
+        .ok_or(ApiError::TaskNotFound(task_id))
+    });
+
+  match result {
+    Ok(task) => Json(task).into_response(),
+    Err(e) => e.into_response(),
   }
 }
 
@@ -298,13 +305,7 @@ async fn list_tasks(
   let limit = query.limit.unwrap_or(20).min(100); // Cap at 100
 
   match state.indexer.task_manager().list_tasks(limit).await {
-    Ok(tasks) => Json(
-      tasks
-        .into_iter()
-        .map(Into::<Task>::into)
-        .collect::<Vec<_>>(),
-    )
-    .into_response(),
+    Ok(tasks) => Json(tasks.into_iter().map(Into::into).collect::<Vec<Task>>()).into_response(),
     Err(e) => ApiError::from(e).into_response(),
   }
 }

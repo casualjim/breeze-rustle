@@ -9,7 +9,7 @@ use lancedb::query::{ExecutableQuery, QueryBase};
 use tokio::sync::RwLock;
 use tracing::{debug, info};
 
-use crate::models::Project;
+use crate::{models::Project, IndexerError};
 
 pub struct ProjectManager {
   project_table: Arc<RwLock<Table>>,
@@ -24,11 +24,11 @@ impl ProjectManager {
   /// - Requires absolute path
   /// - Remove trailing slash
   /// - Convert to string
-  fn canonicalize_path<P: AsRef<Path>>(path: P) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+  fn canonicalize_path<P: AsRef<Path>>(path: P) -> Result<String, IndexerError> {
     let path = path.as_ref();
     
     if !path.is_absolute() {
-      return Err("Path must be absolute".into());
+      return Err(IndexerError::PathNotAbsolute(path.display().to_string()));
     }
     
     // Try to canonicalize for consistent lookups
@@ -48,7 +48,7 @@ impl ProjectManager {
   pub async fn find_by_path<P: AsRef<Path>>(
     &self,
     path: P,
-  ) -> Result<Option<Project>, Box<dyn std::error::Error + Send + Sync>> {
+  ) -> Result<Option<Project>, IndexerError> {
     let canonical_path = Self::canonicalize_path(path)?;
     
     let table = self.project_table.read().await;
@@ -74,12 +74,13 @@ impl ProjectManager {
     name: String,
     directory: String,
     description: Option<String>,
-  ) -> Result<Project, Box<dyn std::error::Error + Send + Sync>> {
+  ) -> Result<Project, IndexerError> {
     // Canonicalize the directory path (validates it's absolute)
     let canonical_directory = Self::canonicalize_path(&directory)?;
     
     // Create the project (validates directory exists and is a directory)
-    let project = Project::new(name, canonical_directory, description)?;
+    let project = Project::new(name, canonical_directory, description)
+      .map_err(|e| IndexerError::Config(e))?;
     
     // Insert into table
     let arrow_data = project.clone().into_arrow()?;
@@ -95,7 +96,7 @@ impl ProjectManager {
   pub async fn get_project(
     &self,
     id: Uuid,
-  ) -> Result<Option<Project>, Box<dyn std::error::Error + Send + Sync>> {
+  ) -> Result<Option<Project>, IndexerError> {
     let table = self.project_table.read().await;
     
     let mut stream = table
@@ -116,7 +117,7 @@ impl ProjectManager {
   /// List all projects
   pub async fn list_projects(
     &self,
-  ) -> Result<Vec<Project>, Box<dyn std::error::Error + Send + Sync>> {
+  ) -> Result<Vec<Project>, IndexerError> {
     let table = self.project_table.read().await;
     
     let mut stream = table
@@ -143,7 +144,7 @@ impl ProjectManager {
     id: Uuid,
     name: Option<String>,
     description: Option<Option<String>>,
-  ) -> Result<Option<Project>, Box<dyn std::error::Error + Send + Sync>> {
+  ) -> Result<Option<Project>, IndexerError> {
     // First check if project exists
     let existing = self.get_project(id).await?;
     if existing.is_none() {
@@ -185,7 +186,7 @@ impl ProjectManager {
   pub async fn delete_project(
     &self,
     id: Uuid,
-  ) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
+  ) -> Result<bool, IndexerError> {
     let table = self.project_table.write().await;
     
     // Check if exists first
@@ -211,7 +212,7 @@ impl ProjectManager {
   pub async fn find_by_directory(
     &self,
     directory: &str,
-  ) -> Result<Option<Project>, Box<dyn std::error::Error + Send + Sync>> {
+  ) -> Result<Option<Project>, IndexerError> {
     let table = self.project_table.read().await;
     
     let mut stream = table

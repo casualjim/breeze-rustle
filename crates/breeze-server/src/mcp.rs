@@ -6,6 +6,7 @@ use rmcp::transport::streamable_http_server::{
   StreamableHttpService, session::local::LocalSessionManager,
 };
 use rmcp::{Error as McpError, RoleServer, ServerHandler, model::*, service::RequestContext, tool};
+use serde_json::json;
 use tracing::info;
 use uuid::Uuid;
 
@@ -154,11 +155,7 @@ impl BreezeService {
   #[tool(description = "Index a single file for semantic code search")]
   async fn index_file(
     &self,
-    #[tool(aggr)] IndexFileByProjectRequest {
-      project_id,
-      path,
-      content,
-    }: IndexFileByProjectRequest,
+    #[tool(aggr)] IndexFileByProjectRequest { project_id, path }: IndexFileByProjectRequest,
   ) -> Result<CallToolResult, McpError> {
     info!("Indexing file: {} for project: {}", path, project_id);
 
@@ -174,23 +171,12 @@ impl BreezeService {
 
     let file_path = PathBuf::from(&path);
 
-    // If content is not provided, check that file exists
-    if content.is_none() && !file_path.exists() {
-      return Ok(CallToolResult::error(vec![Content::text(format!(
-        "File '{}' does not exist",
-        path
-      ))]));
-    }
-
-    match self
-      .indexer
-      .index_file(project_uuid, &file_path, content)
-      .await
-    {
-      Ok(()) => Ok(CallToolResult::success(vec![Content::text(format!(
-        "Successfully indexed file: {}",
-        path
-      ))])),
+    match self.indexer.index_file(project_uuid, &file_path).await {
+      Ok(id) => Ok(CallToolResult::success(vec![Content::json(json!({
+        "message": format!("Scheduled indexing of file task_id={id} path={path}"),
+        "task_id": id,
+        "project_id": project_uuid.to_string(),
+      }))?])),
       Err(e) => Ok(CallToolResult::error(vec![Content::text(format!(
         "Indexing failed: {}",
         e

@@ -31,6 +31,18 @@ pub enum EmbeddingError {
 
     #[error("Provider not available: {0}")]
     ProviderNotAvailable(String),
+
+    #[error("Operation not supported: {0}")]
+    OperationNotSupported(String),
+
+    #[error("Embedding operation failed: {0}")]
+    EmbeddingFailed(String),
+}
+
+impl From<anyhow::Error> for EmbeddingError {
+    fn from(err: anyhow::Error) -> Self {
+        EmbeddingError::ApiError(err.to_string())
+    }
 }
 
 pub type EmbeddingResult<T> = Result<T, EmbeddingError>;

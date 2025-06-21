@@ -1,13 +1,15 @@
 use async_trait::async_trait;
-use std::error::Error;
 use std::sync::Arc;
 
 pub mod batching;
+pub mod error;
 pub mod factory;
 #[cfg(feature = "local-embeddings")]
 pub mod local;
 pub mod openailike;
 pub mod voyage;
+
+pub use error::{EmbeddingError, EmbeddingResult};
 
 /// Input for embedding a single item (borrows text to avoid cloning)
 #[derive(Debug)]
@@ -25,7 +27,7 @@ pub trait EmbeddingProvider: Send + Sync {
   async fn embed(
     &self,
     inputs: &[EmbeddingInput<'_>],
-  ) -> Result<Vec<Vec<f32>>, Box<dyn Error + Send + Sync>>;
+  ) -> EmbeddingResult<Vec<Vec<f32>>>;
 
   /// Get the embedding dimension for this provider's model
   fn embedding_dim(&self) -> usize;

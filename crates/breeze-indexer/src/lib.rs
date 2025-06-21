@@ -19,6 +19,7 @@ mod search;
 
 // Re-export only what's needed for the public API
 pub use config::*;
+pub use embeddings::EmbeddingError;
 pub use indexer::{Indexer, IndexerError};
 pub use models::{FileChange, FileOperation, IndexTask, Project, TaskStatus, TaskType};
 pub use project_manager::ProjectManager;

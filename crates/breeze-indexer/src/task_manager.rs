@@ -13,6 +13,7 @@ use uuid::Uuid;
 
 use crate::bulk_indexer::BulkIndexer;
 use crate::models::{IndexTask, TaskStatus};
+use crate::IndexerError;
 
 pub struct TaskManager {
   task_table: Arc<RwLock<Table>>,
@@ -32,7 +33,7 @@ impl TaskManager {
     &self,
     project_id: Uuid,
     path: &Path,
-  ) -> Result<Uuid, Box<dyn std::error::Error + Send + Sync>> {
+  ) -> Result<Uuid, IndexerError> {
     self.submit_task_with_type(project_id, path, crate::models::TaskType::FullIndex).await
   }
 
@@ -42,7 +43,7 @@ impl TaskManager {
     project_id: Uuid,
     path: &Path,
     task_type: crate::models::TaskType,
-  ) -> Result<Uuid, Box<dyn std::error::Error + Send + Sync>> {
+  ) -> Result<Uuid, IndexerError> {
     let table = self.task_table.write().await;
 
     // Check for existing pending tasks for this project
@@ -152,7 +153,7 @@ impl TaskManager {
   pub async fn run_worker(
     &self,
     shutdown_token: CancellationToken,
-  ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+  ) -> Result<(), IndexerError> {
     info!("Starting task worker");
 
     // On startup, reset any "running" tasks to "pending" (in case of crash)
@@ -191,7 +192,7 @@ impl TaskManager {
   pub async fn get_task(
     &self,
     task_id: &Uuid,
-  ) -> Result<Option<IndexTask>, Box<dyn std::error::Error + Send + Sync>> {
+  ) -> Result<Option<IndexTask>, IndexerError> {
     let table = self.task_table.read().await;
 
     let mut stream = table
@@ -213,7 +214,7 @@ impl TaskManager {
   pub async fn list_tasks(
     &self,
     limit: usize,
-  ) -> Result<Vec<IndexTask>, Box<dyn std::error::Error + Send + Sync>> {
+  ) -> Result<Vec<IndexTask>, IndexerError> {
     let table = self.task_table.read().await;
 
     let mut stream = table
@@ -239,7 +240,7 @@ impl TaskManager {
   async fn process_next_task(
     &self,
     cancel_token: &CancellationToken,
-  ) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
+  ) -> Result<bool, IndexerError> {
     // Try to claim the oldest pending task
     let task = match self.claim_pending_task().await? {
       Some(task) => task,
@@ -294,7 +295,7 @@ impl TaskManager {
   pub async fn has_active_task(
     &self,
     project_id: Uuid,
-  ) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
+  ) -> Result<bool, IndexerError> {
     let table = self.task_table.read().await;
     
     let mut stream = table
@@ -310,7 +311,7 @@ impl TaskManager {
   /// Claim the oldest pending task by updating its status to running
   async fn claim_pending_task(
     &self,
-  ) -> Result<Option<IndexTask>, Box<dyn std::error::Error + Send + Sync>> {
+  ) -> Result<Option<IndexTask>, IndexerError> {
     let table = self.task_table.write().await;
 
     // Get oldest pending task (excluding merged tasks)
@@ -353,7 +354,7 @@ impl TaskManager {
     &self,
     task_id: &Uuid,
     files_indexed: usize,
-  ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+  ) -> Result<(), IndexerError> {
     let table = self.task_table.write().await;
 
     table
@@ -379,7 +380,7 @@ impl TaskManager {
     &self,
     task_id: &Uuid,
     error: &str,
-  ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+  ) -> Result<(), IndexerError> {
     let table = self.task_table.write().await;
 
     table
@@ -401,7 +402,7 @@ impl TaskManager {
   }
 
   /// Reset stuck "running" tasks to "pending" on startup
-  async fn reset_stuck_tasks(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+  async fn reset_stuck_tasks(&self) -> Result<(), IndexerError> {
     let table = self.task_table.write().await;
 
     // Reset tasks that have been running for more than 30 minutes
@@ -446,7 +447,7 @@ impl TaskManager {
     &self,
     task: &crate::models::IndexTask,
     cancel_token: &CancellationToken,
-  ) -> Result<usize, Box<dyn std::error::Error + Send + Sync>> {
+  ) -> Result<usize, IndexerError> {
     info!(
       task_id = %task.id,
       path = task.path,
@@ -465,7 +466,7 @@ impl TaskManager {
     task: &crate::models::IndexTask,
     changes: &std::collections::BTreeSet<crate::models::FileChange>,
     cancel_token: &CancellationToken,
-  ) -> Result<usize, Box<dyn std::error::Error + Send + Sync>> {
+  ) -> Result<usize, IndexerError> {
     // TODO: Implement partial indexing for specific files
     // For now, we'll do a full index until we implement partial indexing
     warn!(

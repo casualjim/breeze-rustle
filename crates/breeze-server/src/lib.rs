@@ -1,6 +1,6 @@
 mod app;
 mod error;
-// mod mcp;
+mod mcp;
 mod routes;
 mod server;
 mod types;
