@@ -1229,10 +1229,12 @@ async fn sink_task(
     debug!(batch_number = batch_count, "Written batch to LanceDB");
   }
 
-  // Get the final row count from the table
+  // Get the final row count from the table, excluding the dummy document
   let table_guard = table.read().await;
-  let count = table_guard.count_rows(None).await? as usize;
-  debug!(row_count = count, "Final table row count");
+  let count = table_guard
+    .count_rows(Some(format!("id != '{}'", crate::models::DUMMY_DOCUMENT_ID)))
+    .await? as usize;
+  debug!(row_count = count, "Final table row count (excluding dummy document)");
 
   Ok(count)
 }

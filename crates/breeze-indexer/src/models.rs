@@ -1,8 +1,15 @@
 use blake3::Hasher;
+use lancedb::index::Index;
+use lancedb::index::vector::IvfFlatIndexBuilder;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
+use tracing::debug;
 use uuid::Uuid;
+
+/// Reserved ID for the dummy document used to initialize LanceDB tables
+/// This document must never be deleted to preserve indices
+pub const DUMMY_DOCUMENT_ID: &str = "00000000-0000-0000-0000-000000000000";
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct CodeDocument {
@@ -83,9 +90,11 @@ impl CodeDocument {
     let schema = std::sync::Arc::new(Self::schema(embedding_dim));
 
     // Create dummy data - LanceDB requires at least one batch
-    let id_array = StringArray::from(vec!["00000000-0000-0000-0000-000000000000"]);
-    let file_path_array = StringArray::from(vec!["__dummy__.txt"]);
-    let content_array = StringArray::from(vec!["dummy"]);
+    let id_array = StringArray::from(vec![DUMMY_DOCUMENT_ID]);
+    let file_path_array = StringArray::from(vec!["__lancedb_dummy__.txt"]);
+    let content_array = StringArray::from(vec![
+      "LanceDB requires at least one document to create a table with proper schema",
+    ]);
 
     let mut content_hash_builder = FixedSizeBinaryBuilder::with_capacity(1, 32);
     content_hash_builder.append_value([0u8; 32]).unwrap();
@@ -129,13 +138,8 @@ impl CodeDocument {
       .execute()
       .await?;
 
-    // Delete the dummy row
-    table
-      .delete("id = '00000000-0000-0000-0000-000000000000'")
-      .await?;
-
-    // Create indices on new table
-    Self::ensure_indices(&table).await;
+    // Create indices on new table (while dummy row exists)
+    Self::ensure_indices(&table).await?;
 
     Ok(table)
   }
@@ -149,8 +153,8 @@ impl CodeDocument {
     // Try to open the table first
     match connection.open_table(table_name).execute().await {
       Ok(table) => {
-        // Table exists, ensure indices are created
-        Self::ensure_indices(&table).await;
+        // allow for extra indices to be created if they don't exist
+        Self::ensure_indices(&table).await?;
         Ok(table)
       }
       Err(e) => {
@@ -169,60 +173,37 @@ impl CodeDocument {
   }
 
   /// Ensure indices exist on content, file_path, and content_hash fields
-  async fn ensure_indices(table: &lancedb::Table) {
-    use lancedb::index::Index;
-    use tracing::debug;
+  async fn ensure_indices(table: &lancedb::Table) -> lancedb::Result<()> {
+    table
+      .create_index(
+        &["content_embedding"],
+        Index::IvfFlat(IvfFlatIndexBuilder::default()),
+      )
+      .execute()
+      .await?;
 
     // Create FTS index on content field for full-text search
-    match table
+    table
       .create_index(&["content"], Index::FTS(Default::default()))
       .execute()
-      .await
-    {
-      Ok(_) => {
-        debug!("Created FTS index on content field");
-      }
-      Err(e) => {
-        debug!(
-          "FTS index on content might already exist or creation failed: {}",
-          e
-        );
-      }
-    }
+      .await?;
+    debug!("Created FTS index on content field");
 
     // Create Auto index on file_path for exact match lookups
-    match table
+    table
       .create_index(&["file_path"], Index::Auto)
       .execute()
-      .await
-    {
-      Ok(_) => {
-        debug!("Created index on file_path field");
-      }
-      Err(e) => {
-        debug!(
-          "Index on file_path might already exist or creation failed: {}",
-          e
-        );
-      }
-    }
+      .await?;
+    debug!("Created index on file_path field");
 
     // Create Auto index on content_hash for hash-based lookups
-    match table
+    table
       .create_index(&["content_hash"], Index::Auto)
       .execute()
-      .await
-    {
-      Ok(_) => {
-        debug!("Created index on content_hash field");
-      }
-      Err(e) => {
-        debug!(
-          "Index on content_hash might already exist or creation failed: {}",
-          e
-        );
-      }
-    }
+      .await?;
+    debug!("Created index on content_hash field");
+
+    Ok(())
   }
 
   /// Convert a RecordBatch row to CodeDocument

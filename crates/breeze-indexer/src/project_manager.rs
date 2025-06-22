@@ -267,10 +267,10 @@ mod tests {
     let code_table = crate::models::CodeDocument::ensure_table(&connection, "test_code", 1536)
       .await
       .unwrap();
-    
+
     let task_table = Arc::new(RwLock::new(task_table));
     let code_table = Arc::new(RwLock::new(code_table));
-    
+
     // Create a minimal config and embedding provider for BulkIndexer
     let config = crate::Config {
       database_path: db_path.clone(),
@@ -284,18 +284,18 @@ mod tests {
       large_file_threads: None,
       embedding_workers: 1,
     };
-    
+
     let embedding_provider = crate::embeddings::factory::create_embedding_provider(&config)
       .await
       .unwrap();
-    
+
     let bulk_indexer = crate::bulk_indexer::BulkIndexer::new(
       Arc::new(config),
       Arc::from(embedding_provider),
       384, // BAAI/bge-small-en-v1.5 has 384 dimensions
       code_table.clone(),
     );
-    
+
     let task_manager = Arc::new(TaskManager::new(task_table, code_table, bulk_indexer));
     let project_manager = ProjectManager::new(project_table, task_manager);
 

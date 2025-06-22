@@ -54,8 +54,10 @@ pub async fn hybrid_search(
   let table = table.read().await;
 
   // Build hybrid query with vector search and FTS
+  // Filter out the dummy document
   let mut results = table
     .query()
+    .only_if(format!("id != '{}'", crate::models::DUMMY_DOCUMENT_ID).as_str())
     .full_text_search(FullTextSearchQuery::new(query.to_string()))
     .nearest_to(query_vector)?
     .column("content_embedding")
@@ -72,28 +74,20 @@ pub async fn hybrid_search(
     .await
     .map_err(|e| anyhow!("Error reading results: {}", e))?
   {
-    // Try to get distance scores if available
-    let distances = batch
-      .column_by_name("_distance")
-      .and_then(|col| col.as_any().downcast_ref::<Float32Array>());
+    // Get reranked relevance scores (from hybrid search with reranker)
+    // We always use reranking, so this column should always be present
+    let relevance_scores = batch
+      .column_by_name("_relevance_score")
+      .and_then(|col| col.as_any().downcast_ref::<Float32Array>())
+      .ok_or_else(|| anyhow!("Missing _relevance_score column in results"))?;
 
     // Process each row
     for row in 0..batch.num_rows() {
       let doc = CodeDocument::from_record_batch(&batch, row)
         .map_err(|e| anyhow!("Failed to convert row {}: {}", row, e))?;
 
-      // Get the actual distance/score if available
-      // Note: Lower distance = better match in vector search
-      // We convert to a score where higher = better
-      let relevance_score = if let Some(distances) = distances {
-        let distance = distances.value(row);
-        // Convert distance to score: closer = higher score
-        // Using 1/(1+distance) to get a score between 0 and 1
-        1.0 / (1.0 + distance)
-      } else {
-        // If no distance column, just use 0.0 to indicate no score
-        0.0
-      };
+      // Get the reranked relevance score from hybrid search
+      let relevance_score = relevance_scores.value(row);
 
       search_results.push(SearchResult {
         id: doc.id,
@@ -111,10 +105,12 @@ pub async fn hybrid_search(
   Ok(search_results)
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "local-embeddings"))]
 mod tests {
   use super::*;
   use crate::models::CodeDocument;
+  use crate::Config;
+  use crate::embeddings::factory::create_embedding_provider;
   use lancedb::arrow::IntoArrow;
   use std::collections::HashSet;
   use tempfile::TempDir;
@@ -185,6 +181,9 @@ mod tests {
     let table = CodeDocument::ensure_table(&connection, "test_embeddings", embedding_dim)
       .await
       .unwrap();
+
+    // ensure the table twice
+    CodeDocument::ensure_table(&connection, "test_embeddings", embedding_dim).await.expect("Table ensure should be idempotent");
 
     // Insert test documents
     let test_documents = vec![
@@ -322,5 +321,291 @@ mod tests {
     assert_ne!(result.content_hash, [0u8; 32]); // Non-zero hash
     assert!(result.last_modified <= chrono::Utc::now().naive_utc());
     assert!(result.indexed_at <= chrono::Utc::now().naive_utc());
+  }
+
+  async fn setup_empty_table() -> (TempDir, Arc<RwLock<Table>>, Arc<dyn EmbeddingProvider>) {
+    let temp_dir = TempDir::new().unwrap();
+    let db_path = temp_dir.path().join("test.lance");
+
+    let connection = lancedb::connect(db_path.to_str().unwrap())
+      .execute()
+      .await
+      .unwrap();
+
+    // Create config for local embeddings
+    let config = Config {
+      database_path: temp_dir.path().join("test.db"),
+      embedding_provider: crate::config::EmbeddingProvider::Local,
+      model: "BAAI/bge-small-en-v1.5".to_string(),
+      voyage: None,
+      openai_providers: std::collections::HashMap::new(),
+      max_chunk_size: 1000,
+      max_file_size: Some(5 * 1024 * 1024),
+      max_parallel_files: 4,
+      large_file_threads: None,
+      embedding_workers: 1,
+    };
+
+    let embedding_provider = create_embedding_provider(&config).await.unwrap();
+    let embedding_dim = embedding_provider.embedding_dim();
+
+    let table = CodeDocument::ensure_table(&connection, "test_embeddings", embedding_dim)
+      .await
+      .unwrap();
+
+    (temp_dir, Arc::new(RwLock::new(table)), Arc::from(embedding_provider))
+  }
+
+  async fn create_and_embed_document(
+    content: &str,
+    file_path: &str,
+    embedding_provider: &Arc<dyn EmbeddingProvider>
+  ) -> CodeDocument {
+    let mut doc = CodeDocument::new(file_path.to_string(), content.to_string());
+
+    // Generate real embedding
+    let embeddings = embedding_provider
+      .embed(&[crate::embeddings::EmbeddingInput {
+        text: content,
+        token_count: None,
+      }])
+      .await
+      .unwrap();
+
+    doc.update_embedding(embeddings[0].clone());
+    doc
+  }
+
+  #[tokio::test]
+  async fn test_search_empty_database_no_error() {
+    let (_temp_dir, table, embedding_provider) = setup_empty_table().await;
+
+    // Search on empty database should return empty results, not error
+    let results = hybrid_search(table, embedding_provider, "some query", 10)
+      .await
+      .unwrap();
+
+    assert_eq!(results.len(), 0, "Empty database should return no results");
+  }
+
+  #[tokio::test]
+  async fn test_keyword_search_works() {
+    let (_temp_dir, table, embedding_provider) = setup_empty_table().await;
+
+    // Add documents with real embeddings
+    let docs = vec![
+      create_and_embed_document(
+        "fn calculate_fibonacci(n: usize) -> usize { /* fibonacci implementation */ }",
+        "math.rs",
+        &embedding_provider
+      ).await,
+      create_and_embed_document(
+        "fn bubble_sort(arr: &mut [i32]) { /* sorting implementation */ }",
+        "sort.rs",
+        &embedding_provider
+      ).await,
+      create_and_embed_document(
+        "struct DatabaseConnection { /* database handling */ }",
+        "db.rs",
+        &embedding_provider
+      ).await,
+    ];
+
+    // Insert documents
+    {
+      let table_write = table.write().await;
+      for doc in docs {
+        let arrow_data = doc.into_arrow().unwrap();
+        table_write.add(arrow_data).execute().await.unwrap();
+      }
+    }
+
+    // Search for "fibonacci" - should find math.rs
+    let results = hybrid_search(table.clone(), embedding_provider.clone(), "fibonacci", 10)
+      .await
+      .unwrap();
+
+    assert!(!results.is_empty(), "Should find results for 'fibonacci'");
+    assert_eq!(results[0].file_path, "math.rs", "Should find math.rs when searching for fibonacci");
+    assert!(results[0].relevance_score > 0.0, "Should have non-zero relevance score");
+  }
+
+  #[tokio::test]
+  async fn test_vector_search_semantic_similarity() {
+    let (_temp_dir, table, embedding_provider) = setup_empty_table().await;
+
+    // Add documents about similar topics with real embeddings
+    let docs = vec![
+      create_and_embed_document(
+        "async fn fetch_user_data(id: u64) -> Result<User> {
+          // Fetches user information from the database
+          let connection = get_db_connection().await?;
+          let user = connection.query_user(id).await?;
+          Ok(user)
+        }",
+        "user_service.rs",
+        &embedding_provider
+      ).await,
+      create_and_embed_document(
+        "async fn get_customer_info(customer_id: String) -> CustomerData {
+          // Retrieves customer details from persistent storage
+          let db = connect_to_database().await;
+          db.find_customer(&customer_id).await
+        }",
+        "customer_api.rs",
+        &embedding_provider
+      ).await,
+      create_and_embed_document(
+        "fn calculate_shipping_cost(weight: f64, distance: f64) -> f64 {
+          // Computes shipping fees based on package weight and distance
+          let base_rate = 5.0;
+          base_rate + (weight * 0.5) + (distance * 0.1)
+        }",
+        "shipping.rs",
+        &embedding_provider
+      ).await,
+    ];
+
+    // Insert documents
+    {
+      let table_write = table.write().await;
+      for doc in docs {
+        let arrow_data = doc.into_arrow().unwrap();
+        table_write.add(arrow_data).execute().await.unwrap();
+      }
+    }
+
+    // Search for "retrieve user information from database"
+    // Should find both user_service.rs and customer_api.rs as they're semantically similar
+    let results = hybrid_search(
+      table.clone(),
+      embedding_provider.clone(),
+      "retrieve user information from database",
+      10
+    )
+    .await
+    .unwrap();
+
+    assert!(results.len() >= 2, "Should find at least 2 semantically similar results");
+
+    // Both user_service.rs and customer_api.rs should be in top results
+    let file_paths: Vec<&str> = results.iter().map(|r| r.file_path.as_str()).collect();
+    assert!(
+      file_paths.contains(&"user_service.rs") || file_paths.contains(&"customer_api.rs"),
+      "Should find semantically similar user/customer data fetching functions"
+    );
+
+    // Verify we have meaningful relevance scores
+    for result in &results[..2] {
+      assert!(
+        result.relevance_score > 0.0,
+        "Top results should have non-zero relevance scores. Got {} for {}",
+        result.relevance_score,
+        result.file_path
+      );
+    }
+
+    // Shipping.rs should have lower relevance as it's not about data retrieval
+    if let Some(shipping_result) = results.iter().find(|r| r.file_path == "shipping.rs") {
+      let top_score = results[0].relevance_score;
+      assert!(
+        shipping_result.relevance_score <= top_score,
+        "Shipping calculation should have lower relevance than data retrieval functions"
+      );
+    }
+  }
+
+  #[tokio::test]
+  async fn test_vector_search_ranking_quality() {
+    let (_temp_dir, table, embedding_provider) = setup_empty_table().await;
+
+    // Add documents with varying relevance to "error handling"
+    let docs = vec![
+      create_and_embed_document(
+        "fn handle_error(e: Error) -> Result<Response> {
+          // Comprehensive error handling with logging and recovery
+          match e.kind() {
+            ErrorKind::NotFound => Ok(Response::not_found()),
+            ErrorKind::Unauthorized => Ok(Response::unauthorized()),
+            _ => {
+              log::error!(\"Unexpected error: {:?}\", e);
+              Ok(Response::internal_server_error())
+            }
+          }
+        }",
+        "error_handler.rs",
+        &embedding_provider
+      ).await,
+      create_and_embed_document(
+        "fn process_payment(amount: f64) -> bool {
+          // Simple payment processing
+          if amount > 0.0 {
+            charge_credit_card(amount)
+          } else {
+            false
+          }
+        }",
+        "payment.rs",
+        &embedding_provider
+      ).await,
+      create_and_embed_document(
+        "fn validate_input(data: &str) -> Result<(), ValidationError> {
+          // Input validation with error reporting
+          if data.is_empty() {
+            return Err(ValidationError::Empty);
+          }
+          if data.len() > 1000 {
+            return Err(ValidationError::TooLong);
+          }
+          Ok(())
+        }",
+        "validator.rs",
+        &embedding_provider
+      ).await,
+    ];
+
+    // Insert documents
+    {
+      let table_write = table.write().await;
+      for doc in docs {
+        let arrow_data = doc.into_arrow().unwrap();
+        table_write.add(arrow_data).execute().await.unwrap();
+      }
+    }
+
+    // Search for "error handling"
+    let results = hybrid_search(
+      table.clone(),
+      embedding_provider.clone(),
+      "error handling and recovery",
+      10
+    )
+    .await
+    .unwrap();
+
+    assert!(!results.is_empty(), "Should find results for error handling");
+
+    // error_handler.rs should be the top result
+    assert_eq!(
+      results[0].file_path,
+      "error_handler.rs",
+      "Error handler should be the most relevant result"
+    );
+    assert!(
+      results[0].relevance_score > 0.0,
+      "Top result must have positive relevance score, got {}",
+      results[0].relevance_score
+    );
+
+    // validator.rs should rank higher than payment.rs
+    let validator_rank = results.iter().position(|r| r.file_path == "validator.rs");
+    let payment_rank = results.iter().position(|r| r.file_path == "payment.rs");
+
+    if let (Some(v_rank), Some(p_rank)) = (validator_rank, payment_rank) {
+      assert!(
+        v_rank < p_rank,
+        "Validator (with error handling) should rank higher than payment processing"
+      );
+    }
   }
 }

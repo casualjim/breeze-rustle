@@ -42,7 +42,9 @@
       "mcp__github__search_issues",
       "WebFetch(domain:ort.pyke.io)",
       "mcp__code-index__set_project_path",
-      "Bash(prefligit run --all-files)"
+      "Bash(prefligit run --all-files)",
+      "mcp__filesystem__list_allowed_directories",
+      "mcp__filesystem__search_files"
     ],
     "deny": []
   }
