@@ -378,9 +378,9 @@ jobs:
             build: |
               npm run build
               strip -x *.node
-          - host: windows-latest
-            build: npm run build
-            target: x86_64-pc-windows-gnu
+          # - host: windows-latest
+          #   build: npm run build
+          #   target: x86_64-pc-windows-gnu
           - host: ubuntu-22.04
             target: x86_64-unknown-linux-gnu
             build: |
@@ -411,7 +411,7 @@ jobs:
         if: matrix.settings.target == 'aarch64-unknown-linux-gnu'
         run: |
           sudo apt-get update
-          sudo apt-get install -y gcc-aarch64-linux-gnu
+          sudo apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
 
       - name: Install root npm dependencies
         run: npm install
