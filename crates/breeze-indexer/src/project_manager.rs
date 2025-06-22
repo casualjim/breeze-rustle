@@ -283,6 +283,7 @@ mod tests {
       max_parallel_files: 4,
       large_file_threads: None,
       embedding_workers: 1,
+      optimize_threshold: 250,
     };
 
     let embedding_provider = crate::embeddings::factory::create_embedding_provider(&config)

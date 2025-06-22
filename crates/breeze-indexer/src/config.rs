@@ -110,6 +110,10 @@ pub struct Config {
 
   /// Number of concurrent embedding workers for remote providers
   pub embedding_workers: usize,
+  
+  /// LanceDB optimization threshold - optimize when table version advances by this amount
+  #[serde(default = "default_optimize_threshold")]
+  pub optimize_threshold: u64,
 }
 
 impl Default for Config {
@@ -125,6 +129,7 @@ impl Default for Config {
       max_parallel_files: num_cpus::get(),
       large_file_threads: Some(4),
       embedding_workers: 4,
+      optimize_threshold: default_optimize_threshold(),
     }
   }
 }
@@ -196,6 +201,7 @@ impl Config {
       max_parallel_files: 4,
       large_file_threads: Some(4),
       embedding_workers: 3,
+      optimize_threshold: 250,
     };
 
     (temp_dir, config)
@@ -217,6 +223,10 @@ fn default_voyage_model() -> VoyageModel {
 
 fn default_max_concurrent_requests() -> usize {
   50
+}
+
+fn default_optimize_threshold() -> u64 {
+  250
 }
 
 #[cfg(test)]

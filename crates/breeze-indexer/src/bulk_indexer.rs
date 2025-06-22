@@ -30,6 +30,7 @@ pub struct BulkIndexer {
   embedding_provider: Arc<dyn EmbeddingProvider>,
   embedding_dim: usize,
   table: Arc<RwLock<Table>>,
+  last_optimize_version: Arc<RwLock<u64>>,
 }
 
 impl BulkIndexer {
@@ -39,11 +40,25 @@ impl BulkIndexer {
     embedding_dim: usize,
     table: Arc<RwLock<Table>>,
   ) -> Self {
+    // Initialize with version 0 - will be updated on first use
+    let last_optimize_version = Arc::new(RwLock::new(0));
+    
+    // Spawn a task to read the current table version
+    let table_clone = table.clone();
+    let version_clone = last_optimize_version.clone();
+    tokio::spawn(async move {
+      let table_guard = table_clone.read().await;
+      if let Ok(version) = table_guard.version().await {
+        *version_clone.write().await = version;
+      }
+    });
+    
     Self {
       config,
       embedding_provider,
       embedding_dim,
       table,
+      last_optimize_version,
     }
   }
 
@@ -601,7 +616,9 @@ impl BulkIndexer {
     embedding_dim: usize,
   ) -> tokio::task::JoinHandle<Result<usize, IndexerError>> {
     let table = self.table.clone();
-    tokio::spawn(sink_task(doc_rx, table, embedding_dim, stats))
+    let last_optimize_version = self.last_optimize_version.clone();
+    let optimize_threshold = self.config.optimize_threshold;
+    tokio::spawn(sink_task(doc_rx, table, embedding_dim, last_optimize_version, optimize_threshold, stats))
   }
 
   fn spawn_delete_handler(
@@ -1420,13 +1437,15 @@ async fn sink_task(
   doc_rx: mpsc::Receiver<CodeDocument>,
   table: Arc<RwLock<Table>>,
   embedding_dim: usize,
+  last_optimize_version: Arc<RwLock<u64>>,
+  optimize_threshold: u64,
   _stats: IndexingStats,
 ) -> Result<usize, IndexerError> {
   let _guard = TaskGuard::new("Sink");
   let converter = BufferedRecordBatchConverter::<CodeDocument>::default()
     .with_schema(Arc::new(CodeDocument::schema(embedding_dim)));
 
-  let sink = LanceDbSink::new(table.clone());
+  let sink = LanceDbSink::new(table.clone(), last_optimize_version, optimize_threshold);
 
   let doc_stream = tokio_stream::wrappers::ReceiverStream::new(doc_rx);
   let record_batches = converter.convert(Box::pin(doc_stream));

@@ -2,7 +2,6 @@
 
 Keeping some bullet points so I don't forget
 
-* Run table optimization at the end of a full reindex
 * Implement reranking models
 * Add extra information about the semantic content of a chunk
 * Track failed files/batches and broadcast

@@ -87,6 +87,10 @@ pub struct IndexerConfig {
   /// Worker configuration
   #[serde(default)]
   pub workers: IndexerWorkers,
+
+  /// LanceDB optimization threshold - optimize when table version advances by this amount
+  #[serde(default = "default_optimize_threshold")]
+  pub optimize_threshold: u64,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
@@ -225,6 +229,10 @@ fn default_embedding_workers() -> usize {
 
 pub fn default_max_chunk_size() -> usize {
   512
+}
+
+fn default_optimize_threshold() -> u64 {
+  250
 }
 
 impl Default for EmbeddingsConfig {
@@ -427,6 +435,7 @@ impl Config {
       max_parallel_files: self.indexer.workers.small_file,
       large_file_threads: Some(self.indexer.workers.large_file),
       embedding_workers: self.embeddings.workers,
+      optimize_threshold: self.indexer.optimize_threshold,
     })
   }
 }

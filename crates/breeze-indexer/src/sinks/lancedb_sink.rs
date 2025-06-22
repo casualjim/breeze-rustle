@@ -8,18 +8,26 @@ use crate::pipeline::BoxStream;
 /// LanceDB sink for persisting record batches
 pub struct LanceDbSink {
   table: Arc<RwLock<lancedb::Table>>,
+  last_optimize_version: Arc<RwLock<u64>>,
+  optimize_threshold: u64,
 }
 
 impl LanceDbSink {
   /// Create a new LanceDB sink with a shared table reference
-  pub fn new(table: Arc<RwLock<lancedb::Table>>) -> Self {
-    Self { table }
+  pub fn new(table: Arc<RwLock<lancedb::Table>>, last_optimize_version: Arc<RwLock<u64>>, optimize_threshold: u64) -> Self {
+    Self { 
+      table,
+      last_optimize_version,
+      optimize_threshold,
+    }
   }
 }
 
 impl LanceDbSink {
   pub fn sink(&self, batches: std::pin::Pin<Box<dyn RecordBatchStream + Send>>) -> BoxStream<()> {
     let table = self.table.clone();
+    let last_optimize_version = self.last_optimize_version.clone();
+    let optimize_threshold = self.optimize_threshold;
 
     let stream = async_stream::stream! {
         let mut batch_count = 0;
@@ -84,6 +92,52 @@ impl LanceDbSink {
             total_rows = total_rows,
             "LanceDB sink completed"
         );
+
+        // Check if optimization is needed after stream completion
+        let table_guard = table.read().await;
+        match table_guard.version().await {
+            Ok(current_version) => {
+                let last_version = *last_optimize_version.read().await;
+                if current_version.saturating_sub(last_version) > optimize_threshold {
+                    tracing::info!(
+                        current_version = current_version,
+                        last_optimize_version = last_version,
+                        threshold = optimize_threshold,
+                        "Running LanceDB table optimization"
+                    );
+                    
+                    match table_guard.optimize(lancedb::table::OptimizeAction::All).await {
+                        Ok(_) => {
+                            // Update the last optimize version
+                            *last_optimize_version.write().await = current_version;
+                            tracing::info!(
+                                new_optimize_version = current_version,
+                                "LanceDB table optimization completed successfully"
+                            );
+                        }
+                        Err(e) => {
+                            tracing::warn!(
+                                error = %e,
+                                "Failed to optimize LanceDB table"
+                            );
+                        }
+                    }
+                } else {
+                    tracing::debug!(
+                        current_version = current_version,
+                        last_optimize_version = last_version,
+                        threshold = optimize_threshold,
+                        "Skipping optimization, threshold not met"
+                    );
+                }
+            }
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    "Failed to get table version for optimization check"
+                );
+            }
+        }
     };
 
     Box::pin(stream)
@@ -94,6 +148,8 @@ impl Clone for LanceDbSink {
   fn clone(&self) -> Self {
     Self {
       table: self.table.clone(),
+      last_optimize_version: self.last_optimize_version.clone(),
+      optimize_threshold: self.optimize_threshold,
     }
   }
 }
@@ -179,7 +235,8 @@ mod tests {
     let db_path = temp_dir.path().to_str().unwrap();
     let table = create_test_table(db_path, "test_documents", 3).await;
 
-    let sink = LanceDbSink::new(Arc::new(RwLock::new(table)));
+    let current_version = table.version().await.unwrap();
+    let sink = LanceDbSink::new(Arc::new(RwLock::new(table)), Arc::new(RwLock::new(current_version)), 250);
 
     // Create test documents
     let mut doc1 = CodeDocument::new(
@@ -224,12 +281,57 @@ mod tests {
   }
 
   #[tokio::test]
+  async fn test_lancedb_sink_optimization() {
+    let temp_dir = TempDir::new().unwrap();
+    let db_path = temp_dir.path().to_str().unwrap();
+    let table = create_test_table(db_path, "optimization_test", 3).await;
+
+    // Get initial version
+    let initial_version = table.version().await.unwrap();
+    
+    // Create sink with a low threshold for testing
+    let last_optimize_version = Arc::new(RwLock::new(initial_version));
+    let sink = LanceDbSink::new(
+      Arc::new(RwLock::new(table)), 
+      last_optimize_version.clone(), 
+      2  // Low threshold to trigger optimization in test
+    );
+
+    // Insert multiple documents to advance the version
+    for i in 0..5 {
+      let mut doc = CodeDocument::new(
+        Uuid::now_v7(),
+        format!("file{}.py", i),
+        format!("content {}", i),
+      );
+      doc.content_embedding = vec![i as f32, (i + 1) as f32, (i + 2) as f32];
+
+      let batch = create_test_batch(vec![doc]);
+      let batch_stream = stream::once(async { Ok(batch) });
+      let record_stream = Box::pin(lancedb::arrow::SimpleRecordBatchStream::new(
+        batch_stream.boxed(),
+        Arc::new(CodeDocument::schema(3)),
+      ));
+
+      let mut sink_stream = sink.sink(record_stream);
+      while sink_stream.next().await.is_some() {}
+    }
+
+    // Verify optimization was triggered
+    let final_optimize_version = *last_optimize_version.read().await;
+    assert!(final_optimize_version > initial_version, 
+      "Optimization should have updated the version. Initial: {}, Final: {}", 
+      initial_version, final_optimize_version);
+  }
+
+  #[tokio::test]
   async fn test_lancedb_sink_upsert() {
     let temp_dir = TempDir::new().unwrap();
     let db_path = temp_dir.path().to_str().unwrap();
     let table = create_test_table(db_path, "upsert_test", 3).await;
 
-    let sink = LanceDbSink::new(Arc::new(RwLock::new(table)));
+    let current_version = table.version().await.unwrap();
+    let sink = LanceDbSink::new(Arc::new(RwLock::new(table)), Arc::new(RwLock::new(current_version)), 250);
 
     // First insert
     let mut doc = CodeDocument::new(
