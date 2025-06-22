@@ -179,6 +179,11 @@ jobs:
           node-version: 20
       - name: Install npm dependencies
         run: npm install
+      - name: Install Linux parsers for cross-compilation
+        run: |
+          npm install --no-save \
+            @kumos/tree-sitter-parsers-linux-arm64 \
+            @kumos/tree-sitter-parsers-linux-x64
       - name: Build wheels
         uses: PyO3/maturin-action@v1
         with:
@@ -219,6 +224,11 @@ jobs:
           node-version: 20
       - name: Install npm dependencies
         run: npm install
+      - name: Install Linux musl parsers for cross-compilation
+        run: |
+          npm install --no-save \
+            @kumos/tree-sitter-parsers-linux-arm64-musl \
+            @kumos/tree-sitter-parsers-linux-x64-musl
       - name: Install protoc
         uses: arduino/setup-protoc@v3
         with:
@@ -412,6 +422,13 @@ jobs:
 
       - name: Install root npm dependencies
         run: npm install
+
+      - name: Install Linux parsers for Node.js builds
+        if: startsWith(matrix.settings.host, 'ubuntu')
+        run: |
+          npm install --no-save \
+            @kumos/tree-sitter-parsers-linux-arm64 \
+            @kumos/tree-sitter-parsers-linux-x64
 
       - name: Install protoc
         uses: arduino/setup-protoc@v3
