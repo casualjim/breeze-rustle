@@ -34,15 +34,8 @@ impl TaskManager {
     }
   }
 
-  /// Submit a new indexing task and return its ID (backward compatibility)
-  pub async fn submit_task(&self, project_id: Uuid, path: &Path) -> Result<Uuid, IndexerError> {
-    self
-      .submit_task_with_type(project_id, path, crate::models::TaskType::FullIndex)
-      .await
-  }
-
   /// Submit a new indexing task with specific type and return its ID
-  pub async fn submit_task_with_type(
+  pub async fn submit_task(
     &self,
     project_id: Uuid,
     path: &Path,
@@ -618,7 +611,7 @@ mod tests {
     let test_path = std::path::Path::new("/test/path");
 
     let task_id = task_manager
-      .submit_task(project_id, test_path)
+      .submit_task(project_id, test_path, crate::models::TaskType::FullIndex)
       .await
       .unwrap();
 
@@ -658,7 +651,11 @@ mod tests {
 
     for path in &paths {
       let task_id = task_manager
-        .submit_task(project_id, std::path::Path::new(path))
+        .submit_task(
+          project_id,
+          std::path::Path::new(path),
+          crate::models::TaskType::FullIndex,
+        )
         .await
         .unwrap();
       task_ids.push(task_id);
@@ -684,7 +681,11 @@ mod tests {
     for i in 0..5 {
       let path = format!("/test/path{}", i);
       task_manager
-        .submit_task(project_id, std::path::Path::new(&path))
+        .submit_task(
+          project_id,
+          std::path::Path::new(&path),
+          crate::models::TaskType::FullIndex,
+        )
         .await
         .unwrap();
     }
@@ -707,8 +708,12 @@ mod tests {
       let tm = task_manager.clone();
       let handle = tokio::spawn(async move {
         let path = format!("/test/concurrent/{}", i);
-        tm.submit_task(project_id, std::path::Path::new(&path))
-          .await
+        tm.submit_task(
+          project_id,
+          std::path::Path::new(&path),
+          crate::models::TaskType::FullIndex,
+        )
+        .await
       });
       handles.push(handle);
     }
@@ -738,7 +743,11 @@ mod tests {
 
     // Create a task and manually set it to running with old timestamp
     let task_id = task_manager
-      .submit_task(project_id, std::path::Path::new("/test/stuck"))
+      .submit_task(
+        project_id,
+        std::path::Path::new("/test/stuck"),
+        crate::models::TaskType::FullIndex,
+      )
       .await
       .unwrap();
 
@@ -783,7 +792,11 @@ mod tests {
 
     // Submit a task
     let task_id = task_manager
-      .submit_task(project_id, std::path::Path::new("/test/claim"))
+      .submit_task(
+        project_id,
+        std::path::Path::new("/test/claim"),
+        crate::models::TaskType::FullIndex,
+      )
       .await
       .unwrap();
 
@@ -809,7 +822,11 @@ mod tests {
       let path = format!("/test/claim/{}", i);
       let project_id = Uuid::now_v7(); // Different project ID for each task
       task_manager
-        .submit_task(project_id, std::path::Path::new(&path))
+        .submit_task(
+          project_id,
+          std::path::Path::new(&path),
+          crate::models::TaskType::FullIndex,
+        )
         .await
         .unwrap();
     }
@@ -855,7 +872,11 @@ mod tests {
     let (task_manager, _temp_dir, project_id) = create_test_task_manager().await;
 
     let task_id = task_manager
-      .submit_task(project_id, std::path::Path::new("/test/complete"))
+      .submit_task(
+        project_id,
+        std::path::Path::new("/test/complete"),
+        crate::models::TaskType::FullIndex,
+      )
       .await
       .unwrap();
 
@@ -875,7 +896,11 @@ mod tests {
     let (task_manager, _temp_dir, project_id) = create_test_task_manager().await;
 
     let task_id = task_manager
-      .submit_task(project_id, std::path::Path::new("/test/fail"))
+      .submit_task(
+        project_id,
+        std::path::Path::new("/test/fail"),
+        crate::models::TaskType::FullIndex,
+      )
       .await
       .unwrap();
 
@@ -905,7 +930,7 @@ mod tests {
 
     // Submit a task
     let task_id = task_manager
-      .submit_task(project_id, &test_dir)
+      .submit_task(project_id, &test_dir, crate::models::TaskType::FullIndex)
       .await
       .unwrap();
 
@@ -965,7 +990,11 @@ mod tests {
     // Use different project IDs to avoid merging
     let project1 = Uuid::now_v7();
     let task1_id = task_manager
-      .submit_task(project1, std::path::Path::new("/test/first"))
+      .submit_task(
+        project1,
+        std::path::Path::new("/test/first"),
+        crate::models::TaskType::FullIndex,
+      )
       .await
       .unwrap();
 
@@ -973,7 +1002,11 @@ mod tests {
 
     let project2 = Uuid::now_v7();
     let task2_id = task_manager
-      .submit_task(project2, std::path::Path::new("/test/second"))
+      .submit_task(
+        project2,
+        std::path::Path::new("/test/second"),
+        crate::models::TaskType::FullIndex,
+      )
       .await
       .unwrap();
 
@@ -981,7 +1014,11 @@ mod tests {
 
     let project3 = Uuid::now_v7();
     let task3_id = task_manager
-      .submit_task(project3, std::path::Path::new("/test/third"))
+      .submit_task(
+        project3,
+        std::path::Path::new("/test/third"),
+        crate::models::TaskType::FullIndex,
+      )
       .await
       .unwrap();
 
@@ -1005,7 +1042,11 @@ mod tests {
     let (task_manager, _temp_dir, project_id) = create_test_task_manager().await;
 
     let task_id = task_manager
-      .submit_task(project_id, std::path::Path::new("/test/quotes"))
+      .submit_task(
+        project_id,
+        std::path::Path::new("/test/quotes"),
+        crate::models::TaskType::FullIndex,
+      )
       .await
       .unwrap();
 
@@ -1027,7 +1068,11 @@ mod tests {
 
     // Submit a task and update it to have all fields populated
     let task_id = task_manager
-      .submit_task(project_id, std::path::Path::new("/test/conversion"))
+      .submit_task(
+        project_id,
+        std::path::Path::new("/test/conversion"),
+        crate::models::TaskType::FullIndex,
+      )
       .await
       .unwrap();
 
@@ -1073,7 +1118,7 @@ mod tests {
 
     // First, do a full index to populate the database
     let full_task_id = task_manager
-      .submit_task(project_id, &project_dir)
+      .submit_task(project_id, &project_dir, crate::models::TaskType::FullIndex)
       .await
       .unwrap();
 
@@ -1115,7 +1160,7 @@ mod tests {
     });
 
     let partial_task_id = task_manager
-      .submit_task_with_type(
+      .submit_task(
         project_id,
         &project_dir,
         crate::models::TaskType::PartialUpdate {
@@ -1175,7 +1220,11 @@ mod tests {
 
     // Submit a task
     let _task_id = task_manager
-      .submit_task(project_id, std::path::Path::new("/test/active"))
+      .submit_task(
+        project_id,
+        std::path::Path::new("/test/active"),
+        crate::models::TaskType::FullIndex,
+      )
       .await
       .unwrap();
 
@@ -1235,7 +1284,7 @@ mod tests {
 
     // First, do a full index to populate the database
     let full_task_id = task_manager
-      .submit_task(project_id, &project_dir)
+      .submit_task(project_id, &project_dir, crate::models::TaskType::FullIndex)
       .await
       .unwrap();
 
@@ -1287,7 +1336,7 @@ mod tests {
     });
 
     let partial_task_id = task_manager
-      .submit_task_with_type(
+      .submit_task(
         project_id,
         &project_dir,
         crate::models::TaskType::PartialUpdate {

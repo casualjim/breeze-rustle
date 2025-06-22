@@ -112,7 +112,8 @@ impl Indexer {
     let table = Arc::new(RwLock::new(table));
     let config = Arc::new(config);
     let embedding_provider: Arc<dyn EmbeddingProvider> = Arc::from(embedding_provider);
-    let project_manager = Arc::new(ProjectManager::new(project_table));
+
+    // Create task manager first
     let task_manager = Arc::new(TaskManager::new(
       task_table,
       table.clone(),
@@ -123,6 +124,9 @@ impl Indexer {
         table.clone(),
       ),
     ));
+
+    // Then create project manager with task manager reference
+    let project_manager = Arc::new(ProjectManager::new(project_table, task_manager.clone()));
 
     Ok(Self {
       config,
@@ -183,7 +187,7 @@ impl Indexer {
     // Submit partial index task
     let task_id = self
       .task_manager
-      .submit_task_with_type(
+      .submit_task(
         project_id,
         &canonical_project,
         crate::models::TaskType::PartialUpdate { changes },
@@ -214,7 +218,11 @@ impl Indexer {
 
     let task_id = self
       .task_manager
-      .submit_task(project_id, Path::new(&project.directory))
+      .submit_task(
+        project_id,
+        Path::new(&project.directory),
+        crate::models::TaskType::FullIndex,
+      )
       .await?;
 
     // Start file watcher for the project

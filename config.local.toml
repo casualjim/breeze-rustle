@@ -123,7 +123,7 @@ model = "voyage-code-3" # Best for code embeddings
 # Rate limiting for the provider
 # requests_per_minute = 3000
 # tokens_per_minute = 1000000
-# max_concurrent_requests = 50
+max_concurrent_requests = 10
 
 # [embeddings.my-provider]
 # api_base = "https://api.myprovider.com/v1"

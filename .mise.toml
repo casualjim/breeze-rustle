@@ -1,5 +1,6 @@
 [tools]
-rust = { version = "1.84.0", components = "rust-src,llvm-tools", profile = "default" }
+rust = { version = "latest", profile = "default" }
 just = "1"
-"aqua:cargo-bins/cargo-binstall" = "1"
+"aqua:cargo-bins/cargo-binstall" = "latest"
 mkcert = "latest"
+"aqua:volta-cli/volta" = "latest"

@@ -5,7 +5,7 @@ use breeze_indexer::Indexer;
 use rmcp::transport::streamable_http_server::{
   StreamableHttpService, session::local::LocalSessionManager,
 };
-use rmcp::{Error as McpError, RoleServer, ServerHandler, model::*, service::RequestContext, tool, resource};
+use rmcp::{Error as McpError, RoleServer, ServerHandler, model::*, service::RequestContext, tool};
 use serde_json::json;
 use tracing::info;
 use uuid::Uuid;
@@ -22,7 +22,6 @@ impl BreezeService {
   pub fn new(indexer: Arc<Indexer>) -> Self {
     Self { indexer }
   }
-
 
   #[tool(description = "Create a new project for indexing")]
   async fn create_project(

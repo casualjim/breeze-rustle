@@ -115,7 +115,7 @@ impl ProjectWatcher {
                 if let Ok(handle) = rt {
                   handle.spawn(async move {
                     match task_manager
-                      .submit_task_with_type(
+                      .submit_task(
                         project_id,
                         &project_path,
                         crate::models::TaskType::PartialUpdate { changes },
@@ -135,7 +135,7 @@ impl ProjectWatcher {
                   std::thread::spawn(move || {
                     let rt = tokio::runtime::Runtime::new().unwrap();
                     rt.block_on(async {
-                    match task_manager.submit_task_with_type(
+                    match task_manager.submit_task(
                       project_id,
                       &project_path,
                       crate::models::TaskType::PartialUpdate { changes },
