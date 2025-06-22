@@ -1,11 +1,12 @@
 use tracing::{debug, error};
+use uuid::Uuid;
 
 use crate::models::CodeDocument;
-use crate::pipeline::FileAccumulator;
-use breeze_chunkers::Chunk;
+use crate::pipeline::{FileAccumulator, PipelineChunk};
 
 /// Build a document from accumulated file chunks using weighted average
 pub(crate) async fn build_document_from_accumulator(
+  project_id: Uuid,
   accumulator: FileAccumulator,
   embedding_dim: usize,
 ) -> Option<CodeDocument> {
@@ -22,7 +23,7 @@ pub(crate) async fn build_document_from_accumulator(
 
   for embedded_chunk in &embedded_chunks {
     match &embedded_chunk.chunk {
-      Chunk::Semantic(sc) | Chunk::Text(sc) => {
+      PipelineChunk::Semantic(sc) | PipelineChunk::Text(sc) => {
         // Use actual token count if available, otherwise estimate
         let token_count = sc
           .tokens
@@ -32,7 +33,7 @@ pub(crate) async fn build_document_from_accumulator(
         weights.push(token_count);
         total_weight += token_count;
       }
-      Chunk::EndOfFile { .. } => continue, // Skip EOF markers
+      PipelineChunk::EndOfFile { .. } => continue, // Skip EOF markers
     }
   }
 
@@ -45,7 +46,7 @@ pub(crate) async fn build_document_from_accumulator(
   let mut aggregated_embedding = vec![0.0; embedding_dim];
 
   for (i, embedded_chunk) in embedded_chunks.iter().enumerate() {
-    if matches!(embedded_chunk.chunk, Chunk::EndOfFile { .. }) {
+    if matches!(embedded_chunk.chunk, PipelineChunk::EndOfFile { .. }) {
       continue;
     }
     let weight = weights[i];
@@ -66,9 +67,9 @@ pub(crate) async fn build_document_from_accumulator(
   // Check if we have an EOF chunk with content
   let (content, content_hash) = if let Some(eof_chunk) = embedded_chunks
     .iter()
-    .find(|ec| matches!(ec.chunk, Chunk::EndOfFile { .. }))
+    .find(|ec| matches!(ec.chunk, PipelineChunk::EndOfFile { .. }))
   {
-    if let Chunk::EndOfFile {
+    if let PipelineChunk::EndOfFile {
       ref content,
       ref content_hash,
       ..
@@ -87,7 +88,7 @@ pub(crate) async fn build_document_from_accumulator(
   };
 
   // Create document with content from EOF chunk
-  let mut doc = CodeDocument::new(file_path, content);
+  let mut doc = CodeDocument::new(project_id, file_path, content);
   doc.update_embedding(aggregated_embedding);
   doc.update_content_hash(content_hash);
   Some(doc)
@@ -96,14 +97,14 @@ pub(crate) async fn build_document_from_accumulator(
 #[cfg(test)]
 mod tests {
   use super::*;
-  use crate::pipeline::EmbeddedChunk;
-  use breeze_chunkers::{Chunk, ChunkMetadata, SemanticChunk};
+  use crate::pipeline::{EmbeddedChunk, PipelineChunk};
+  use breeze_chunkers::{ChunkMetadata, SemanticChunk};
   use std::io::Write;
   use tempfile::NamedTempFile;
 
   fn create_test_chunk(text: &str, embedding: Vec<f32>) -> EmbeddedChunk {
     EmbeddedChunk {
-      chunk: Chunk::Text(SemanticChunk {
+      chunk: PipelineChunk::Text(SemanticChunk {
         text: text.to_string(),
         start_byte: 0,
         end_byte: text.len(),
@@ -148,7 +149,7 @@ mod tests {
     let mut content_hash = [0u8; 32];
     content_hash.copy_from_slice(hash.as_bytes());
     accumulator.add_chunk(EmbeddedChunk {
-      chunk: Chunk::EndOfFile {
+      chunk: PipelineChunk::EndOfFile {
         file_path: file_path.clone(),
         content: content.to_string(),
         content_hash,
@@ -156,7 +157,8 @@ mod tests {
       embedding: vec![],
     });
 
-    let doc = build_document_from_accumulator(accumulator, 3)
+    let project_id = uuid::Uuid::now_v7();
+    let doc = build_document_from_accumulator(project_id, accumulator, 3)
       .await
       .unwrap();
 
@@ -177,8 +179,9 @@ mod tests {
 
   #[tokio::test]
   async fn test_empty_chunks() {
+    let project_id = uuid::Uuid::now_v7();
     let accumulator = FileAccumulator::new("empty.txt".to_string());
-    let result = build_document_from_accumulator(accumulator, 3).await;
+    let result = build_document_from_accumulator(project_id, accumulator, 3).await;
     assert!(result.is_none());
   }
 }

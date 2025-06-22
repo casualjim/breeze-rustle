@@ -5,12 +5,13 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Instant;
 
 use breeze_chunkers::{Chunk, Tokenizer, WalkOptions, walk_project};
-use futures_util::StreamExt;
+use futures_util::{StreamExt, TryStreamExt};
 use lancedb::Table;
 use lancedb::query::{ExecutableQuery, QueryBase};
 use tokio::sync::{RwLock, mpsc};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info};
+use uuid::Uuid;
 
 use crate::IndexerError;
 use crate::config::Config;
@@ -18,7 +19,10 @@ use crate::converter::BufferedRecordBatchConverter;
 use crate::document_builder::build_document_from_accumulator;
 use crate::embeddings::EmbeddingProvider;
 use crate::models::CodeDocument;
-use crate::pipeline::{ChunkBatch, EmbeddedChunk, EmbeddedChunkWithFile, FileAccumulator};
+use crate::pipeline::{
+  ChunkBatch, EmbeddedChunk, EmbeddedChunkWithFile, FileAccumulator, PipelineChunk,
+  PipelineProjectChunk,
+};
 use crate::sinks::lancedb_sink::LanceDbSink;
 
 pub struct BulkIndexer {
@@ -44,16 +48,20 @@ impl BulkIndexer {
   }
 
   /// Query existing file hashes from the database for work avoidance
-  async fn get_existing_file_hashes(&self) -> Result<BTreeMap<PathBuf, [u8; 32]>, IndexerError> {
+  async fn get_existing_file_hashes(
+    &self,
+    project_id: Uuid,
+  ) -> Result<BTreeMap<PathBuf, [u8; 32]>, IndexerError> {
     use arrow::array::*;
     use futures_util::TryStreamExt;
 
     let table = self.table.read().await;
     let mut hashes = BTreeMap::new();
 
-    // Query only the file_path and content_hash columns
+    // Query only the file_path and content_hash columns for this project
     let mut query = table
       .query()
+      .only_if(format!("project_id = '{}'", project_id))
       .select(lancedb::query::Select::columns(&[
         "file_path",
         "content_hash",
@@ -91,17 +99,21 @@ impl BulkIndexer {
 
   pub async fn index(
     &self,
-    path: &Path,
+    project_id: Uuid,
+    project_path: &Path,
     cancel_token: Option<CancellationToken>,
   ) -> Result<usize, IndexerError> {
     let start_time = Instant::now();
-    info!(path = %path.display(), "Starting channel-based indexing");
+    info!(project_id = %project_id, path = %project_path.display(), "Starting channel-based indexing");
 
     // Query existing hashes for work avoidance
-    let existing_hashes = self.get_existing_file_hashes().await.unwrap_or_else(|e| {
-      error!("Failed to get existing hashes: {}", e);
-      BTreeMap::new()
-    });
+    let existing_hashes = self
+      .get_existing_file_hashes(project_id)
+      .await
+      .unwrap_or_else(|e| {
+        error!("Failed to get existing hashes: {}", e);
+        BTreeMap::new()
+      });
 
     // Setup
     // Get tokenizer from the embedding provider
@@ -128,9 +140,11 @@ impl BulkIndexer {
       existing_hashes,
     };
 
-    let chunk_stream = walk_project(path.to_path_buf(), walk_options);
+    let chunk_stream = walk_project(project_path.to_path_buf(), walk_options);
     // Use same batch size as local models for consistency
-    let result = self.index_stream(chunk_stream, 256, cancel_token).await?;
+    let result = self
+      .index_stream(project_id, chunk_stream, 256, cancel_token)
+      .await?;
 
     let elapsed = start_time.elapsed();
     info!(
@@ -142,21 +156,164 @@ impl BulkIndexer {
     Ok(result)
   }
 
+  /// Process file changes including expanding directories to individual files for deletion
+  pub async fn index_file_changes(
+    &self,
+    project_id: Uuid,
+    project_root: impl AsRef<Path>,
+    changes: &std::collections::BTreeSet<crate::models::FileChange>,
+    cancel_token: Option<CancellationToken>,
+  ) -> Result<usize, IndexerError> {
+    use crate::models::FileOperation;
+    use arrow::array::StringArray;
+    use futures::stream;
+
+    let project_root = project_root.as_ref();
+    let mut file_paths = Vec::new();
+
+    // Process each change to expand directories to file paths
+    for change in changes {
+      println!(
+        "DEBUG: Processing change: {:?} for path: {}",
+        change.operation,
+        change.path.display()
+      );
+      match change.operation {
+        FileOperation::Delete => {
+          // For delete operations, always check if there are files under this path in the database
+          // This handles both explicit directory deletions and the case where a directory
+          // was deleted and no longer exists on disk
+          println!(
+            "DEBUG: Checking if path has files under it: {}",
+            change.path.display()
+          );
+          let dir_str = change.path.to_string_lossy();
+          let escaped_path = dir_str.replace("'", "''");
+
+          // Query for all files with this path prefix (could be a directory) for this project
+          let query_expr = if escaped_path.ends_with(std::path::MAIN_SEPARATOR) {
+            format!(
+              "project_id = '{}' AND file_path LIKE '{}%'",
+              project_id, escaped_path
+            )
+          } else {
+            // Could be either a file or directory - check for both
+            format!(
+              "project_id = '{}' AND (file_path = '{}' OR file_path LIKE '{}{}%')",
+              project_id,
+              escaped_path,
+              escaped_path,
+              std::path::MAIN_SEPARATOR
+            )
+          };
+
+          // Get read access to the table
+          let table = self.table.read().await;
+          let mut query = table
+            .query()
+            .only_if(&query_expr)
+            .select(lancedb::query::Select::columns(&["file_path"]))
+            .execute()
+            .await
+            .map_err(|e| IndexerError::Database(e.to_string()))?;
+
+          // Collect all file paths that match
+          let mut found_files = Vec::new();
+          while let Some(batch) = query
+            .try_next()
+            .await
+            .map_err(|e| IndexerError::Database(e.to_string()))?
+          {
+            if let Some(file_paths_array) = batch
+              .column_by_name("file_path")
+              .and_then(|col| col.as_any().downcast_ref::<StringArray>())
+            {
+              for i in 0..batch.num_rows() {
+                let file_path = file_paths_array.value(i);
+                found_files.push(PathBuf::from(file_path));
+                debug!(
+                  file_path = %file_path,
+                  "Found file to delete"
+                );
+              }
+            }
+          }
+
+          drop(table); // Release the read lock
+
+          if !found_files.is_empty() {
+            // Found files in the database - add them all for deletion
+            println!(
+              "DEBUG: Found {} files in DB under path: {}",
+              found_files.len(),
+              change.path.display()
+            );
+            for file in found_files {
+              file_paths.push(file);
+            }
+          } else {
+            // No files found in DB - just add the original path
+            // It might be a file that doesn't exist yet or was already deleted
+            println!(
+              "DEBUG: No files found in DB for path: {}, adding as-is",
+              change.path.display()
+            );
+            file_paths.push(change.path.clone());
+          }
+        }
+        _ => {
+          // For all other operations (file deletes, adds, updates), use the path as-is
+          file_paths.push(change.path.clone());
+          debug!(
+            file_path = %change.path.display(),
+            operation = ?change.operation,
+            "Adding file path for processing"
+          );
+        }
+      }
+    }
+
+    if file_paths.is_empty() {
+      info!("No files to process after expanding directories");
+      return Ok(0);
+    }
+
+    println!(
+      "index_file_changes: Processing {} file paths:",
+      file_paths.len()
+    );
+    for path in &file_paths {
+      println!("  - {}", path.display());
+    }
+
+    // Create a stream from all file paths
+    let file_stream = stream::iter(file_paths);
+
+    // Use the existing index_files method
+    self
+      .index_files(project_id, project_root, file_stream, cancel_token)
+      .await
+  }
+
   pub async fn index_files(
     &self,
+    project_id: Uuid,
     project_root: impl AsRef<Path>,
     files: impl futures_util::Stream<Item = std::path::PathBuf> + Send + 'static,
     cancel_token: Option<CancellationToken>,
   ) -> Result<usize, IndexerError> {
     let start_time = Instant::now();
     let project_root = project_root.as_ref().to_path_buf();
-    info!(project_root = %project_root.display(), "Starting partial file indexing");
+    info!(project_id = %project_id, project_root = %project_root.display(), "Starting partial file indexing");
 
     // Query existing hashes for work avoidance
-    let existing_hashes = self.get_existing_file_hashes().await.unwrap_or_else(|e| {
-      error!("Failed to get existing hashes: {}", e);
-      BTreeMap::new()
-    });
+    let existing_hashes = self
+      .get_existing_file_hashes(project_id)
+      .await
+      .unwrap_or_else(|e| {
+        error!("Failed to get existing hashes: {}", e);
+        BTreeMap::new()
+      });
 
     // Get tokenizer from the embedding provider
     let tokenizer = if let Some(provider_tokenizer) = self.embedding_provider.tokenizer() {
@@ -185,7 +342,9 @@ impl BulkIndexer {
     // Use the walk_files function from chunkers
     let chunk_stream = breeze_chunkers::walk_files(files, project_root, walk_options);
     // Use same batch size as local models for consistency
-    let result = self.index_stream(chunk_stream, 256, cancel_token).await?;
+    let result = self
+      .index_stream(project_id, chunk_stream, 256, cancel_token)
+      .await?;
 
     let elapsed = start_time.elapsed();
     info!(
@@ -200,6 +359,7 @@ impl BulkIndexer {
   // Testable pipeline that accepts any stream of chunks
   pub async fn index_stream(
     &self,
+    project_id: Uuid,
     chunk_stream: impl futures_util::Stream<
       Item = Result<breeze_chunkers::ProjectChunk, breeze_chunkers::ChunkError>,
     > + Send
@@ -213,6 +373,7 @@ impl BulkIndexer {
     let (batch_tx, batch_rx) = mpsc::channel::<ChunkBatch>(10);
     let (embedded_tx, embedded_rx) = mpsc::channel::<EmbeddedChunkWithFile>(100);
     let (doc_tx, doc_rx) = mpsc::channel::<CodeDocument>(50);
+    let (delete_tx, delete_rx) = mpsc::channel::<(Uuid, PathBuf)>(25);
 
     // Progress tracking and cancellation
     let stats = IndexingStats::new();
@@ -221,7 +382,9 @@ impl BulkIndexer {
     // Start pipeline stages with cancellation support
     // we start this with in the reverse order of execution
     let sink_handle = self.spawn_sink(doc_rx, stats.clone(), embedding_dim);
+    let delete_handle = self.spawn_delete_handler(project_id, delete_rx, cancel_token.clone());
     let doc_handle = self.spawn_document_builder(
+      project_id,
       embedded_rx,
       doc_tx,
       embedding_dim,
@@ -249,18 +412,21 @@ impl BulkIndexer {
       vec![self.spawn_embedder(batch_rx, embedded_tx, stats.clone(), cancel_token.clone())]
     };
 
-    let walk_handle = self.spawn_stream_processor(
-      chunk_stream,
+    let stream_processor_params = StreamProcessorParams {
+      project_id,
       batch_tx,
+      delete_tx,
       max_batch_size,
-      stats.clone(),
-      cancel_token.clone(),
-    );
+      stats: stats.clone(),
+      cancel_token: cancel_token.clone(),
+    };
+    let walk_handle = self.spawn_stream_processor(chunk_stream, stream_processor_params);
 
     // Wait for pipeline completion with proper error handling
     let walk_result = walk_handle.await;
     let doc_result = doc_handle.await;
     let sink_result = sink_handle.await;
+    let delete_result = delete_handle.await;
 
     // Wait for all embedding workers
     let embed_results = futures::future::join_all(embed_handles).await;
@@ -293,6 +459,14 @@ impl BulkIndexer {
       )));
     }
 
+    if let Err(e) = delete_result {
+      cancel_token.cancel();
+      return Err(IndexerError::Task(format!(
+        "Delete handler task failed: {}",
+        e
+      )));
+    }
+
     let documents_written = sink_result
       .map_err(|e| IndexerError::Task(format!("Sink task panicked: {}", e)))?
       .map_err(|e| IndexerError::Task(format!("Sink task failed: {}", e)))?;
@@ -316,18 +490,9 @@ impl BulkIndexer {
       Item = Result<breeze_chunkers::ProjectChunk, breeze_chunkers::ChunkError>,
     > + Send
     + 'static,
-    batch_tx: mpsc::Sender<ChunkBatch>,
-    max_batch_size: usize,
-    stats: IndexingStats,
-    cancel_token: CancellationToken,
+    params: StreamProcessorParams,
   ) -> tokio::task::JoinHandle<()> {
-    tokio::spawn(stream_processor_task(
-      chunk_stream,
-      batch_tx,
-      max_batch_size,
-      stats,
-      cancel_token,
-    ))
+    tokio::spawn(stream_processor_task(chunk_stream, params))
   }
 
   fn spawn_embedder(
@@ -412,6 +577,7 @@ impl BulkIndexer {
 
   fn spawn_document_builder(
     &self,
+    project_id: Uuid,
     embedded_rx: mpsc::Receiver<EmbeddedChunkWithFile>,
     doc_tx: mpsc::Sender<CodeDocument>,
     embedding_dim: usize,
@@ -419,6 +585,7 @@ impl BulkIndexer {
     cancel_token: CancellationToken,
   ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(document_builder_task(
+      project_id,
       embedded_rx,
       doc_tx,
       embedding_dim,
@@ -435,6 +602,21 @@ impl BulkIndexer {
   ) -> tokio::task::JoinHandle<Result<usize, IndexerError>> {
     let table = self.table.clone();
     tokio::spawn(sink_task(doc_rx, table, embedding_dim, stats))
+  }
+
+  fn spawn_delete_handler(
+    &self,
+    project_id: Uuid,
+    delete_rx: mpsc::Receiver<(Uuid, PathBuf)>,
+    cancel_token: CancellationToken,
+  ) -> tokio::task::JoinHandle<()> {
+    let table = self.table.clone();
+    tokio::spawn(delete_handler_task(
+      project_id,
+      delete_rx,
+      table,
+      cancel_token,
+    ))
   }
 }
 
@@ -457,9 +639,18 @@ impl IndexingStats {
   }
 }
 
+struct StreamProcessorParams {
+  project_id: Uuid,
+  batch_tx: mpsc::Sender<ChunkBatch>,
+  delete_tx: mpsc::Sender<(Uuid, PathBuf)>,
+  max_batch_size: usize,
+  stats: IndexingStats,
+  cancel_token: CancellationToken,
+}
+
 async fn send_batch(
   tx: &mpsc::Sender<ChunkBatch>,
-  buffer: &mut Vec<breeze_chunkers::ProjectChunk>,
+  buffer: &mut Vec<PipelineProjectChunk>,
   batch_id: usize,
 ) {
   if !buffer.is_empty() {
@@ -498,10 +689,7 @@ async fn stream_processor_task(
     Item = Result<breeze_chunkers::ProjectChunk, breeze_chunkers::ChunkError>,
   > + Send
   + 'static,
-  batch_tx: mpsc::Sender<ChunkBatch>,
-  max_batch_size: usize,
-  stats: IndexingStats,
-  cancel_token: CancellationToken,
+  params: StreamProcessorParams,
 ) {
   let _guard = TaskGuard::new("Stream processor");
   let mut chunk_stream = Box::pin(chunk_stream);
@@ -511,28 +699,48 @@ async fn stream_processor_task(
 
   loop {
     tokio::select! {
-      _ = cancel_token.cancelled() => {
+      _ = params.cancel_token.cancelled() => {
         info!("Walker cancelled");
         break;
       }
       result = chunk_stream.next() => {
         match result {
           Some(Ok(project_chunk)) => {
-            // Count files when we see EOF markers
-            let is_eof = matches!(project_chunk.chunk, Chunk::EndOfFile { .. });
-            if is_eof {
-              stats.files.fetch_add(1, Ordering::Relaxed);
-            } else {
-              stats.chunks.fetch_add(1, Ordering::Relaxed);
-              regular_chunk_count += 1;
+            // Handle Delete chunks separately
+            if let Chunk::Delete { file_path } = &project_chunk.chunk {
+              // Send delete request immediately
+              info!("Stream processor sending delete request for: {}", file_path);
+              println!("DEBUG: Stream processor received Delete chunk for: {}", file_path);
+              if let Err(e) = params.delete_tx.send((params.project_id, PathBuf::from(file_path))).await {
+                error!("Failed to send delete request for {}: {}", file_path, e);
+              }
+              continue; // Don't add to batch buffer
             }
 
-            // Add all chunks (including EOF) to batch buffer
-            batch_buffer.push(project_chunk);
+            // Convert to PipelineChunk
+            if let Some(pipeline_chunk) = PipelineChunk::from_chunk(project_chunk.chunk.clone()) {
+              let pipeline_project_chunk = PipelineProjectChunk {
+                file_path: project_chunk.file_path,
+                chunk: pipeline_chunk,
+              };
+
+              // Count files when we see EOF markers
+              let is_eof = matches!(pipeline_project_chunk.chunk, PipelineChunk::EndOfFile { .. });
+
+              if is_eof {
+                params.stats.files.fetch_add(1, Ordering::Relaxed);
+              } else {
+                params.stats.chunks.fetch_add(1, Ordering::Relaxed);
+                regular_chunk_count += 1;
+              }
+
+              // Add chunks (including EOF) to batch buffer
+              batch_buffer.push(pipeline_project_chunk);
+            }
 
             // Send batch when we have enough REGULAR chunks (not counting EOFs)
-            if regular_chunk_count >= max_batch_size {
-              send_batch(&batch_tx, &mut batch_buffer, batch_id).await;
+            if regular_chunk_count >= params.max_batch_size {
+              send_batch(&params.batch_tx, &mut batch_buffer, batch_id).await;
               batch_id += 1;
               regular_chunk_count = 0;
             }
@@ -546,12 +754,12 @@ async fn stream_processor_task(
 
   // Send remaining chunks
   if !batch_buffer.is_empty() {
-    send_batch(&batch_tx, &mut batch_buffer, batch_id).await;
+    send_batch(&params.batch_tx, &mut batch_buffer, batch_id).await;
   }
 
   info!(
-    files = stats.files.load(Ordering::Relaxed),
-    chunks = stats.chunks.load(Ordering::Relaxed),
+    files = params.stats.files.load(Ordering::Relaxed),
+    chunks = params.stats.chunks.load(Ordering::Relaxed),
     "Stream processor completed"
   );
 }
@@ -572,8 +780,8 @@ async fn remote_embedder_worker_task(
 
   // Simple structure to hold regular chunks and EOF chunks separately
   struct PendingBatch {
-    regular_chunks: Vec<breeze_chunkers::ProjectChunk>,
-    eof_chunks: Vec<breeze_chunkers::ProjectChunk>,
+    regular_chunks: Vec<PipelineProjectChunk>,
+    eof_chunks: Vec<PipelineProjectChunk>,
   }
 
   // Keep batches in order - BTreeMap maintains key order
@@ -600,7 +808,7 @@ async fn remote_embedder_worker_task(
         let (eof_chunks, regular_chunks): (Vec<_>, Vec<_>) = batch
           .chunks
           .into_iter()
-          .partition(|pc| matches!(pc.chunk, Chunk::EndOfFile { .. }));
+          .partition(|pc| matches!(pc.chunk, PipelineChunk::EndOfFile { .. }));
 
         // Store this batch
         pending_batches.insert(
@@ -625,10 +833,8 @@ async fn remote_embedder_worker_task(
         // Process if we have enough chunks
         if have_enough {
           // Collect chunks to process while maintaining batch_id association
-          let mut chunks_by_batch_id: std::collections::BTreeMap<
-            usize,
-            Vec<breeze_chunkers::ProjectChunk>,
-          > = std::collections::BTreeMap::new();
+          let mut chunks_by_batch_id: std::collections::BTreeMap<usize, Vec<PipelineProjectChunk>> =
+            std::collections::BTreeMap::new();
 
           for (bid, pending_batch) in pending_batches.iter_mut() {
             if !pending_batch.regular_chunks.is_empty() {
@@ -672,7 +878,7 @@ async fn remote_embedder_worker_task(
 
             // Send EOF chunks if this batch is complete
             for eof_chunk in embedding_batch.eof_chunks {
-              if let Chunk::EndOfFile { .. } = eof_chunk.chunk {
+              if let PipelineChunk::EndOfFile { .. } = eof_chunk.chunk {
                 total_files_processed += 1;
                 let eof = EmbeddedChunkWithFile {
                   batch_id: embedding_batch.batch_id,
@@ -729,7 +935,7 @@ async fn remote_embedder_worker_task(
 
               // Send EOF chunks
               for eof_chunk in embedding_batch.eof_chunks {
-                if let Chunk::EndOfFile { .. } = eof_chunk.chunk {
+                if let PipelineChunk::EndOfFile { .. } = eof_chunk.chunk {
                   total_files_processed += 1;
                   let eof = EmbeddedChunkWithFile {
                     batch_id: embedding_batch.batch_id,
@@ -748,7 +954,7 @@ async fn remote_embedder_worker_task(
           // Send any remaining EOF chunks
           for (bid, pending_batch) in pending_batches {
             for eof_chunk in pending_batch.eof_chunks {
-              if let Chunk::EndOfFile { .. } = eof_chunk.chunk {
+              if let PipelineChunk::EndOfFile { .. } = eof_chunk.chunk {
                 total_files_processed += 1;
                 let eof = EmbeddedChunkWithFile {
                   batch_id: bid,
@@ -788,8 +994,8 @@ async fn embedder_task(
 
   // Simple structure to hold regular chunks and EOF chunks separately
   struct PendingBatch {
-    regular_chunks: Vec<breeze_chunkers::ProjectChunk>,
-    eof_chunks: Vec<breeze_chunkers::ProjectChunk>,
+    regular_chunks: Vec<PipelineProjectChunk>,
+    eof_chunks: Vec<PipelineProjectChunk>,
   }
 
   // Keep batches in order - BTreeMap maintains key order
@@ -813,7 +1019,7 @@ async fn embedder_task(
 
             // Separate EOF markers from regular chunks
             let (eof_chunks, regular_chunks): (Vec<_>, Vec<_>) = batch.chunks.into_iter()
-              .partition(|pc| matches!(pc.chunk, Chunk::EndOfFile { .. }));
+              .partition(|pc| matches!(pc.chunk, PipelineChunk::EndOfFile { .. }));
 
             // Store this batch
             pending_batches.insert(batch_id, PendingBatch {
@@ -870,7 +1076,7 @@ async fn embedder_task(
 
                 // Send EOF chunks if this batch is complete
                 for eof_chunk in embedding_batch.eof_chunks {
-                  if let Chunk::EndOfFile { .. } = eof_chunk.chunk {
+                  if let PipelineChunk::EndOfFile { .. } = eof_chunk.chunk {
                     total_files_processed += 1;
                     let eof = EmbeddedChunkWithFile {
                       batch_id: embedding_batch.batch_id,
@@ -919,7 +1125,7 @@ async fn embedder_task(
 
                   // Send EOF chunks
                   for eof_chunk in embedding_batch.eof_chunks {
-                    if let Chunk::EndOfFile { .. } = eof_chunk.chunk {
+                    if let PipelineChunk::EndOfFile { .. } = eof_chunk.chunk {
                       total_files_processed += 1;
                       let eof = EmbeddedChunkWithFile {
                         batch_id: embedding_batch.batch_id,
@@ -938,7 +1144,7 @@ async fn embedder_task(
               // Send any remaining EOF chunks
               for (bid, pending_batch) in pending_batches {
                 for eof_chunk in pending_batch.eof_chunks {
-                  if let Chunk::EndOfFile { .. } = eof_chunk.chunk {
+                  if let PipelineChunk::EndOfFile { .. } = eof_chunk.chunk {
                     total_files_processed += 1;
                     let eof = EmbeddedChunkWithFile {
                       batch_id: bid,
@@ -969,7 +1175,7 @@ async fn embedder_task(
 
 async fn process_embedding_batch(
   embedding_provider: &dyn EmbeddingProvider,
-  batch: Vec<breeze_chunkers::ProjectChunk>,
+  batch: Vec<PipelineProjectChunk>,
   batch_id: usize,
   embedded_tx: &mpsc::Sender<EmbeddedChunkWithFile>,
   stats: &IndexingStats,
@@ -992,7 +1198,7 @@ async fn process_embedding_batch(
     .iter()
     .enumerate()
     .filter_map(|(idx, pc)| match &pc.chunk {
-      Chunk::Semantic(sc) | Chunk::Text(sc) => {
+      PipelineChunk::Semantic(sc) | PipelineChunk::Text(sc) => {
         let input = crate::embeddings::EmbeddingInput {
           text: &sc.text,
           token_count: sc.tokens.as_ref().map(|t| t.len()),
@@ -1000,7 +1206,7 @@ async fn process_embedding_batch(
         chunks_to_embed.push(idx);
         Some(input)
       }
-      Chunk::EndOfFile { .. } => None,
+      PipelineChunk::EndOfFile { .. } => None,
     })
     .collect();
 
@@ -1042,6 +1248,7 @@ async fn process_embedding_batch(
 }
 
 async fn document_builder_task(
+  project_id: Uuid,
   mut embedded_rx: mpsc::Receiver<EmbeddedChunkWithFile>,
   doc_tx: mpsc::Sender<CodeDocument>,
   embedding_dim: usize,
@@ -1086,7 +1293,7 @@ async fn document_builder_task(
                 for embedded_chunk in batch_chunks {
                   let file_path = embedded_chunk.file_path.clone();
 
-                  if matches!(embedded_chunk.chunk, Chunk::EndOfFile { .. }) {
+                  if matches!(embedded_chunk.chunk, PipelineChunk::EndOfFile { .. }) {
                     // Build document for completed file
                     if let Some(mut accumulator) = file_accumulators.remove(&file_path) {
                       total_files_built += 1;
@@ -1097,7 +1304,7 @@ async fn document_builder_task(
                         chunk: embedded_chunk.chunk,
                         embedding: embedded_chunk.embedding,
                       });
-                      if let Some(doc) = build_document_from_accumulator(accumulator, embedding_dim).await {
+                      if let Some(doc) = build_document_from_accumulator(project_id, accumulator, embedding_dim).await {
                         stats.documents.fetch_add(1, Ordering::Relaxed);
                         document_batch.push(doc);
 
@@ -1150,7 +1357,7 @@ async fn document_builder_task(
     for embedded_chunk in batch_chunks {
       let file_path = embedded_chunk.file_path.clone();
 
-      if matches!(embedded_chunk.chunk, Chunk::EndOfFile { .. }) {
+      if matches!(embedded_chunk.chunk, PipelineChunk::EndOfFile { .. }) {
         // Build document for completed file
         if let Some(mut accumulator) = file_accumulators.remove(&file_path) {
           total_files_built += 1;
@@ -1165,7 +1372,9 @@ async fn document_builder_task(
             chunk: embedded_chunk.chunk,
             embedding: embedded_chunk.embedding,
           });
-          if let Some(doc) = build_document_from_accumulator(accumulator, embedding_dim).await {
+          if let Some(doc) =
+            build_document_from_accumulator(project_id, accumulator, embedding_dim).await
+          {
             stats.documents.fetch_add(1, Ordering::Relaxed);
             document_batch.push(doc);
           }
@@ -1186,7 +1395,8 @@ async fn document_builder_task(
 
   // Process remaining files (those without EOF chunks)
   for (_, accumulator) in file_accumulators {
-    if let Some(doc) = build_document_from_accumulator(accumulator, embedding_dim).await {
+    if let Some(doc) = build_document_from_accumulator(project_id, accumulator, embedding_dim).await
+    {
       stats.documents.fetch_add(1, Ordering::Relaxed);
       document_batch.push(doc);
     }
@@ -1232,11 +1442,83 @@ async fn sink_task(
   // Get the final row count from the table, excluding the dummy document
   let table_guard = table.read().await;
   let count = table_guard
-    .count_rows(Some(format!("id != '{}'", crate::models::DUMMY_DOCUMENT_ID)))
+    .count_rows(Some(format!(
+      "id != '{}'",
+      crate::models::DUMMY_DOCUMENT_ID
+    )))
     .await? as usize;
-  debug!(row_count = count, "Final table row count (excluding dummy document)");
+  debug!(
+    row_count = count,
+    "Final table row count (excluding dummy document)"
+  );
 
   Ok(count)
+}
+
+async fn delete_handler_task(
+  project_id: Uuid,
+  mut delete_rx: mpsc::Receiver<(Uuid, PathBuf)>,
+  table: Arc<RwLock<Table>>,
+  cancel_token: CancellationToken,
+) {
+  let _guard = TaskGuard::new("Delete handler");
+  let mut delete_count = 0;
+
+  loop {
+    tokio::select! {
+      _ = cancel_token.cancelled() => {
+        info!("Delete handler cancelled");
+        break;
+      }
+      path = delete_rx.recv() => {
+        match path {
+          Some((recv_project_id, file_path)) => {
+            // Only process deletions for the current project
+            if recv_project_id != project_id {
+              debug!("Skipping deletion for different project: {} != {}", recv_project_id, project_id);
+              continue;
+            }
+
+            let path_str = file_path.to_string_lossy();
+
+            // Never delete the dummy document
+            if path_str == "__lancedb_dummy__.txt" {
+              debug!("Skipping deletion of dummy document");
+              continue;
+            }
+
+            let escaped_path = path_str.to_string().replace("'", "''");
+            let delete_expr = format!("project_id = '{}' AND file_path = '{}'", project_id, escaped_path);
+
+            info!("Delete handler received delete request for: {}", file_path.display());
+            println!("DEBUG: Delete handler processing delete for: {} with expr: {}", file_path.display(), delete_expr);
+
+            let table_guard = table.write().await;
+            match table_guard.delete(&delete_expr).await {
+              Ok(_) => {
+                delete_count += 1;
+                info!("Successfully deleted document: {}", file_path.display());
+                println!("DEBUG: Successfully deleted: {}", file_path.display());
+              }
+              Err(e) => {
+                error!("Failed to delete document {}: {}", file_path.display(), e);
+                println!("DEBUG: Failed to delete {}: {}", file_path.display(), e);
+              }
+            }
+            drop(table_guard); // Release the write lock
+          }
+          None => break, // Channel closed
+        }
+      }
+    }
+  }
+
+  if delete_count > 0 {
+    info!(
+      "Delete handler completed: {} documents deleted",
+      delete_count
+    );
+  }
 }
 
 #[cfg(test)]
@@ -1419,7 +1701,10 @@ mod tests {
 
     let chunk_stream = stream::iter(chunks);
 
-    let count = indexer.index_stream(chunk_stream, 2, None).await.unwrap();
+    let count = indexer
+      .index_stream(Uuid::now_v7(), chunk_stream, 2, None)
+      .await
+      .unwrap();
 
     assert_eq!(count, 2, "Should have indexed 2 documents");
   }
@@ -1437,6 +1722,7 @@ mod tests {
     let cancel_clone = cancel_token.clone();
     let builder_handle = tokio::spawn(async move {
       document_builder_task(
+        Uuid::now_v7(),
         embedded_rx,
         doc_tx,
         embedding_dim,
@@ -1452,7 +1738,7 @@ mod tests {
       .send(EmbeddedChunkWithFile {
         batch_id: 1,
         file_path: "file2.rs".to_string(),
-        chunk: Chunk::Text(SemanticChunk {
+        chunk: PipelineChunk::Text(SemanticChunk {
           text: "chunk1".to_string(),
           tokens: None,
           start_byte: 0,
@@ -1479,7 +1765,7 @@ mod tests {
       .send(EmbeddedChunkWithFile {
         batch_id: 0,
         file_path: "file1.rs".to_string(),
-        chunk: Chunk::Text(SemanticChunk {
+        chunk: PipelineChunk::Text(SemanticChunk {
           text: "chunk1".to_string(),
           tokens: None,
           start_byte: 0,
@@ -1506,7 +1792,7 @@ mod tests {
       .send(EmbeddedChunkWithFile {
         batch_id: 0,
         file_path: "file1.rs".to_string(),
-        chunk: Chunk::EndOfFile {
+        chunk: PipelineChunk::EndOfFile {
           file_path: "file1.rs".to_string(),
           content: "chunk1".to_string(),
           content_hash: [0u8; 32],
@@ -1521,7 +1807,7 @@ mod tests {
       .send(EmbeddedChunkWithFile {
         batch_id: 1,
         file_path: "file2.rs".to_string(),
-        chunk: Chunk::EndOfFile {
+        chunk: PipelineChunk::EndOfFile {
           file_path: "file2.rs".to_string(),
           content: "chunk1".to_string(),
           content_hash: [1u8; 32],
@@ -1538,7 +1824,7 @@ mod tests {
     builder_handle.await.unwrap();
 
     // Collect all documents
-    let mut documents_received = Vec::new();
+    let mut documents_received: Vec<CodeDocument> = Vec::new();
     while let Ok(doc) = doc_rx.try_recv() {
       documents_received.push(doc);
     }
@@ -1588,7 +1874,10 @@ mod tests {
     ];
 
     let chunk_stream = stream::iter(chunks);
-    let count = indexer.index_stream(chunk_stream, 10, None).await.unwrap();
+    let count = indexer
+      .index_stream(Uuid::now_v7(), chunk_stream, 10, None)
+      .await
+      .unwrap();
 
     // Should still process valid files despite error
     assert_eq!(count, 2, "Should have indexed 2 documents despite error");
@@ -1630,7 +1919,9 @@ mod tests {
         embedding_dim,
         Arc::new(RwLock::new(table)),
       );
-      indexer.index_stream(chunk_stream, 5, None).await
+      indexer
+        .index_stream(Uuid::now_v7(), chunk_stream, 5, None)
+        .await
     });
 
     // Give it time to process the first chunks
@@ -1677,7 +1968,10 @@ mod tests {
     chunks.push(Ok(create_test_chunk("bigfile.rs", "", true)));
 
     let chunk_stream = stream::iter(chunks);
-    let count = indexer.index_stream(chunk_stream, 3, None).await.unwrap(); // batch size 3
+    let count = indexer
+      .index_stream(Uuid::now_v7(), chunk_stream, 3, None)
+      .await
+      .unwrap(); // batch size 3
 
     assert_eq!(count, 1, "Should have indexed 1 document with many chunks");
   }
@@ -1705,7 +1999,10 @@ mod tests {
     );
 
     let chunk_stream = stream::iter(vec![] as Vec<Result<ProjectChunk, ChunkError>>);
-    let count = indexer.index_stream(chunk_stream, 10, None).await.unwrap();
+    let count = indexer
+      .index_stream(Uuid::now_v7(), chunk_stream, 10, None)
+      .await
+      .unwrap();
 
     assert_eq!(count, 0, "Should handle empty stream gracefully");
   }
@@ -1739,7 +2036,10 @@ mod tests {
     ];
 
     let chunk_stream = stream::iter(chunks);
-    let count = indexer.index_stream(chunk_stream, 10, None).await.unwrap();
+    let count = indexer
+      .index_stream(Uuid::now_v7(), chunk_stream, 10, None)
+      .await
+      .unwrap();
 
     // Empty files should not create documents
     assert_eq!(count, 0, "Should not index empty files");
@@ -1776,7 +2076,10 @@ mod tests {
     ];
 
     let chunk_stream = stream::iter(chunks);
-    let count = indexer.index_stream(chunk_stream, 2, None).await.unwrap(); // batch size 2
+    let count = indexer
+      .index_stream(Uuid::now_v7(), chunk_stream, 2, None)
+      .await
+      .unwrap(); // batch size 2
 
     assert_eq!(count, 1, "Should have indexed 1 document with 3 chunks");
   }
@@ -1822,7 +2125,10 @@ mod tests {
     }
 
     let chunk_stream = stream::iter(chunks);
-    let count = indexer.index_stream(chunk_stream, 10, None).await.unwrap();
+    let count = indexer
+      .index_stream(Uuid::now_v7(), chunk_stream, 10, None)
+      .await
+      .unwrap();
 
     assert_eq!(count, 101, "Should have indexed 101 documents");
   }
@@ -1873,7 +2179,10 @@ def goodbye():
     info!("Created test file: {}", test_file.display());
 
     info!("Starting indexing...");
-    let count = indexer.index(test_dir.path(), None).await.unwrap();
+    let count = indexer
+      .index(Uuid::now_v7(), test_dir.path(), None)
+      .await
+      .unwrap();
     info!("Indexing completed, document count: {}", count);
     assert_eq!(count, 1);
   }

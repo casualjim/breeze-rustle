@@ -31,6 +31,8 @@ pub enum ChunkType {
   Text,
   #[pyo3(name = "EOF")]
   EndOfFile,
+  #[pyo3(name = "DELETE")]
+  Delete,
 }
 
 #[pymethods]
@@ -61,6 +63,7 @@ impl ChunkType {
       ChunkType::Semantic => "ChunkType.SEMANTIC",
       ChunkType::Text => "ChunkType.TEXT",
       ChunkType::EndOfFile => "ChunkType.EOF",
+      ChunkType::Delete => "ChunkType.DELETE",
     }
     .to_string()
   }
@@ -171,6 +174,25 @@ impl From<Chunk> for PySemanticChunk {
         },
         content: Some(content),
         content_hash: Some(content_hash.to_vec()),
+      },
+      Chunk::Delete { file_path } => Self {
+        chunk_type: ChunkType::Delete,
+        text: file_path,
+        start_byte: 0,
+        end_byte: 0,
+        start_line: 0,
+        end_line: 0,
+        metadata: PyChunkMetadata {
+          node_type: "delete".to_string(),
+          node_name: None,
+          language: "".to_string(),
+          parent_context: None,
+          scope_path: vec![],
+          definitions: vec![],
+          references: vec![],
+        },
+        content: None,
+        content_hash: None,
       },
     }
   }

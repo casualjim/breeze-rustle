@@ -108,6 +108,7 @@ mod tests {
   use lancedb::arrow::IntoArrow;
   use lancedb::query::{ExecutableQuery, QueryBase};
   use tempfile::TempDir;
+  use uuid::Uuid;
 
   async fn create_test_table(
     db_path: &str,
@@ -122,7 +123,11 @@ mod tests {
       conn.open_table(table_name).execute().await.unwrap()
     } else {
       // Create a dummy document to initialize the table
-      let mut dummy_doc = CodeDocument::new("dummy.py".to_string(), "dummy content".to_string());
+      let mut dummy_doc = CodeDocument::new(
+        Uuid::nil(),
+        "dummy.py".to_string(),
+        "dummy content".to_string(),
+      );
       dummy_doc.content_embedding = vec![0.0f32; embedding_dim];
 
       let reader = dummy_doc.into_arrow().unwrap();
@@ -177,10 +182,18 @@ mod tests {
     let sink = LanceDbSink::new(Arc::new(RwLock::new(table)));
 
     // Create test documents
-    let mut doc1 = CodeDocument::new("file1.py".to_string(), "print('hello')".to_string());
+    let mut doc1 = CodeDocument::new(
+      Uuid::now_v7(),
+      "file1.py".to_string(),
+      "print('hello')".to_string(),
+    );
     doc1.content_embedding = vec![1.0, 2.0, 3.0];
 
-    let mut doc2 = CodeDocument::new("file2.py".to_string(), "def main(): pass".to_string());
+    let mut doc2 = CodeDocument::new(
+      Uuid::now_v7(),
+      "file2.py".to_string(),
+      "def main(): pass".to_string(),
+    );
     doc2.content_embedding = vec![4.0, 5.0, 6.0];
 
     let batch = create_test_batch(vec![doc1, doc2]);
@@ -219,7 +232,11 @@ mod tests {
     let sink = LanceDbSink::new(Arc::new(RwLock::new(table)));
 
     // First insert
-    let mut doc = CodeDocument::new("file.py".to_string(), "original content".to_string());
+    let mut doc = CodeDocument::new(
+      Uuid::now_v7(),
+      "file.py".to_string(),
+      "original content".to_string(),
+    );
     doc.content_embedding = vec![1.0, 2.0, 3.0];
     let original_id = doc.id.clone();
 

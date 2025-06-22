@@ -1,12 +1,12 @@
+use crate::pipeline::{PipelineChunk, PipelineProjectChunk};
 use async_trait::async_trait;
-use breeze_chunkers::ProjectChunk;
 
 /// Represents a batch of chunks ready for embedding
 #[derive(Debug, Clone)]
 pub struct EmbeddingBatch {
   pub batch_id: usize,
-  pub chunks: Vec<ProjectChunk>,
-  pub eof_chunks: Vec<ProjectChunk>,
+  pub chunks: Vec<PipelineProjectChunk>,
+  pub eof_chunks: Vec<PipelineProjectChunk>,
 }
 
 /// Strategy for batching chunks for embedding
@@ -14,7 +14,10 @@ pub struct EmbeddingBatch {
 pub trait BatchingStrategy: Send + Sync {
   /// Prepare chunks for batching
   /// Takes chunks with their batch IDs and groups them appropriately
-  async fn prepare_batches(&self, chunks: Vec<(usize, ProjectChunk)>) -> Vec<EmbeddingBatch>;
+  async fn prepare_batches(
+    &self,
+    chunks: Vec<(usize, PipelineProjectChunk)>,
+  ) -> Vec<EmbeddingBatch>;
 
   /// Maximum items per batch
   fn max_batch_size(&self) -> usize;
@@ -36,17 +39,21 @@ impl LocalBatchingStrategy {
 #[cfg(any(feature = "local-embeddings", test))]
 #[async_trait]
 impl BatchingStrategy for LocalBatchingStrategy {
-  async fn prepare_batches(&self, chunks: Vec<(usize, ProjectChunk)>) -> Vec<EmbeddingBatch> {
+  async fn prepare_batches(
+    &self,
+    chunks: Vec<(usize, PipelineProjectChunk)>,
+  ) -> Vec<EmbeddingBatch> {
     use std::collections::BTreeMap;
 
     // Group chunks by batch_id, separating regular chunks from EOF chunks
-    let mut batches: BTreeMap<usize, (Vec<ProjectChunk>, Vec<ProjectChunk>)> = BTreeMap::new();
+    let mut batches: BTreeMap<usize, (Vec<PipelineProjectChunk>, Vec<PipelineProjectChunk>)> =
+      BTreeMap::new();
 
     for (batch_id, chunk) in chunks {
       let (regular, eof) = batches.entry(batch_id).or_insert((Vec::new(), Vec::new()));
 
       match &chunk.chunk {
-        breeze_chunkers::Chunk::EndOfFile { .. } => eof.push(chunk),
+        PipelineChunk::EndOfFile { .. } => eof.push(chunk),
         _ => regular.push(chunk),
       }
     }
@@ -117,17 +124,21 @@ impl TokenAwareBatchingStrategy {
 
 #[async_trait]
 impl BatchingStrategy for TokenAwareBatchingStrategy {
-  async fn prepare_batches(&self, chunks: Vec<(usize, ProjectChunk)>) -> Vec<EmbeddingBatch> {
+  async fn prepare_batches(
+    &self,
+    chunks: Vec<(usize, PipelineProjectChunk)>,
+  ) -> Vec<EmbeddingBatch> {
     use std::collections::BTreeMap;
 
     // Group chunks by batch_id, separating regular chunks from EOF chunks
-    let mut batches: BTreeMap<usize, (Vec<ProjectChunk>, Vec<ProjectChunk>)> = BTreeMap::new();
+    let mut batches: BTreeMap<usize, (Vec<PipelineProjectChunk>, Vec<PipelineProjectChunk>)> =
+      BTreeMap::new();
 
     for (batch_id, chunk) in chunks {
       let (regular, eof) = batches.entry(batch_id).or_insert((Vec::new(), Vec::new()));
 
       match &chunk.chunk {
-        breeze_chunkers::Chunk::EndOfFile { .. } => eof.push(chunk),
+        PipelineChunk::EndOfFile { .. } => eof.push(chunk),
         _ => regular.push(chunk),
       }
     }
@@ -141,7 +152,7 @@ impl BatchingStrategy for TokenAwareBatchingStrategy {
       for chunk in regular_chunks {
         // Use pre-computed token count if available, otherwise estimate
         let chunk_tokens = match &chunk.chunk {
-          breeze_chunkers::Chunk::Semantic(sc) | breeze_chunkers::Chunk::Text(sc) => {
+          PipelineChunk::Semantic(sc) | PipelineChunk::Text(sc) => {
             if let Some(ref tokens) = sc.tokens {
               // Use pre-computed token count
               tokens.len()
@@ -150,7 +161,7 @@ impl BatchingStrategy for TokenAwareBatchingStrategy {
               sc.text.len() / 4
             }
           }
-          breeze_chunkers::Chunk::EndOfFile { .. } => 0,
+          PipelineChunk::EndOfFile { .. } => 0,
         };
 
         // Check if adding this chunk would exceed limits

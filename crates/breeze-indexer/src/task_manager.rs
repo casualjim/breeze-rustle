@@ -17,19 +17,13 @@ use crate::models::{IndexTask, TaskStatus};
 
 pub struct TaskManager {
   task_table: Arc<RwLock<Table>>,
-  code_table: Arc<RwLock<Table>>,
   indexer: BulkIndexer,
 }
 
 impl TaskManager {
-  pub fn new(
-    task_table: Arc<RwLock<Table>>,
-    code_table: Arc<RwLock<Table>>,
-    indexer: BulkIndexer,
-  ) -> Self {
+  pub fn new(task_table: Arc<RwLock<Table>>, indexer: BulkIndexer) -> Self {
     Self {
       task_table,
-      code_table,
       indexer,
     }
   }
@@ -442,7 +436,11 @@ impl TaskManager {
 
     self
       .indexer
-      .index(std::path::Path::new(&task.path), Some(cancel_token.clone()))
+      .index(
+        task.project_id,
+        std::path::Path::new(&task.path),
+        Some(cancel_token.clone()),
+      )
       .await
   }
 
@@ -453,9 +451,6 @@ impl TaskManager {
     changes: &std::collections::BTreeSet<crate::models::FileChange>,
     cancel_token: &CancellationToken,
   ) -> Result<usize, IndexerError> {
-    use crate::models::FileOperation;
-    use futures::stream;
-
     info!(
       task_id = %task.id,
       files_count = changes.len(),
@@ -463,94 +458,18 @@ impl TaskManager {
     );
 
     let project_root = std::path::Path::new(&task.path);
-    let table = self.code_table.clone();
 
-    // Separate deletes from adds/updates
-    let mut deletes = Vec::new();
-    let mut updates = Vec::new();
+    let files_processed = self
+      .indexer
+      .index_file_changes(
+        task.project_id,
+        project_root,
+        changes,
+        Some(cancel_token.clone()),
+      )
+      .await?;
 
-    for change in changes {
-      match change.operation {
-        FileOperation::Delete => deletes.push(change.path.clone()),
-        FileOperation::Add | FileOperation::Update => updates.push(change.path.clone()),
-      }
-    }
-
-    // Execute deletes immediately
-    if !deletes.is_empty() {
-      info!(
-        task_id = %task.id,
-        delete_count = deletes.len(),
-        "Executing delete operations"
-      );
-
-      let table_guard = table.write().await;
-      for path in &deletes {
-        let path_str = path.to_string_lossy();
-
-        // Check if this is a directory deletion
-        let delete_expr = if path.is_dir() || !path.exists() {
-          // If it's a directory or the path no longer exists (likely was a directory),
-          // delete all files with this path prefix. Ensure we add a path separator
-          // to avoid matching files like "src2" when deleting "src"
-          let escaped_path = path_str.replace("'", "''");
-          if escaped_path.ends_with(std::path::MAIN_SEPARATOR) {
-            format!("file_path LIKE '{}%'", escaped_path)
-          } else {
-            format!(
-              "file_path LIKE '{}{}%'",
-              escaped_path,
-              std::path::MAIN_SEPARATOR
-            )
-          }
-        } else {
-          // Regular file deletion
-          format!("file_path = '{}'", path_str.replace("'", "''"))
-        };
-
-        match table_guard.delete(&delete_expr).await {
-          Ok(_) => {
-            debug!(
-              task_id = %task.id,
-              path = %path_str,
-              is_directory = path.is_dir() || !path.exists(),
-              "Deleted document(s)"
-            );
-          }
-          Err(e) => {
-            error!(
-              task_id = %task.id,
-              path = %path_str,
-              error = %e,
-              "Failed to delete document(s)"
-            );
-          }
-        }
-      }
-      drop(table_guard); // Release the write lock before indexing files
-    }
-
-    // Process adds/updates through index_files
-    let files_indexed = if !updates.is_empty() {
-      info!(
-        task_id = %task.id,
-        update_count = updates.len(),
-        "Executing add/update operations"
-      );
-
-      // Create a stream from the update paths
-      let file_stream = stream::iter(updates);
-
-      // Use the new index_files method
-      self
-        .indexer
-        .index_files(project_root, file_stream, Some(cancel_token.clone()))
-        .await?
-    } else {
-      0
-    };
-
-    Ok(deletes.len() + files_indexed)
+    Ok(files_processed)
   }
 }
 
@@ -566,7 +485,7 @@ mod tests {
   use tempfile::TempDir;
   use tokio::time::timeout;
 
-  async fn create_test_task_manager() -> (TaskManager, TempDir, Uuid) {
+  async fn create_test_task_manager() -> (TaskManager, Arc<RwLock<Table>>, TempDir, Uuid) {
     let temp_dir = TempDir::new().unwrap();
     let db_path = temp_dir.path().join("test.db");
 
@@ -597,17 +516,17 @@ mod tests {
       code_table.clone(),
     );
 
-    let task_manager = TaskManager::new(task_table, code_table, bulk_indexer);
+    let task_manager = TaskManager::new(task_table, bulk_indexer);
 
     // Create a test project ID
     let test_project_id = Uuid::now_v7();
 
-    (task_manager, temp_dir, test_project_id)
+    (task_manager, code_table, temp_dir, test_project_id)
   }
 
   #[tokio::test]
   async fn test_submit_task() {
-    let (task_manager, _temp_dir, project_id) = create_test_task_manager().await;
+    let (task_manager, _code_table, _temp_dir, project_id) = create_test_task_manager().await;
     let test_path = std::path::Path::new("/test/path");
 
     let task_id = task_manager
@@ -626,7 +545,7 @@ mod tests {
 
   #[tokio::test]
   async fn test_get_task_not_found() {
-    let (task_manager, _temp_dir, _project_id) = create_test_task_manager().await;
+    let (task_manager, _code_table, _temp_dir, _project_id) = create_test_task_manager().await;
 
     let non_existent_id = Uuid::now_v7();
     let result = task_manager.get_task(&non_existent_id).await.unwrap();
@@ -635,7 +554,7 @@ mod tests {
 
   #[tokio::test]
   async fn test_list_tasks_empty() {
-    let (task_manager, _temp_dir, _project_id) = create_test_task_manager().await;
+    let (task_manager, _code_table, _temp_dir, _project_id) = create_test_task_manager().await;
 
     let tasks = task_manager.list_tasks(10).await.unwrap();
     assert!(tasks.is_empty());
@@ -643,7 +562,7 @@ mod tests {
 
   #[tokio::test]
   async fn test_list_tasks_with_data() {
-    let (task_manager, _temp_dir, project_id) = create_test_task_manager().await;
+    let (task_manager, _code_table, _temp_dir, project_id) = create_test_task_manager().await;
 
     // Submit multiple tasks
     let paths = ["/test/path1", "/test/path2", "/test/path3"];
@@ -675,7 +594,7 @@ mod tests {
 
   #[tokio::test]
   async fn test_list_tasks_with_limit() {
-    let (task_manager, _temp_dir, project_id) = create_test_task_manager().await;
+    let (task_manager, _code_table, _temp_dir, project_id) = create_test_task_manager().await;
 
     // Submit 5 tasks
     for i in 0..5 {
@@ -696,8 +615,117 @@ mod tests {
   }
 
   #[tokio::test]
+  async fn test_reindex_removes_deleted_files() {
+    let (task_manager, code_table, temp_dir, project_id) = create_test_task_manager().await;
+
+    // Create test directory structure
+    let project_dir = temp_dir.path().join("test_project");
+    std::fs::create_dir(&project_dir).unwrap();
+
+    // Create initial files
+    let file1 = project_dir.join("file1.rs");
+    let file2 = project_dir.join("file2.rs");
+    let file3 = project_dir.join("to_delete.rs");
+
+    std::fs::write(&file1, "fn main() { println!(\"file1\"); }").unwrap();
+    std::fs::write(&file2, "fn test() { println!(\"file2\"); }").unwrap();
+    std::fs::write(&file3, "fn delete_me() { println!(\"delete\"); }").unwrap();
+
+    // First index - should index all 3 files
+    let _task_id = task_manager
+      .submit_task(project_id, &project_dir, crate::models::TaskType::FullIndex)
+      .await
+      .unwrap();
+
+    // Process the task
+    let cancel_token = CancellationToken::new();
+    task_manager.process_next_task(&cancel_token).await.unwrap();
+
+    // Verify all 3 files are in the index
+    let table = code_table.read().await;
+    let mut count_query = table
+      .query()
+      .only_if(
+        format!(
+          "file_path LIKE '{}%'",
+          project_dir.to_string_lossy().replace("'", "''")
+        )
+        .as_str(),
+      )
+      .execute()
+      .await
+      .unwrap();
+
+    let mut file_count = 0;
+    let mut files_found = std::collections::HashSet::new();
+    while let Some(batch) = count_query.try_next().await.unwrap() {
+      for i in 0..batch.num_rows() {
+        let doc = CodeDocument::from_record_batch(&batch, i).unwrap();
+        files_found.insert(doc.file_path.clone());
+        file_count += 1;
+      }
+    }
+    drop(table);
+
+    assert_eq!(file_count, 3, "Should have indexed 3 files initially");
+    assert!(files_found.contains(&file1.to_string_lossy().to_string()));
+    assert!(files_found.contains(&file2.to_string_lossy().to_string()));
+    assert!(files_found.contains(&file3.to_string_lossy().to_string()));
+
+    // Delete one file
+    std::fs::remove_file(&file3).unwrap();
+
+    // Second index - full reindex
+    let _task_id2 = task_manager
+      .submit_task(project_id, &project_dir, crate::models::TaskType::FullIndex)
+      .await
+      .unwrap();
+
+    // Process the reindex task
+    task_manager.process_next_task(&cancel_token).await.unwrap();
+
+    // Verify only 2 files remain in the index
+    let table = code_table.read().await;
+    let mut count_query2 = table
+      .query()
+      .only_if(
+        format!(
+          "file_path LIKE '{}%'",
+          project_dir.to_string_lossy().replace("'", "''")
+        )
+        .as_str(),
+      )
+      .execute()
+      .await
+      .unwrap();
+
+    let mut file_count_after = 0;
+    let mut files_found_after = std::collections::HashSet::new();
+    while let Some(batch) = count_query2.try_next().await.unwrap() {
+      for i in 0..batch.num_rows() {
+        let doc = CodeDocument::from_record_batch(&batch, i).unwrap();
+        files_found_after.insert(doc.file_path.clone());
+        file_count_after += 1;
+      }
+    }
+    drop(table);
+
+    // This test should fail because deleted files are not removed during reindex
+    assert_eq!(
+      file_count_after, 2,
+      "Should only have 2 files after reindex (deleted file should be removed)"
+    );
+    assert!(files_found_after.contains(&file1.to_string_lossy().to_string()));
+    assert!(files_found_after.contains(&file2.to_string_lossy().to_string()));
+    assert!(
+      !files_found_after.contains(&file3.to_string_lossy().to_string()),
+      "Deleted file should not be in index"
+    );
+  }
+
+  #[tokio::test]
   async fn test_concurrent_task_submission() {
-    let (task_manager, _temp_dir, project_id) = create_test_task_manager().await;
+    let (task_manager, _code_table, _temp_dir, project_id) = create_test_task_manager().await;
     let task_manager = Arc::new(task_manager);
 
     let num_tasks = 10;
@@ -739,7 +767,7 @@ mod tests {
 
   #[tokio::test]
   async fn test_reset_stuck_tasks() {
-    let (task_manager, _temp_dir, project_id) = create_test_task_manager().await;
+    let (task_manager, _code_table, _temp_dir, project_id) = create_test_task_manager().await;
 
     // Create a task and manually set it to running with old timestamp
     let task_id = task_manager
@@ -788,7 +816,7 @@ mod tests {
 
   #[tokio::test]
   async fn test_claim_pending_task() {
-    let (task_manager, _temp_dir, project_id) = create_test_task_manager().await;
+    let (task_manager, _code_table, _temp_dir, project_id) = create_test_task_manager().await;
 
     // Submit a task
     let task_id = task_manager
@@ -813,7 +841,7 @@ mod tests {
 
   #[tokio::test]
   async fn test_concurrent_task_claiming() {
-    let (task_manager, _temp_dir, _project_id) = create_test_task_manager().await;
+    let (task_manager, _code_table, _temp_dir, _project_id) = create_test_task_manager().await;
     let task_manager = Arc::new(task_manager);
 
     // Submit multiple tasks with different project IDs to avoid merging
@@ -869,7 +897,7 @@ mod tests {
 
   #[tokio::test]
   async fn test_update_task_completed() {
-    let (task_manager, _temp_dir, project_id) = create_test_task_manager().await;
+    let (task_manager, _code_table, _temp_dir, project_id) = create_test_task_manager().await;
 
     let task_id = task_manager
       .submit_task(
@@ -893,7 +921,7 @@ mod tests {
 
   #[tokio::test]
   async fn test_update_task_failed() {
-    let (task_manager, _temp_dir, project_id) = create_test_task_manager().await;
+    let (task_manager, _code_table, _temp_dir, project_id) = create_test_task_manager().await;
 
     let task_id = task_manager
       .submit_task(
@@ -918,7 +946,7 @@ mod tests {
 
   #[tokio::test]
   async fn test_worker_processes_task() {
-    let (task_manager, temp_dir, project_id) = create_test_task_manager().await;
+    let (task_manager, _code_table, temp_dir, project_id) = create_test_task_manager().await;
     let task_manager = Arc::new(task_manager);
 
     // Create a real directory to index
@@ -967,7 +995,7 @@ mod tests {
 
   #[tokio::test]
   async fn test_worker_shutdown() {
-    let (task_manager, _temp_dir, _project_id) = create_test_task_manager().await;
+    let (task_manager, _code_table, _temp_dir, _project_id) = create_test_task_manager().await;
 
     let shutdown_token = CancellationToken::new();
     let worker_shutdown = shutdown_token.clone();
@@ -984,7 +1012,7 @@ mod tests {
 
   #[tokio::test]
   async fn test_oldest_pending_task_processed_first() {
-    let (task_manager, _temp_dir, _project_id) = create_test_task_manager().await;
+    let (task_manager, _code_table, _temp_dir, _project_id) = create_test_task_manager().await;
 
     // Submit tasks with small delays to ensure different timestamps
     // Use different project IDs to avoid merging
@@ -1039,7 +1067,7 @@ mod tests {
 
   #[tokio::test]
   async fn test_task_error_handling_with_quotes() {
-    let (task_manager, _temp_dir, project_id) = create_test_task_manager().await;
+    let (task_manager, _code_table, _temp_dir, project_id) = create_test_task_manager().await;
 
     let task_id = task_manager
       .submit_task(
@@ -1064,7 +1092,7 @@ mod tests {
 
   #[tokio::test]
   async fn test_record_batch_to_task_conversion() {
-    let (task_manager, _temp_dir, project_id) = create_test_task_manager().await;
+    let (task_manager, _code_table, _temp_dir, project_id) = create_test_task_manager().await;
 
     // Submit a task and update it to have all fields populated
     let task_id = task_manager
@@ -1095,7 +1123,7 @@ mod tests {
 
   #[tokio::test]
   async fn test_execute_partial_update() {
-    let (task_manager, temp_dir, project_id) = create_test_task_manager().await;
+    let (task_manager, code_table, temp_dir, project_id) = create_test_task_manager().await;
 
     // Create a test project directory
     let project_dir = temp_dir.path().join("test_project");
@@ -1134,7 +1162,10 @@ mod tests {
     // Now create a partial update task
     let mut changes = std::collections::BTreeSet::new();
 
-    // Delete file1
+    // Delete file1 from disk first
+    std::fs::remove_file(&file1).unwrap();
+
+    // Then record the deletion
     changes.insert(crate::models::FileChange {
       path: file1.clone(),
       operation: crate::models::FileOperation::Delete,
@@ -1195,7 +1226,33 @@ mod tests {
 
     // Verify file1 was deleted by checking the table directly
     use lancedb::query::{ExecutableQuery, QueryBase};
-    let table = task_manager.code_table.read().await;
+    let table = code_table.read().await;
+
+    // First, let's see what files are actually in the database
+    let mut all_files_query = table
+      .query()
+      .only_if(
+        format!(
+          "file_path LIKE '{}%'",
+          project_dir.to_string_lossy().replace("'", "''")
+        )
+        .as_str(),
+      )
+      .execute()
+      .await
+      .unwrap();
+
+    use futures::TryStreamExt;
+    let mut all_files = Vec::new();
+    while let Some(batch) = all_files_query.try_next().await.unwrap() {
+      for i in 0..batch.num_rows() {
+        let doc = CodeDocument::from_record_batch(&batch, i).unwrap();
+        all_files.push(doc.file_path.clone());
+      }
+    }
+    println!("Files in database after partial update: {:?}", all_files);
+    println!("Looking for file: {}", file1.to_string_lossy());
+
     let mut query = table
       .query()
       .only_if(format!(
@@ -1206,14 +1263,75 @@ mod tests {
       .await
       .unwrap();
 
-    use futures::TryStreamExt;
     let deleted_result = query.try_next().await.unwrap();
     assert!(deleted_result.is_none(), "File1 should have been deleted");
   }
 
   #[tokio::test]
+  async fn test_file_deleted_during_indexing_race_condition() {
+    let temp_dir = TempDir::new().unwrap();
+    let project_dir = temp_dir.path().join("test_project");
+    std::fs::create_dir(&project_dir).unwrap();
+
+    // Create a test task manager
+    let (task_manager, code_table, _actual_temp_dir, project_id) = create_test_task_manager().await;
+
+    // Create a file that we'll delete during indexing
+    let file1 = project_dir.join("file1.rs");
+    std::fs::write(&file1, "fn main() { println!(\"file1\"); }").unwrap();
+
+    // Create a custom walk stream that deletes the file after yielding it
+    let file1_path = file1.clone();
+    let files_stream = async_stream::stream! {
+      yield file1_path.clone();
+      // Delete the file immediately after yielding it
+      // This simulates the race condition
+      tokio::fs::remove_file(&file1_path).await.unwrap();
+    };
+
+    // Run indexing - should handle the deleted file gracefully
+    let result = task_manager
+      .indexer
+      .index_files(project_id, &project_dir, files_stream, None)
+      .await;
+
+    assert!(
+      result.is_ok(),
+      "Indexing should handle deleted files gracefully"
+    );
+
+    // Verify no files are in the index (since the only file was deleted)
+    // But ignore the dummy document
+    let table = code_table.read().await;
+    let mut query = table
+      .query()
+      .only_if(format!("id != '{}'", crate::models::DUMMY_DOCUMENT_ID))
+      .execute()
+      .await
+      .expect("Failed to query table");
+
+    let mut found_files = Vec::new();
+    while let Some(batch) = query.try_next().await.unwrap() {
+      for i in 0..batch.num_rows() {
+        let doc = crate::models::CodeDocument::from_record_batch(&batch, i).unwrap();
+        found_files.push(doc.file_path);
+      }
+    }
+
+    assert_eq!(
+      found_files.len(),
+      0,
+      "Should have no files in index after race condition, but found: {:?}",
+      found_files
+    );
+
+    // Clean up
+    std::fs::remove_dir_all(&project_dir).unwrap();
+  }
+
+  #[tokio::test]
   async fn test_has_active_task() {
-    let (task_manager, _temp_dir, project_id) = create_test_task_manager().await;
+    let (task_manager, _code_table, _temp_dir, project_id) = create_test_task_manager().await;
 
     // Initially no active tasks
     assert!(!task_manager.has_active_task(project_id).await.unwrap());
@@ -1250,7 +1368,7 @@ mod tests {
   #[tokio::test]
   #[cfg(feature = "local-embeddings")]
   async fn test_directory_deletion_removes_all_files() {
-    let (task_manager, temp_dir, project_id) = create_test_task_manager().await;
+    let (task_manager, code_table, temp_dir, project_id) = create_test_task_manager().await;
 
     // Create a test project directory structure
     let project_dir = temp_dir.path().join("test_project");
@@ -1300,7 +1418,7 @@ mod tests {
     // Verify all files were indexed
     use futures::TryStreamExt;
     use lancedb::query::{ExecutableQuery, QueryBase};
-    let table = task_manager.code_table.read().await;
+    let table = code_table.read().await;
 
     // Check that all files exist in the index
     for file_path in [&file1, &file2, &file3, &similar_file] {
@@ -1361,7 +1479,7 @@ mod tests {
     assert!(result.is_ok(), "Partial update failed: {:?}", result);
 
     // Verify all files in the directory were deleted
-    let table = task_manager.code_table.read().await;
+    let table = code_table.read().await;
 
     for file_path in [&file1, &file2, &file3] {
       let mut query = table

@@ -239,6 +239,7 @@ mod tests {
   fn create_test_document(file_path: &str) -> CodeDocument {
     CodeDocument {
       id: Uuid::now_v7().to_string(),
+      project_id: Uuid::now_v7(),
       file_path: file_path.to_string(),
       content: format!("Content of {}", file_path),
       content_hash: [0u8; 32],

@@ -1,12 +1,50 @@
-use breeze_chunkers::{Chunk, ProjectChunk};
+use breeze_chunkers::{Chunk, SemanticChunk};
 
 /// Type alias for a boxed stream
 pub(crate) type BoxStream<T> = std::pin::Pin<Box<dyn futures_util::Stream<Item = T> + Send>>;
 
+/// Chunks that go through the embedding pipeline
+#[derive(Debug, Clone)]
+pub enum PipelineChunk {
+  Semantic(SemanticChunk),
+  Text(SemanticChunk),
+  EndOfFile {
+    file_path: String,
+    content: String,
+    content_hash: [u8; 32], // Blake3 hash
+  },
+}
+
+impl PipelineChunk {
+  pub fn from_chunk(chunk: Chunk) -> Option<Self> {
+    match chunk {
+      Chunk::Semantic(sc) => Some(PipelineChunk::Semantic(sc)),
+      Chunk::Text(sc) => Some(PipelineChunk::Text(sc)),
+      Chunk::EndOfFile {
+        file_path,
+        content,
+        content_hash,
+      } => Some(PipelineChunk::EndOfFile {
+        file_path,
+        content,
+        content_hash,
+      }),
+      Chunk::Delete { .. } => None,
+    }
+  }
+}
+
+/// A project chunk that's been filtered for the pipeline
+#[derive(Debug, Clone)]
+pub struct PipelineProjectChunk {
+  pub file_path: String,
+  pub chunk: PipelineChunk,
+}
+
 /// Represents a chunk with its embedding
 #[derive(Debug, Clone)]
 pub(crate) struct EmbeddedChunk {
-  pub chunk: Chunk,
+  pub chunk: PipelineChunk,
   pub embedding: Vec<f32>,
 }
 
@@ -14,7 +52,7 @@ pub(crate) struct EmbeddedChunk {
 #[derive(Debug)]
 pub(crate) struct ChunkBatch {
   pub batch_id: usize,
-  pub chunks: Vec<ProjectChunk>,
+  pub chunks: Vec<PipelineProjectChunk>,
 }
 
 /// Embedded chunks with file path information
@@ -22,7 +60,7 @@ pub(crate) struct ChunkBatch {
 pub(crate) struct EmbeddedChunkWithFile {
   pub batch_id: usize,
   pub file_path: String,
-  pub chunk: Chunk,
+  pub chunk: PipelineChunk,
   pub embedding: Vec<f32>,
 }
 

@@ -12,6 +12,7 @@ use ignore::{DirEntry, WalkBuilder, types::TypesBuilder};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::{
+  collections::BTreeSet,
   os::unix::fs::MetadataExt,
   path::{Path, PathBuf},
 };
@@ -145,6 +146,42 @@ pub fn walk_project(
 
     info!("Collected {} files for processing", file_entries.len());
 
+    // Find deleted files by comparing existing_hashes with collected files
+    if !options.existing_hashes.is_empty() {
+      let collected_paths: BTreeSet<PathBuf> =
+        file_entries.iter().map(|(path, _)| path.clone()).collect();
+      let tx_clone = tx.clone();
+      let existing_hashes = options.existing_hashes.clone();
+
+      // Emit delete chunks in a separate task to avoid blocking
+      tokio::spawn(async move {
+        let mut deleted_count = 0;
+
+        for (existing_path, _) in existing_hashes {
+          if !collected_paths.contains(&existing_path) {
+            // This file was in the index but no longer exists
+            deleted_count += 1;
+            let delete_chunk = ProjectChunk {
+              file_path: existing_path.to_string_lossy().to_string(),
+              chunk: Chunk::Delete {
+                file_path: existing_path.to_string_lossy().to_string(),
+              },
+            };
+            if tx_clone.send(Ok(delete_chunk)).await.is_err() {
+              break;
+            }
+          }
+        }
+
+        if deleted_count > 0 {
+          info!(
+            "Detected {} deleted files to remove from index",
+            deleted_count
+          );
+        }
+      });
+    }
+
     // Sort by size (largest first)
     let mut file_entries = file_entries;
     file_entries.sort_by_key(|(_, size)| std::cmp::Reverse(*size));
@@ -223,17 +260,36 @@ where
     let mut files = Box::pin(files);
 
     while let Some(path) = files.next().await {
-      // Use CandidateMatcher to check if file should be processed
-      if matcher.matches(&path) {
-        // Get file size
-        match tokio::fs::metadata(&path).await {
-          Ok(meta) => {
+      // First check if file exists
+      match tokio::fs::metadata(&path).await {
+        Ok(meta) => {
+          // File exists, check if it should be processed
+          if matcher.matches(&path) {
             let size = meta.len();
             file_entries.push((path, size));
           }
-          Err(e) => {
-            debug!("Failed to get metadata for {}: {}", path.display(), e);
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+          // File doesn't exist - emit a Delete chunk immediately
+          debug!("File not found, emitting delete: {}", path.display());
+          println!(
+            "DEBUG: walk_files emitting Delete chunk for missing file: {}",
+            path.display()
+          );
+          let path_str = path.to_string_lossy().to_string();
+          let delete_chunk = ProjectChunk {
+            file_path: path_str.clone(),
+            chunk: Chunk::Delete {
+              file_path: path_str,
+            },
+          };
+          if let Err(send_err) = tx.send(Ok(delete_chunk)).await {
+            debug!("Failed to send delete chunk: {}", send_err);
+            return;
           }
+        }
+        Err(e) => {
+          debug!("Failed to get metadata for {}: {}", path.display(), e);
         }
       }
     }
@@ -624,9 +680,27 @@ fn process_file<P: AsRef<Path>>(
       }
 
       // Now we know it's a text file, read it once
-      let content = tokio::fs::read_to_string(&path)
-          .await
-          .map_err(ChunkError::IoError)?;
+      let content = match tokio::fs::read_to_string(&path).await {
+          Ok(content) => content,
+          Err(e) => {
+              if e.kind() == std::io::ErrorKind::NotFound {
+                  // File was deleted between collection and reading
+                  debug!("File deleted during processing: {}", path.display());
+                  println!("DEBUG: Walker emitting Delete chunk for: {}", path.display());
+                  yield ProjectChunk {
+                      file_path: path_str.clone(),
+                      chunk: Chunk::Delete {
+                          file_path: path_str.clone(),
+                      },
+                  };
+                  return;
+              } else {
+                  // Propagate other IO errors
+                  Err(ChunkError::IoError(e))?;
+                  unreachable!()
+              }
+          }
+      };
 
       if content.is_empty() {
           return;

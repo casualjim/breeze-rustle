@@ -54,10 +54,10 @@ pub async fn hybrid_search(
   let table = table.read().await;
 
   // Build hybrid query with vector search and FTS
-  // Filter out the dummy document
+  // Filter out the dummy project
   let mut results = table
     .query()
-    .only_if(format!("id != '{}'", crate::models::DUMMY_DOCUMENT_ID).as_str())
+    .only_if(format!("project_id != '{}'", uuid::Uuid::nil()).as_str())
     .full_text_search(FullTextSearchQuery::new(query.to_string()))
     .nearest_to(query_vector)?
     .column("content_embedding")
@@ -108,9 +108,9 @@ pub async fn hybrid_search(
 #[cfg(all(test, feature = "local-embeddings"))]
 mod tests {
   use super::*;
-  use crate::models::CodeDocument;
   use crate::Config;
   use crate::embeddings::factory::create_embedding_provider;
+  use crate::models::CodeDocument;
   use lancedb::arrow::IntoArrow;
   use std::collections::HashSet;
   use tempfile::TempDir;
@@ -183,7 +183,9 @@ mod tests {
       .unwrap();
 
     // ensure the table twice
-    CodeDocument::ensure_table(&connection, "test_embeddings", embedding_dim).await.expect("Table ensure should be idempotent");
+    CodeDocument::ensure_table(&connection, "test_embeddings", embedding_dim)
+      .await
+      .expect("Table ensure should be idempotent");
 
     // Insert test documents
     let test_documents = vec![
@@ -219,7 +221,8 @@ mod tests {
   }
 
   fn create_test_document(file_path: &str, content: &str, embedding_dim: usize) -> CodeDocument {
-    let mut doc = CodeDocument::new(file_path.to_string(), content.to_string());
+    let project_id = uuid::Uuid::now_v7(); // Use a valid project ID, not nil
+    let mut doc = CodeDocument::new(project_id, file_path.to_string(), content.to_string());
     // Generate a deterministic embedding based on content
     let hash = CodeDocument::compute_hash(content);
     let mut embedding = vec![0.0; embedding_dim];
@@ -353,15 +356,20 @@ mod tests {
       .await
       .unwrap();
 
-    (temp_dir, Arc::new(RwLock::new(table)), Arc::from(embedding_provider))
+    (
+      temp_dir,
+      Arc::new(RwLock::new(table)),
+      Arc::from(embedding_provider),
+    )
   }
 
   async fn create_and_embed_document(
     content: &str,
     file_path: &str,
-    embedding_provider: &Arc<dyn EmbeddingProvider>
+    embedding_provider: &Arc<dyn EmbeddingProvider>,
   ) -> CodeDocument {
-    let mut doc = CodeDocument::new(file_path.to_string(), content.to_string());
+    let project_id = uuid::Uuid::now_v7(); // Use a valid project ID, not nil
+    let mut doc = CodeDocument::new(project_id, file_path.to_string(), content.to_string());
 
     // Generate real embedding
     let embeddings = embedding_provider
@@ -397,18 +405,21 @@ mod tests {
       create_and_embed_document(
         "fn calculate_fibonacci(n: usize) -> usize { /* fibonacci implementation */ }",
         "math.rs",
-        &embedding_provider
-      ).await,
+        &embedding_provider,
+      )
+      .await,
       create_and_embed_document(
         "fn bubble_sort(arr: &mut [i32]) { /* sorting implementation */ }",
         "sort.rs",
-        &embedding_provider
-      ).await,
+        &embedding_provider,
+      )
+      .await,
       create_and_embed_document(
         "struct DatabaseConnection { /* database handling */ }",
         "db.rs",
-        &embedding_provider
-      ).await,
+        &embedding_provider,
+      )
+      .await,
     ];
 
     // Insert documents
@@ -426,8 +437,14 @@ mod tests {
       .unwrap();
 
     assert!(!results.is_empty(), "Should find results for 'fibonacci'");
-    assert_eq!(results[0].file_path, "math.rs", "Should find math.rs when searching for fibonacci");
-    assert!(results[0].relevance_score > 0.0, "Should have non-zero relevance score");
+    assert_eq!(
+      results[0].file_path, "math.rs",
+      "Should find math.rs when searching for fibonacci"
+    );
+    assert!(
+      results[0].relevance_score > 0.0,
+      "Should have non-zero relevance score"
+    );
   }
 
   #[tokio::test]
@@ -444,8 +461,9 @@ mod tests {
           Ok(user)
         }",
         "user_service.rs",
-        &embedding_provider
-      ).await,
+        &embedding_provider,
+      )
+      .await,
       create_and_embed_document(
         "async fn get_customer_info(customer_id: String) -> CustomerData {
           // Retrieves customer details from persistent storage
@@ -453,8 +471,9 @@ mod tests {
           db.find_customer(&customer_id).await
         }",
         "customer_api.rs",
-        &embedding_provider
-      ).await,
+        &embedding_provider,
+      )
+      .await,
       create_and_embed_document(
         "fn calculate_shipping_cost(weight: f64, distance: f64) -> f64 {
           // Computes shipping fees based on package weight and distance
@@ -462,8 +481,9 @@ mod tests {
           base_rate + (weight * 0.5) + (distance * 0.1)
         }",
         "shipping.rs",
-        &embedding_provider
-      ).await,
+        &embedding_provider,
+      )
+      .await,
     ];
 
     // Insert documents
@@ -481,12 +501,15 @@ mod tests {
       table.clone(),
       embedding_provider.clone(),
       "retrieve user information from database",
-      10
+      10,
     )
     .await
     .unwrap();
 
-    assert!(results.len() >= 2, "Should find at least 2 semantically similar results");
+    assert!(
+      results.len() >= 2,
+      "Should find at least 2 semantically similar results"
+    );
 
     // Both user_service.rs and customer_api.rs should be in top results
     let file_paths: Vec<&str> = results.iter().map(|r| r.file_path.as_str()).collect();
@@ -534,8 +557,9 @@ mod tests {
           }
         }",
         "error_handler.rs",
-        &embedding_provider
-      ).await,
+        &embedding_provider,
+      )
+      .await,
       create_and_embed_document(
         "fn process_payment(amount: f64) -> bool {
           // Simple payment processing
@@ -546,8 +570,9 @@ mod tests {
           }
         }",
         "payment.rs",
-        &embedding_provider
-      ).await,
+        &embedding_provider,
+      )
+      .await,
       create_and_embed_document(
         "fn validate_input(data: &str) -> Result<(), ValidationError> {
           // Input validation with error reporting
@@ -560,8 +585,9 @@ mod tests {
           Ok(())
         }",
         "validator.rs",
-        &embedding_provider
-      ).await,
+        &embedding_provider,
+      )
+      .await,
     ];
 
     // Insert documents
@@ -578,17 +604,19 @@ mod tests {
       table.clone(),
       embedding_provider.clone(),
       "error handling and recovery",
-      10
+      10,
     )
     .await
     .unwrap();
 
-    assert!(!results.is_empty(), "Should find results for error handling");
+    assert!(
+      !results.is_empty(),
+      "Should find results for error handling"
+    );
 
     // error_handler.rs should be the top result
     assert_eq!(
-      results[0].file_path,
-      "error_handler.rs",
+      results[0].file_path, "error_handler.rs",
       "Error handler should be the most relevant result"
     );
     assert!(

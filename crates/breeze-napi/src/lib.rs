@@ -22,6 +22,7 @@ pub enum ChunkType {
   Semantic,
   Text,
   EndOfFile,
+  Delete,
 }
 
 #[napi(object)]
@@ -111,6 +112,25 @@ impl From<RustChunk> for SemanticChunkJs {
         },
         content: Some(content),
         content_hash: Some(content_hash.to_vec()),
+      },
+      RustChunk::Delete { file_path } => Self {
+        chunk_type: ChunkType::Delete,
+        text: file_path,
+        start_byte: 0,
+        end_byte: 0,
+        start_line: 0,
+        end_line: 0,
+        metadata: ChunkMetadataJs {
+          node_type: "delete".to_string(),
+          node_name: None,
+          language: "".to_string(),
+          parent_context: None,
+          scope_path: vec![],
+          definitions: vec![],
+          references: vec![],
+        },
+        content: None,
+        content_hash: None,
       },
     }
   }

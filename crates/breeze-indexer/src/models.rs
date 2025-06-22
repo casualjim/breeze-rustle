@@ -14,6 +14,7 @@ pub const DUMMY_DOCUMENT_ID: &str = "00000000-0000-0000-0000-000000000000";
 #[derive(Debug, Clone, PartialEq)]
 pub struct CodeDocument {
   pub id: String,
+  pub project_id: Uuid,
   pub file_path: String,
   pub content: String,
   pub content_hash: [u8; 32],
@@ -24,7 +25,7 @@ pub struct CodeDocument {
 }
 
 impl CodeDocument {
-  pub fn new(file_path: String, content: String) -> Self {
+  pub fn new(project_id: Uuid, file_path: String, content: String) -> Self {
     let id = Uuid::now_v7().to_string();
     let content_hash = Self::compute_hash(content.as_str());
     let file_size = content.len() as u64;
@@ -33,6 +34,7 @@ impl CodeDocument {
 
     Self {
       id,
+      project_id,
       file_path,
       content,
       content_hash,
@@ -49,6 +51,7 @@ impl CodeDocument {
 
     let fields = vec![
       Field::new("id", DataType::Utf8, false),
+      Field::new("project_id", DataType::Utf8, false), // UUID as string
       Field::new("file_path", DataType::Utf8, false),
       Field::new("content", DataType::Utf8, false),
       Field::new("content_hash", DataType::FixedSizeBinary(32), false),
@@ -91,6 +94,7 @@ impl CodeDocument {
 
     // Create dummy data - LanceDB requires at least one batch
     let id_array = StringArray::from(vec![DUMMY_DOCUMENT_ID]);
+    let project_id_array = StringArray::from(vec![Uuid::nil().to_string()]); // Use nil UUID for dummy
     let file_path_array = StringArray::from(vec!["__lancedb_dummy__.txt"]);
     let content_array = StringArray::from(vec![
       "LanceDB requires at least one document to create a table with proper schema",
@@ -119,6 +123,7 @@ impl CodeDocument {
       schema.clone(),
       vec![
         std::sync::Arc::new(id_array),
+        std::sync::Arc::new(project_id_array),
         std::sync::Arc::new(file_path_array),
         std::sync::Arc::new(content_array),
         std::sync::Arc::new(content_hash_array),
@@ -189,6 +194,13 @@ impl CodeDocument {
       .await?;
     debug!("Created FTS index on content field");
 
+    // Create Auto index on project_id for project-based queries
+    table
+      .create_index(&["project_id"], Index::Auto)
+      .execute()
+      .await?;
+    debug!("Created index on project_id field");
+
     // Create Auto index on file_path for exact match lookups
     table
       .create_index(&["file_path"], Index::Auto)
@@ -231,6 +243,18 @@ impl CodeDocument {
       })?
       .value(row)
       .to_string();
+
+    let project_id_str = batch
+      .column_by_name("project_id")
+      .and_then(|col| col.as_any().downcast_ref::<StringArray>())
+      .ok_or_else(|| lancedb::Error::Runtime {
+        message: "Missing or invalid project_id column".to_string(),
+      })?
+      .value(row);
+
+    let project_id = Uuid::parse_str(project_id_str).map_err(|e| lancedb::Error::Runtime {
+      message: format!("Invalid UUID in project_id column: {}", e),
+    })?;
 
     let file_path = batch
       .column_by_name("file_path")
@@ -314,6 +338,7 @@ impl CodeDocument {
 
     Ok(Self {
       id,
+      project_id,
       file_path,
       content,
       content_hash,
@@ -348,7 +373,7 @@ impl CodeDocument {
 
   /// Read file content and compute hash in a single pass
   #[cfg(test)]
-  pub async fn from_file(file_path: impl Into<PathBuf>) -> std::io::Result<Self> {
+  pub async fn from_file(project_id: Uuid, file_path: impl Into<PathBuf>) -> std::io::Result<Self> {
     let path: PathBuf = file_path.into();
     let path_str = path.to_string_lossy().to_string();
 
@@ -374,6 +399,7 @@ impl CodeDocument {
 
     Ok(Self {
       id,
+      project_id,
       file_path: path_str,
       content,
       content_hash: hash,
@@ -912,6 +938,7 @@ impl lancedb::arrow::IntoArrow for CodeDocument {
 
     // Build arrays for single document
     let id_array = StringArray::from(vec![self.id.as_str()]);
+    let project_id_array = StringArray::from(vec![self.project_id.to_string()]);
     let file_path_array = StringArray::from(vec![self.file_path.as_str()]);
     let content_array = StringArray::from(vec![self.content.as_str()]);
 
@@ -948,6 +975,7 @@ impl lancedb::arrow::IntoArrow for CodeDocument {
       schema.clone(),
       vec![
         Arc::new(id_array),
+        Arc::new(project_id_array),
         Arc::new(file_path_array),
         Arc::new(content_array),
         Arc::new(content_hash_array),
@@ -1255,13 +1283,17 @@ mod tests {
 
   #[tokio::test]
   async fn test_from_file() {
+    let project_id = Uuid::now_v7();
     let temp_dir = TempDir::new().unwrap();
     let file_path = temp_dir.path().join("test.py");
     let content = "def hello():\n    print('Hello, world!')";
     fs::write(&file_path, content).unwrap();
 
-    let doc = CodeDocument::from_file(&file_path).await.unwrap();
+    let doc = CodeDocument::from_file(project_id, &file_path)
+      .await
+      .unwrap();
 
+    assert_eq!(doc.project_id, project_id);
     assert_eq!(doc.file_path, file_path.to_string_lossy());
     assert_eq!(doc.content, content);
     assert_eq!(doc.file_size, content.len() as u64);
@@ -1272,19 +1304,23 @@ mod tests {
 
   #[tokio::test]
   async fn test_from_file_not_found() {
-    let result = CodeDocument::from_file("/non/existent/file.txt").await;
+    let project_id = Uuid::now_v7();
+    let result = CodeDocument::from_file(project_id, "/non/existent/file.txt").await;
     assert!(result.is_err());
   }
 
   #[tokio::test]
   async fn test_read_and_hash_consistency() {
+    let project_id = Uuid::now_v7();
     let temp_dir = TempDir::new().unwrap();
     let file_path = temp_dir.path().join("consistency.txt");
     let content = "Test content for consistency check";
     fs::write(&file_path, content).unwrap();
 
     // Read and hash through from_file
-    let doc = CodeDocument::from_file(&file_path).await.unwrap();
+    let doc = CodeDocument::from_file(project_id, &file_path)
+      .await
+      .unwrap();
 
     // Compute hash separately
     let expected_hash = CodeDocument::compute_hash(content);
@@ -1294,6 +1330,7 @@ mod tests {
 
   #[tokio::test]
   async fn test_large_file_handling() {
+    let project_id = Uuid::now_v7();
     let temp_dir = TempDir::new().unwrap();
     let file_path = temp_dir.path().join("large.txt");
 
@@ -1302,7 +1339,9 @@ mod tests {
     let content = chunk.repeat(2048); // 2MB
     fs::write(&file_path, &content).unwrap();
 
-    let doc = CodeDocument::from_file(&file_path).await.unwrap();
+    let doc = CodeDocument::from_file(project_id, &file_path)
+      .await
+      .unwrap();
 
     assert_eq!(doc.content, content);
     assert_eq!(doc.file_size, content.len() as u64);
@@ -1310,19 +1349,23 @@ mod tests {
 
   #[tokio::test]
   async fn test_utf8_handling() {
+    let project_id = Uuid::now_v7();
     let temp_dir = TempDir::new().unwrap();
     let file_path = temp_dir.path().join("utf8.txt");
     let content = "Hello 世界! 🌍 Здравствуй мир!";
     fs::write(&file_path, content).unwrap();
 
-    let doc = CodeDocument::from_file(&file_path).await.unwrap();
+    let doc = CodeDocument::from_file(project_id, &file_path)
+      .await
+      .unwrap();
 
     assert_eq!(doc.content, content);
   }
 
   #[test]
   fn test_update_embedding() {
-    let mut doc = CodeDocument::new("test.py".to_string(), "content".to_string());
+    let project_id = Uuid::now_v7();
+    let mut doc = CodeDocument::new(project_id, "test.py".to_string(), "content".to_string());
 
     let initial_indexed_at = doc.indexed_at;
 
@@ -1338,11 +1381,13 @@ mod tests {
 
   #[test]
   fn test_new_document() {
+    let project_id = Uuid::now_v7();
     let file_path = "test.py".to_string();
     let content = "def main(): pass".to_string();
 
-    let doc = CodeDocument::new(file_path.clone(), content.clone());
+    let doc = CodeDocument::new(project_id, file_path.clone(), content.clone());
 
+    assert_eq!(doc.project_id, project_id);
     assert_eq!(doc.file_path, file_path);
     assert_eq!(doc.content, content);
     assert_eq!(doc.file_size, content.len() as u64);

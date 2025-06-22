@@ -296,7 +296,7 @@ mod tests {
       code_table.clone(),
     );
 
-    let task_manager = Arc::new(TaskManager::new(task_table, code_table, bulk_indexer));
+    let task_manager = Arc::new(TaskManager::new(task_table, bulk_indexer));
     let project_manager = ProjectManager::new(project_table, task_manager);
 
     (project_manager, temp_dir)

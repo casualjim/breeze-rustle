@@ -26,6 +26,9 @@ pub enum Chunk {
     content: String,
     content_hash: [u8; 32], // Blake3 hash
   },
+  Delete {
+    file_path: String,
+  },
 }
 
 #[derive(Debug, Clone)]
