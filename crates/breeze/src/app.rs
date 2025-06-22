@@ -102,7 +102,7 @@ mod tests {
     // Create test repository
     let test_repo = tempdir().unwrap();
     let test_file = test_repo.path().join("main.py");
-    std::fs::write(&test_file, "def hello_world():\n    print('Hello, world!')").unwrap();
+    tokio::fs::write(&test_file, "def hello_world():\n    print('Hello, world!')").await.unwrap();
 
     // Index the repository
     let task_id = app.index(test_repo.path()).await.unwrap();

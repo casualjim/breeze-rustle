@@ -157,7 +157,7 @@ async fn async_main() {
 
           // Create config directory if it doesn't exist
           if let Some(parent) = config_path.parent() {
-            if let Err(e) = std::fs::create_dir_all(parent) {
+            if let Err(e) = tokio::fs::create_dir_all(parent).await {
               error!("Failed to create config directory: {}", e);
               std::process::exit(1);
             }
@@ -165,7 +165,7 @@ async fn async_main() {
 
           // Write the commented config file
           let config_content = breeze::Config::generate_commented_config();
-          if let Err(e) = std::fs::write(&config_path, config_content) {
+          if let Err(e) = tokio::fs::write(&config_path, config_content).await {
             error!("Failed to write config file: {}", e);
             std::process::exit(1);
           }

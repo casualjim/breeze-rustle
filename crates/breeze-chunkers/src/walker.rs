@@ -173,6 +173,102 @@ pub fn walk_project(
   ReceiverStream::new(rx)
 }
 
+/// Process a stream of file paths with options
+pub fn walk_files<S>(
+  files: S,
+  project_root: impl AsRef<Path>,
+  options: WalkOptions,
+) -> impl Stream<Item = Result<ProjectChunk, ChunkError>>
+where
+  S: Stream<Item = PathBuf> + Send + 'static,
+{
+  let project_root = project_root.as_ref().to_owned();
+  let max_file_size = options.max_file_size;
+
+  // Create a channel for streaming results
+  let (tx, rx) = mpsc::channel::<Result<ProjectChunk, ChunkError>>(options.max_parallel * 2);
+
+  // Create the chunker upfront
+  let chunker = match InnerChunker::new(options.max_chunk_size, options.tokenizer) {
+    Ok(c) => Arc::new(c),
+    Err(e) => {
+      // Send error and return early
+      let tx_clone = tx.clone();
+      tokio::spawn(async move {
+        let _ = tx_clone.send(Err(e)).await;
+      });
+      return ReceiverStream::new(rx);
+    }
+  };
+
+  tokio::spawn(async move {
+    // Create CandidateMatcher for consistent file matching
+    let matcher = match CandidateMatcher::new(&project_root, max_file_size) {
+      Ok(m) => m,
+      Err(e) => {
+        let _ = tx.send(Err(ChunkError::IoError(
+          std::io::Error::new(std::io::ErrorKind::Other, e.to_string())
+        ))).await;
+        return;
+      }
+    };
+
+    // Phase 1: Collect files from stream with their sizes
+    let mut file_entries = Vec::new();
+    let mut files = Box::pin(files);
+    
+    while let Some(path) = files.next().await {
+      // Use CandidateMatcher to check if file should be processed
+      if matcher.matches(&path) {
+        // Get file size
+        match tokio::fs::metadata(&path).await {
+          Ok(meta) => {
+            let size = meta.len();
+            file_entries.push((path, size));
+          }
+          Err(e) => {
+            debug!("Failed to get metadata for {}: {}", path.display(), e);
+          }
+        }
+      }
+    }
+
+    if file_entries.is_empty() {
+      debug!("No valid files found to process");
+      return;
+    }
+
+    info!("Collected {} files for processing", file_entries.len());
+
+    // Sort by size (largest first) - same as walk_project
+    file_entries.sort_by_key(|(_, size)| std::cmp::Reverse(*size));
+
+    // Log size distribution
+    let total_size: u64 = file_entries.iter().map(|(_, size)| size).sum();
+    let largest_size = file_entries.first().map(|(_, size)| *size).unwrap_or(0);
+    let smallest_size = file_entries.last().map(|(_, size)| *size).unwrap_or(0);
+    info!(
+      "File size distribution: {} files, total: {} MB, largest: {} KB, smallest: {} bytes",
+      file_entries.len(),
+      total_size / (1024 * 1024),
+      largest_size / 1024,
+      smallest_size
+    );
+
+    // Phase 2: Process files with dual-pool work-stealing (share implementation)
+    process_with_dual_pools(
+      file_entries,
+      chunker,
+      tx,
+      options.large_file_threads,
+      options.max_parallel,
+    )
+    .await;
+  });
+
+  ReceiverStream::new(rx)
+}
+
 pub struct CandidateMatcher {
   ig: Ignore,
   max_file_size: u64,

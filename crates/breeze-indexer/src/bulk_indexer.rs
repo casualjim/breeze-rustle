@@ -87,6 +87,54 @@ impl BulkIndexer {
     Ok(result)
   }
 
+  pub async fn index_files(
+    &self,
+    project_root: impl AsRef<Path>,
+    files: impl futures_util::Stream<Item = std::path::PathBuf> + Send + 'static,
+    cancel_token: Option<CancellationToken>,
+  ) -> Result<usize, IndexerError> {
+    let start_time = Instant::now();
+    let project_root = project_root.as_ref().to_path_buf();
+    info!(project_root = %project_root.display(), "Starting partial file indexing");
+
+    // Get tokenizer from the embedding provider
+    let tokenizer = if let Some(provider_tokenizer) = self.embedding_provider.tokenizer() {
+      // Use the pre-loaded tokenizer from the provider
+      Tokenizer::PreloadedHuggingFace(provider_tokenizer)
+    } else {
+      // Default to character-based tokenization for local models
+      Tokenizer::Characters
+    };
+
+    let optimal_chunk_size = self.config.optimal_chunk_size();
+    info!(
+      chunk_size = optimal_chunk_size,
+      "Using optimal chunk size based on embedding provider configuration"
+    );
+
+    let walk_options = WalkOptions {
+      max_chunk_size: optimal_chunk_size,
+      tokenizer,
+      max_parallel: self.config.max_parallel_files,
+      max_file_size: self.config.max_file_size,
+      large_file_threads: self.config.large_file_threads.unwrap_or(4),
+    };
+
+    // Use the walk_files function from chunkers
+    let chunk_stream = breeze_chunkers::walk_files(files, project_root, walk_options);
+    // Use same batch size as local models for consistency
+    let result = self.index_stream(chunk_stream, 256, cancel_token).await?;
+
+    let elapsed = start_time.elapsed();
+    info!(
+      elapsed_seconds = elapsed.as_secs_f64(),
+      documents_written = result,
+      "Partial indexing completed"
+    );
+
+    Ok(result)
+  }
+
   // Testable pipeline that accepts any stream of chunks
   pub async fn index_stream(
     &self,

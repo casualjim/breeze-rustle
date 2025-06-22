@@ -112,6 +112,7 @@ impl Indexer {
     let project_manager = Arc::new(ProjectManager::new(project_table));
     let task_manager = Arc::new(TaskManager::new(
       task_table,
+      table.clone(),
       BulkIndexer::new(
         config.clone(),
         embedding_provider.clone(),

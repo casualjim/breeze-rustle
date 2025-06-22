@@ -29,7 +29,7 @@ use crate::chunker::InnerChunker;
 pub use crate::types::{
   Chunk, ChunkError, ChunkMetadata, FileMetadata, ProjectChunk, SemanticChunk,
 };
-pub use crate::walker::{CandidateMatcher, WalkOptions, walk_project};
+pub use crate::walker::{CandidateMatcher, WalkOptions, walk_files, walk_project};
 
 /// Tokenizer type for chunk size calculation
 #[derive(Clone, serde::Serialize, serde::Deserialize)]

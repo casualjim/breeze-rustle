@@ -44,7 +44,7 @@ batch_size = 256 # Number of chunks to collect in a batch betfore sending to the
 [embeddings]
 # The selected embedding provider, from the providers defined below
 # provider = "local" | "openai" | "ollama"  | "llamacpp"| "voyage" | "cohere" | "my-provider"
-provider = "voyage"  # Default embedding provider, can be overridden in indexer
+provider = "voyage"  # Default embedding provider
 workers = 10  # Number of concurrent embedding requests
 
 # [embeddings.local]
