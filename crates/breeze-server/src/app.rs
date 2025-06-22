@@ -8,8 +8,6 @@ pub struct AppState {
 
 impl AppState {
   pub async fn new(indexer: Arc<Indexer>) -> Self {
-    AppState {
-      indexer,
-    }
+    AppState { indexer }
   }
 }

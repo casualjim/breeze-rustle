@@ -81,7 +81,12 @@ impl OpenAILikeEmbeddingProvider {
           "p50k_base" => p50k_base()?,
           "r50k_base" => r50k_base()?,
           "o200k_base" => o200k_base()?,
-          _ => return Err(super::EmbeddingError::InvalidConfig(format!("Unknown tiktoken encoding: {}", encoding))),
+          _ => {
+            return Err(super::EmbeddingError::InvalidConfig(format!(
+              "Unknown tiktoken encoding: {}",
+              encoding
+            )));
+          }
         };
         TokenizerWrapper::Tiktoken(encoder)
       }
@@ -89,15 +94,21 @@ impl OpenAILikeEmbeddingProvider {
         std::sync::Arc::try_unwrap(tiktoken.clone()).unwrap_or_else(|arc| (*arc).clone()),
       ),
       breeze_chunkers::Tokenizer::HuggingFace(model_id) => {
-        let tokenizer = Tokenizer::from_pretrained(model_id, None)
-          .map_err(|e| super::EmbeddingError::ModelLoadFailed(format!("Failed to load tokenizer {}: {}", model_id, e)))?;
+        let tokenizer = Tokenizer::from_pretrained(model_id, None).map_err(|e| {
+          super::EmbeddingError::ModelLoadFailed(format!(
+            "Failed to load tokenizer {}: {}",
+            model_id, e
+          ))
+        })?;
         TokenizerWrapper::HuggingFace(Arc::new(tokenizer))
       }
       breeze_chunkers::Tokenizer::PreloadedHuggingFace(tokenizer) => {
         TokenizerWrapper::HuggingFace(tokenizer.clone())
       }
       breeze_chunkers::Tokenizer::Characters => {
-        return Err(super::EmbeddingError::InvalidConfig("Character tokenizer not supported for embeddings API".to_string()));
+        return Err(super::EmbeddingError::InvalidConfig(
+          "Character tokenizer not supported for embeddings API".to_string(),
+        ));
       }
     };
 
@@ -114,10 +125,7 @@ impl OpenAILikeEmbeddingProvider {
 
 #[async_trait]
 impl EmbeddingProvider for OpenAILikeEmbeddingProvider {
-  async fn embed(
-    &self,
-    inputs: &[EmbeddingInput<'_>],
-  ) -> super::EmbeddingResult<Vec<Vec<f32>>> {
+  async fn embed(&self, inputs: &[EmbeddingInput<'_>]) -> super::EmbeddingResult<Vec<Vec<f32>>> {
     let request = EmbeddingRequest {
       input: inputs.iter().map(|input| input.text.to_string()).collect(),
       model: self.model.clone(),

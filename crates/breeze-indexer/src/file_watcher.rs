@@ -51,13 +51,13 @@ impl ProjectWatcher {
     } else {
       Duration::from_secs(3600) // 1 hour
     };
-    
+
     let debounce_timeout = if cfg!(test) {
       Duration::from_millis(500) // Much faster for tests
     } else {
       Duration::from_secs(30)
     };
-    
+
     let tick_interval = if cfg!(test) {
       Duration::from_millis(100)
     } else {

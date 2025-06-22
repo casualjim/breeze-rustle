@@ -589,7 +589,8 @@ impl IndexTask {
     let dummy_uuid = Uuid::nil();
     let project_id_array = StringArray::from(vec![dummy_uuid.to_string()]);
     let path_array = StringArray::from(vec!["/__dummy__"]);
-    let task_type_array = StringArray::from(vec![serde_json::to_string(&TaskType::FullIndex).unwrap()]);
+    let task_type_array =
+      StringArray::from(vec![serde_json::to_string(&TaskType::FullIndex).unwrap()]);
     let status_array = StringArray::from(vec!["pending"]);
 
     let created_at_array = arrow::array::TimestampMicrosecondArray::from(vec![0i64]);
@@ -660,11 +661,7 @@ impl IndexTask {
     }
 
     // Create Auto index on path for path-based queries
-    match table
-      .create_index(&["path"], Index::Auto)
-      .execute()
-      .await
-    {
+    match table.create_index(&["path"], Index::Auto).execute().await {
       Ok(_) => {
         debug!("Created index on path field");
       }
@@ -711,7 +708,7 @@ impl IndexTask {
       .ok_or_else(|| lancedb::Error::Runtime {
         message: "Invalid id column".to_string(),
       })?;
-    
+
     let id_str = id_array.value(row);
     let id = Uuid::parse_str(id_str).map_err(|e| lancedb::Error::Runtime {
       message: format!("Invalid UUID in id column: {}", e),
@@ -742,9 +739,9 @@ impl IndexTask {
       .ok_or_else(|| lancedb::Error::Runtime {
         message: "Invalid task_type column".to_string(),
       })?;
-    
-    let task_type: TaskType = serde_json::from_str(task_type_array.value(row))
-      .map_err(|e| lancedb::Error::Runtime {
+
+    let task_type: TaskType =
+      serde_json::from_str(task_type_array.value(row)).map_err(|e| lancedb::Error::Runtime {
         message: format!("Failed to parse task_type JSON: {}", e),
       })?;
 
@@ -755,7 +752,9 @@ impl IndexTask {
         message: "Invalid status column".to_string(),
       })?;
 
-    let status = status_array.value(row).parse()
+    let status = status_array
+      .value(row)
+      .parse()
       .map_err(|_| lancedb::Error::Runtime {
         message: format!("Invalid status value: {}", status_array.value(row)),
       })?;
@@ -805,9 +804,11 @@ impl IndexTask {
     let merged_into = if merged_into_array.is_null(row) {
       None
     } else {
-      Some(Uuid::parse_str(merged_into_array.value(row)).map_err(|e| lancedb::Error::Runtime {
-        message: format!("Invalid UUID in merged_into column: {}", e),
-      })?)
+      Some(
+        Uuid::parse_str(merged_into_array.value(row)).map_err(|e| lancedb::Error::Runtime {
+          message: format!("Invalid UUID in merged_into column: {}", e),
+        })?,
+      )
     };
 
     Ok(IndexTask {
@@ -827,8 +828,8 @@ impl IndexTask {
         Some(
           chrono::DateTime::from_timestamp_micros(started_at_array.value(row))
             .ok_or_else(|| lancedb::Error::Runtime {
-            message: "Invalid started_at timestamp".to_string(),
-          })?
+              message: "Invalid started_at timestamp".to_string(),
+            })?
             .naive_utc(),
         )
       },
@@ -838,8 +839,8 @@ impl IndexTask {
         Some(
           chrono::DateTime::from_timestamp_micros(completed_at_array.value(row))
             .ok_or_else(|| lancedb::Error::Runtime {
-            message: "Invalid completed_at timestamp".to_string(),
-          })?
+              message: "Invalid completed_at timestamp".to_string(),
+            })?
             .naive_utc(),
         )
       },
@@ -888,7 +889,8 @@ impl lancedb::arrow::IntoArrow for IndexTask {
 
     let error_array = StringArray::from(vec![self.error.as_deref()]);
     let files_indexed_array = UInt64Array::from(vec![self.files_indexed.map(|n| n as u64)]);
-    let merged_into_array = StringArray::from(vec![self.merged_into.map(|u| u.to_string()).as_deref()]);
+    let merged_into_array =
+      StringArray::from(vec![self.merged_into.map(|u| u.to_string()).as_deref()]);
 
     // Create the record batch
     let batch = RecordBatch::try_new(
@@ -1004,7 +1006,7 @@ impl Project {
     if !path.is_dir() {
       return Err(format!("Path is not a directory: {}", directory));
     }
-    
+
     let now = chrono::Utc::now().naive_utc();
     Ok(Self {
       id: Uuid::now_v7(),
@@ -1081,9 +1083,7 @@ impl Project {
       .await?;
 
     // Delete the dummy row
-    table
-      .delete(&format!("id = '{}'", dummy_uuid))
-      .await?;
+    table.delete(&format!("id = '{}'", dummy_uuid)).await?;
 
     Ok(table)
   }
@@ -1461,13 +1461,14 @@ mod tests {
     let temp_dir = TempDir::new().unwrap();
     let test_dir = temp_dir.path().join("test_project");
     std::fs::create_dir(&test_dir).unwrap();
-    
+
     let project = Project::new(
       "Test Project".to_string(),
       test_dir.to_str().unwrap().to_string(),
       Some("A test project".to_string()),
-    ).unwrap();
-    
+    )
+    .unwrap();
+
     assert_eq!(project.name, "Test Project");
     assert_eq!(project.directory, test_dir.to_str().unwrap());
     assert_eq!(project.description, Some("A test project".to_string()));
@@ -1482,7 +1483,7 @@ mod tests {
       "/non/existent/directory".to_string(),
       None,
     );
-    
+
     assert!(result.is_err());
     assert!(result.unwrap_err().contains("does not exist"));
   }
@@ -1492,13 +1493,13 @@ mod tests {
     let temp_dir = TempDir::new().unwrap();
     let test_file = temp_dir.path().join("not_a_dir.txt");
     std::fs::write(&test_file, "content").unwrap();
-    
+
     let result = Project::new(
       "Test Project".to_string(),
       test_file.to_str().unwrap().to_string(),
       None,
     );
-    
+
     assert!(result.is_err());
     assert!(result.unwrap_err().contains("not a directory"));
   }
@@ -1506,15 +1507,22 @@ mod tests {
   #[test]
   fn test_project_schema() {
     let schema = Project::schema();
-    
+
     assert_eq!(schema.fields().len(), 6);
-    
+
     let field_names: Vec<&str> = schema.fields().iter().map(|f| f.name().as_str()).collect();
     assert_eq!(
       field_names,
-      vec!["id", "name", "directory", "description", "created_at", "updated_at"]
+      vec![
+        "id",
+        "name",
+        "directory",
+        "description",
+        "created_at",
+        "updated_at"
+      ]
     );
-    
+
     assert!(!schema.field(0).is_nullable()); // id
     assert!(!schema.field(1).is_nullable()); // name
     assert!(!schema.field(2).is_nullable()); // directory

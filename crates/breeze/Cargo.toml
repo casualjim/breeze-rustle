@@ -9,12 +9,8 @@ local-embeddings = ["breeze-indexer/local-embeddings"]
 cuda = ["breeze-indexer/cuda"]
 cudnn = ["breeze-indexer/cudnn"]
 flash-attn = ["breeze-indexer/flash-attn"]
-mkl = [
-    "breeze-indexer/mkl",
-]
-accelerate = [
-    "breeze-indexer/accelerate",
-]
+mkl = ["breeze-indexer/mkl"]
+accelerate = ["breeze-indexer/accelerate"]
 metal = ["breeze-indexer/metal"]
 perfprofiling = [
     "dep:hyperpolyglot",

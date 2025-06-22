@@ -1,7 +1,8 @@
 #[cfg(feature = "local-embeddings")]
 use super::local::LocalEmbeddingProvider;
 use super::{
-  EmbeddingError, EmbeddingResult, EmbeddingProvider, openailike::OpenAILikeEmbeddingProvider, voyage::VoyageEmbeddingProvider,
+  EmbeddingError, EmbeddingProvider, EmbeddingResult, openailike::OpenAILikeEmbeddingProvider,
+  voyage::VoyageEmbeddingProvider,
 };
 use crate::config::{Config, EmbeddingProvider as EmbeddingProviderType};
 
@@ -22,10 +23,11 @@ pub async fn create_embedding_provider(
       }
     }
     EmbeddingProviderType::Voyage => {
-      let voyage_config = config
-        .voyage
-        .as_ref()
-        .ok_or_else(|| EmbeddingError::InvalidConfig("Voyage configuration required for Voyage provider".to_string()))?;
+      let voyage_config = config.voyage.as_ref().ok_or_else(|| {
+        EmbeddingError::InvalidConfig(
+          "Voyage configuration required for Voyage provider".to_string(),
+        )
+      })?;
 
       // Check that API key is provided
       if voyage_config.api_key.is_empty() {

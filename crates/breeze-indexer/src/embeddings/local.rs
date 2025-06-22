@@ -109,22 +109,29 @@ pub struct LocalEmbeddingProvider {
 impl LocalEmbeddingProvider {
   pub async fn new(model_name: String) -> super::EmbeddingResult<Self> {
     // Ensure ONNX runtime is initialized
-    crate::ensure_ort_initialized()
-      .map_err(|e| super::EmbeddingError::OperationNotSupported(format!("Failed to initialize ORT: {}", e)))?;
+    crate::ensure_ort_initialized().map_err(|e| {
+      super::EmbeddingError::OperationNotSupported(format!("Failed to initialize ORT: {}", e))
+    })?;
 
     // For now, we use BGESmallENV15 as the default
     // In the future, we can map model_name to different ONNX models
     let embedder = OrtBertEmbedder::new(Some(ONNXModel::BGESmallENV15), None, None, None, None)
-      .map_err(|e| super::EmbeddingError::ModelLoadFailed(format!("Failed to create embedder: {}", e)))?;
+      .map_err(|e| {
+        super::EmbeddingError::ModelLoadFailed(format!("Failed to create embedder: {}", e))
+      })?;
 
     // Get embedding dimension by embedding a test string
-    let test_embeddings = embedder
-      .embed(&["test"], None, None)
-      .map_err(|e| super::EmbeddingError::EmbeddingFailed(format!("Failed to get embedding dimension: {}", e)))?;
+    let test_embeddings = embedder.embed(&["test"], None, None).map_err(|e| {
+      super::EmbeddingError::EmbeddingFailed(format!("Failed to get embedding dimension: {}", e))
+    })?;
 
     let embedding_dim = match test_embeddings.first() {
       Some(EmbeddingResult::DenseVector(vec)) => vec.len(),
-      _ => return Err(super::EmbeddingError::EmbeddingFailed("Failed to determine embedding dimension".to_string())),
+      _ => {
+        return Err(super::EmbeddingError::EmbeddingFailed(
+          "Failed to determine embedding dimension".to_string(),
+        ));
+      }
     };
 
     Ok(Self {
@@ -155,7 +162,9 @@ impl EmbeddingProvider for LocalEmbeddingProvider {
       match embedding {
         EmbeddingResult::DenseVector(vec) => result.push(vec),
         EmbeddingResult::MultiVector(_) => {
-          return Err(super::EmbeddingError::OperationNotSupported("Multi-vector embeddings".to_string()));
+          return Err(super::EmbeddingError::OperationNotSupported(
+            "Multi-vector embeddings".to_string(),
+          ));
         }
       }
     }

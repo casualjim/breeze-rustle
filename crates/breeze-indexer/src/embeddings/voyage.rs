@@ -31,8 +31,12 @@ impl VoyageEmbeddingProvider {
     // Load HuggingFace tokenizer for this model
     let repo_id = format!("voyageai/{}", config.model.api_name());
     tracing::debug!("Loading tokenizer for Voyage model from: {}", repo_id);
-    let tokenizer = Tokenizer::from_pretrained(&repo_id, None)
-      .map_err(|e| super::EmbeddingError::TokenizationError(format!("Failed to load tokenizer for {}: {}", repo_id, e)))?;
+    let tokenizer = Tokenizer::from_pretrained(&repo_id, None).map_err(|e| {
+      super::EmbeddingError::TokenizationError(format!(
+        "Failed to load tokenizer for {}: {}",
+        repo_id, e
+      ))
+    })?;
     tracing::info!("Successfully loaded Voyage tokenizer");
 
     Ok(Self {

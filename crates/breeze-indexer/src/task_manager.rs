@@ -11,9 +11,9 @@ use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info};
 use uuid::Uuid;
 
+use crate::IndexerError;
 use crate::bulk_indexer::BulkIndexer;
 use crate::models::{IndexTask, TaskStatus};
-use crate::IndexerError;
 
 pub struct TaskManager {
   task_table: Arc<RwLock<Table>>,
@@ -22,7 +22,11 @@ pub struct TaskManager {
 }
 
 impl TaskManager {
-  pub fn new(task_table: Arc<RwLock<Table>>, code_table: Arc<RwLock<Table>>, indexer: BulkIndexer) -> Self {
+  pub fn new(
+    task_table: Arc<RwLock<Table>>,
+    code_table: Arc<RwLock<Table>>,
+    indexer: BulkIndexer,
+  ) -> Self {
     Self {
       task_table,
       code_table,
@@ -31,12 +35,10 @@ impl TaskManager {
   }
 
   /// Submit a new indexing task and return its ID (backward compatibility)
-  pub async fn submit_task(
-    &self,
-    project_id: Uuid,
-    path: &Path,
-  ) -> Result<Uuid, IndexerError> {
-    self.submit_task_with_type(project_id, path, crate::models::TaskType::FullIndex).await
+  pub async fn submit_task(&self, project_id: Uuid, path: &Path) -> Result<Uuid, IndexerError> {
+    self
+      .submit_task_with_type(project_id, path, crate::models::TaskType::FullIndex)
+      .await
   }
 
   /// Submit a new indexing task with specific type and return its ID
@@ -61,7 +63,7 @@ impl TaskManager {
     for batch in existing_tasks {
       for i in 0..batch.num_rows() {
         let existing_task = crate::models::IndexTask::from_record_batch(&batch, i)?;
-        
+
         match (&existing_task.task_type, &task_type) {
           // If there's already a full index pending, mark any new task as merged
           (crate::models::TaskType::FullIndex, _) => {
@@ -73,11 +75,11 @@ impl TaskManager {
             };
             merged_task.status = crate::models::TaskStatus::Merged;
             merged_task.merged_into = Some(existing_task.id);
-            
+
             let merged_task_id = merged_task.id;
             let arrow_data = merged_task.into_arrow()?;
             table.add(arrow_data).execute().await?;
-            
+
             info!(
               task_id = %merged_task_id,
               merged_into = %existing_task.id,
@@ -85,38 +87,48 @@ impl TaskManager {
             );
             return Ok(merged_task_id);
           }
-          
+
           // If there's a partial update and we're adding another partial update, merge them
-          (crate::models::TaskType::PartialUpdate { changes: existing_changes }, 
-           crate::models::TaskType::PartialUpdate { changes: new_changes }) => {
+          (
+            crate::models::TaskType::PartialUpdate {
+              changes: existing_changes,
+            },
+            crate::models::TaskType::PartialUpdate {
+              changes: new_changes,
+            },
+          ) => {
             // Merge the file changes - BTreeSet automatically handles deduplication
             let mut merged_changes = existing_changes.clone();
             for new_change in new_changes {
               // Add the new change
               merged_changes.insert(new_change.clone());
             }
-            
+
             // Update the existing task with merged changes
-            let task_type_json = serde_json::to_string(&crate::models::TaskType::PartialUpdate { 
-              changes: merged_changes 
+            let task_type_json = serde_json::to_string(&crate::models::TaskType::PartialUpdate {
+              changes: merged_changes,
             })?;
-            
+
             table
               .update()
               .only_if(format!("id = '{}'", existing_task.id).as_str())
-              .column("task_type", format!("'{}'", task_type_json.replace("'", "''")))
+              .column(
+                "task_type",
+                format!("'{}'", task_type_json.replace("'", "''")),
+              )
               .execute()
               .await?;
-            
+
             // Create a merged record for the new task
-            let mut merged_task = crate::models::IndexTask::new_partial(project_id, path, new_changes.clone());
+            let mut merged_task =
+              crate::models::IndexTask::new_partial(project_id, path, new_changes.clone());
             merged_task.status = crate::models::TaskStatus::Merged;
             merged_task.merged_into = Some(existing_task.id);
-            
+
             let merged_task_id = merged_task.id;
             let arrow_data = merged_task.into_arrow()?;
             table.add(arrow_data).execute().await?;
-            
+
             info!(
               task_id = %merged_task_id,
               merged_into = %existing_task.id,
@@ -124,7 +136,7 @@ impl TaskManager {
             );
             return Ok(merged_task_id);
           }
-          
+
           // If there's a partial update and we're adding a full index, don't merge
           // The full index should be queued separately and will supersede the partial when it runs
           (crate::models::TaskType::PartialUpdate { .. }, crate::models::TaskType::FullIndex) => {
@@ -152,10 +164,7 @@ impl TaskManager {
   }
 
   /// Worker loop that processes pending tasks
-  pub async fn run_worker(
-    &self,
-    shutdown_token: CancellationToken,
-  ) -> Result<(), IndexerError> {
+  pub async fn run_worker(&self, shutdown_token: CancellationToken) -> Result<(), IndexerError> {
     info!("Starting task worker");
 
     // On startup, reset any "running" tasks to "pending" (in case of crash)
@@ -191,10 +200,7 @@ impl TaskManager {
   }
 
   /// Get task by ID
-  pub async fn get_task(
-    &self,
-    task_id: &Uuid,
-  ) -> Result<Option<IndexTask>, IndexerError> {
+  pub async fn get_task(&self, task_id: &Uuid) -> Result<Option<IndexTask>, IndexerError> {
     let table = self.task_table.read().await;
 
     let mut stream = table
@@ -213,16 +219,10 @@ impl TaskManager {
   }
 
   /// List recent tasks
-  pub async fn list_tasks(
-    &self,
-    limit: usize,
-  ) -> Result<Vec<IndexTask>, IndexerError> {
+  pub async fn list_tasks(&self, limit: usize) -> Result<Vec<IndexTask>, IndexerError> {
     let table = self.task_table.read().await;
 
-    let mut stream = table
-      .query()
-      .execute()
-      .await?;
+    let mut stream = table.query().execute().await?;
 
     let mut tasks = Vec::new();
     while let Some(batch) = stream.try_next().await? {
@@ -258,11 +258,11 @@ impl TaskManager {
     // Execute the indexing based on task type
     let start_time = std::time::Instant::now();
     let result = match &task.task_type {
-      crate::models::TaskType::FullIndex => {
-        self.execute_full_index(&task, cancel_token).await
-      }
+      crate::models::TaskType::FullIndex => self.execute_full_index(&task, cancel_token).await,
       crate::models::TaskType::PartialUpdate { changes } => {
-        self.execute_partial_update(&task, changes, cancel_token).await
+        self
+          .execute_partial_update(&task, changes, cancel_token)
+          .await
       }
     };
 
@@ -294,26 +294,21 @@ impl TaskManager {
   }
 
   /// Check if a project has any active (running) tasks
-  pub async fn has_active_task(
-    &self,
-    project_id: Uuid,
-  ) -> Result<bool, IndexerError> {
+  pub async fn has_active_task(&self, project_id: Uuid) -> Result<bool, IndexerError> {
     let table = self.task_table.read().await;
-    
+
     let mut stream = table
       .query()
       .only_if(format!("project_id = '{}' AND status = 'running'", project_id).as_str())
       .limit(1)
       .execute()
       .await?;
-    
+
     Ok(stream.try_next().await?.is_some())
   }
 
   /// Claim the oldest pending task by updating its status to running
-  async fn claim_pending_task(
-    &self,
-  ) -> Result<Option<IndexTask>, IndexerError> {
+  async fn claim_pending_task(&self) -> Result<Option<IndexTask>, IndexerError> {
     let table = self.task_table.write().await;
 
     // Get oldest pending task (excluding merged tasks)
@@ -378,11 +373,7 @@ impl TaskManager {
   }
 
   /// Update task as failed
-  async fn update_task_failed(
-    &self,
-    task_id: &Uuid,
-    error: &str,
-  ) -> Result<(), IndexerError> {
+  async fn update_task_failed(&self, task_id: &Uuid, error: &str) -> Result<(), IndexerError> {
     let table = self.task_table.write().await;
 
     table
@@ -455,7 +446,7 @@ impl TaskManager {
       path = task.path,
       "Executing full index"
     );
-    
+
     self
       .indexer
       .index(std::path::Path::new(&task.path), Some(cancel_token.clone()))
@@ -471,27 +462,27 @@ impl TaskManager {
   ) -> Result<usize, IndexerError> {
     use crate::models::FileOperation;
     use futures::stream;
-    
+
     info!(
       task_id = %task.id,
       files_count = changes.len(),
       "Executing partial update"
     );
-    
+
     let project_root = std::path::Path::new(&task.path);
     let table = self.code_table.clone();
-    
+
     // Separate deletes from adds/updates
     let mut deletes = Vec::new();
     let mut updates = Vec::new();
-    
+
     for change in changes {
       match change.operation {
         FileOperation::Delete => deletes.push(change.path.clone()),
         FileOperation::Add | FileOperation::Update => updates.push(change.path.clone()),
       }
     }
-    
+
     // Execute deletes immediately
     if !deletes.is_empty() {
       info!(
@@ -499,11 +490,11 @@ impl TaskManager {
         delete_count = deletes.len(),
         "Executing delete operations"
       );
-      
+
       let table_guard = table.write().await;
       for path in &deletes {
         let path_str = path.to_string_lossy();
-        
+
         // Check if this is a directory deletion
         let delete_expr = if path.is_dir() || !path.exists() {
           // If it's a directory or the path no longer exists (likely was a directory),
@@ -513,13 +504,17 @@ impl TaskManager {
           if escaped_path.ends_with(std::path::MAIN_SEPARATOR) {
             format!("file_path LIKE '{}%'", escaped_path)
           } else {
-            format!("file_path LIKE '{}{}%'", escaped_path, std::path::MAIN_SEPARATOR)
+            format!(
+              "file_path LIKE '{}{}%'",
+              escaped_path,
+              std::path::MAIN_SEPARATOR
+            )
           }
         } else {
           // Regular file deletion
           format!("file_path = '{}'", path_str.replace("'", "''"))
         };
-        
+
         match table_guard.delete(&delete_expr).await {
           Ok(_) => {
             debug!(
@@ -541,7 +536,7 @@ impl TaskManager {
       }
       drop(table_guard); // Release the write lock before indexing files
     }
-    
+
     // Process adds/updates through index_files
     let files_indexed = if !updates.is_empty() {
       info!(
@@ -549,10 +544,10 @@ impl TaskManager {
         update_count = updates.len(),
         "Executing add/update operations"
       );
-      
+
       // Create a stream from the update paths
       let file_stream = stream::iter(updates);
-      
+
       // Use the new index_files method
       self
         .indexer
@@ -561,7 +556,7 @@ impl TaskManager {
     } else {
       0
     };
-    
+
     Ok(deletes.len() + files_indexed)
   }
 }
@@ -610,7 +605,7 @@ mod tests {
     );
 
     let task_manager = TaskManager::new(task_table, code_table, bulk_indexer);
-    
+
     // Create a test project ID
     let test_project_id = Uuid::now_v7();
 
@@ -622,8 +617,10 @@ mod tests {
     let (task_manager, _temp_dir, project_id) = create_test_task_manager().await;
     let test_path = std::path::Path::new("/test/path");
 
-    let task_id = task_manager.submit_task(project_id, test_path).await.unwrap();
-
+    let task_id = task_manager
+      .submit_task(project_id, test_path)
+      .await
+      .unwrap();
 
     // Verify task was created
     let task = task_manager.get_task(&task_id).await.unwrap().unwrap();
@@ -710,7 +707,8 @@ mod tests {
       let tm = task_manager.clone();
       let handle = tokio::spawn(async move {
         let path = format!("/test/concurrent/{}", i);
-        tm.submit_task(project_id, std::path::Path::new(&path)).await
+        tm.submit_task(project_id, std::path::Path::new(&path))
+          .await
       });
       handles.push(handle);
     }
@@ -730,7 +728,7 @@ mod tests {
     // Verify all task IDs are unique
     let mut unique_ids = std::collections::HashSet::new();
     for task_id in &task_ids {
-      assert!(unique_ids.insert(task_id.clone()));
+      assert!(unique_ids.insert(*task_id));
     }
   }
 
@@ -846,7 +844,7 @@ mod tests {
     let claimed_tasks = claimed_tasks.lock().unwrap();
     let mut unique_ids = std::collections::HashSet::new();
     for task in claimed_tasks.iter() {
-      assert!(unique_ids.insert(task.id.clone()));
+      assert!(unique_ids.insert(task.id));
       assert_eq!(task.status, TaskStatus::Running);
       assert!(task.started_at.is_some());
     }
@@ -906,7 +904,10 @@ mod tests {
       .unwrap();
 
     // Submit a task
-    let task_id = task_manager.submit_task(project_id, &test_dir).await.unwrap();
+    let task_id = task_manager
+      .submit_task(project_id, &test_dir)
+      .await
+      .unwrap();
 
     // Start worker with short timeout
     let shutdown_token = CancellationToken::new();
@@ -1050,93 +1051,116 @@ mod tests {
   #[tokio::test]
   async fn test_execute_partial_update() {
     let (task_manager, temp_dir, project_id) = create_test_task_manager().await;
-    
+
     // Create a test project directory
     let project_dir = temp_dir.path().join("test_project");
     tokio::fs::create_dir(&project_dir).await.unwrap();
-    
+
     // Create some test files
     let file1 = project_dir.join("file1.rs");
     let file2 = project_dir.join("file2.rs");
     let file3 = project_dir.join("file3.rs");
-    
-    tokio::fs::write(&file1, "fn main() { println!(\"File 1\"); }").await.unwrap();
-    tokio::fs::write(&file2, "fn test() { println!(\"File 2\"); }").await.unwrap();
-    tokio::fs::write(&file3, "fn helper() { println!(\"File 3\"); }").await.unwrap();
-    
+
+    tokio::fs::write(&file1, "fn main() { println!(\"File 1\"); }")
+      .await
+      .unwrap();
+    tokio::fs::write(&file2, "fn test() { println!(\"File 2\"); }")
+      .await
+      .unwrap();
+    tokio::fs::write(&file3, "fn helper() { println!(\"File 3\"); }")
+      .await
+      .unwrap();
+
     // First, do a full index to populate the database
     let full_task_id = task_manager
       .submit_task(project_id, &project_dir)
       .await
       .unwrap();
-    
+
     // Process the full index task
     let task = task_manager.claim_pending_task().await.unwrap().unwrap();
     assert_eq!(task.id, full_task_id);
-    
+
     // Execute the full index
     let cancel_token = CancellationToken::new();
     let result = task_manager.execute_full_index(&task, &cancel_token).await;
     assert!(result.is_ok(), "Full index failed: {:?}", result);
-    
+
     // Now create a partial update task
     let mut changes = std::collections::BTreeSet::new();
-    
+
     // Delete file1
     changes.insert(crate::models::FileChange {
       path: file1.clone(),
       operation: crate::models::FileOperation::Delete,
     });
-    
+
     // Update file2
-    tokio::fs::write(&file2, "fn test() { println!(\"File 2 - Updated\"); }").await.unwrap();
+    tokio::fs::write(&file2, "fn test() { println!(\"File 2 - Updated\"); }")
+      .await
+      .unwrap();
     changes.insert(crate::models::FileChange {
       path: file2.clone(),
       operation: crate::models::FileOperation::Update,
     });
-    
+
     // Add a new file
     let file4 = project_dir.join("file4.rs");
-    tokio::fs::write(&file4, "fn new_func() { println!(\"File 4\"); }").await.unwrap();
+    tokio::fs::write(&file4, "fn new_func() { println!(\"File 4\"); }")
+      .await
+      .unwrap();
     changes.insert(crate::models::FileChange {
       path: file4.clone(),
       operation: crate::models::FileOperation::Add,
     });
-    
+
     let partial_task_id = task_manager
       .submit_task_with_type(
         project_id,
         &project_dir,
-        crate::models::TaskType::PartialUpdate { changes: changes.clone() },
+        crate::models::TaskType::PartialUpdate {
+          changes: changes.clone(),
+        },
       )
       .await
       .unwrap();
-    
+
     // Get the partial update task
-    let partial_task = task_manager.get_task(&partial_task_id).await.unwrap().unwrap();
-    
+    let partial_task = task_manager
+      .get_task(&partial_task_id)
+      .await
+      .unwrap()
+      .unwrap();
+
     // Execute the partial update
     let result = task_manager
       .execute_partial_update(&partial_task, &changes, &cancel_token)
       .await;
-    
+
     assert!(result.is_ok(), "Partial update failed: {:?}", result);
     let files_processed = result.unwrap();
-    
+
     // Should have processed at least 3 files (1 delete + 2 add/update)
     // Note: The count might be higher if the indexer processes additional files
-    assert!(files_processed >= 3, "Expected at least 3 files processed, got {}", files_processed);
-    
+    assert!(
+      files_processed >= 3,
+      "Expected at least 3 files processed, got {}",
+      files_processed
+    );
+
     // Verify file1 was deleted by checking the table directly
     use lancedb::query::{ExecutableQuery, QueryBase};
     let table = task_manager.code_table.read().await;
     let mut query = table
       .query()
-      .only_if(format!("file_path = '{}'", file1.to_string_lossy().replace("'", "''")))
+      .only_if(format!(
+        "file_path = '{}'",
+        file1.to_string_lossy().replace("'", "''")
+      ))
       .execute()
       .await
       .unwrap();
-    
+
     use futures::TryStreamExt;
     let deleted_result = query.try_next().await.unwrap();
     assert!(deleted_result.is_none(), "File1 should have been deleted");
@@ -1145,146 +1169,186 @@ mod tests {
   #[tokio::test]
   async fn test_has_active_task() {
     let (task_manager, _temp_dir, project_id) = create_test_task_manager().await;
-    
+
     // Initially no active tasks
     assert!(!task_manager.has_active_task(project_id).await.unwrap());
-    
+
     // Submit a task
     let _task_id = task_manager
       .submit_task(project_id, std::path::Path::new("/test/active"))
       .await
       .unwrap();
-    
+
     // Still no active task (it's pending)
     assert!(!task_manager.has_active_task(project_id).await.unwrap());
-    
+
     // Claim the task to make it running
     let _claimed = task_manager.claim_pending_task().await.unwrap();
-    
+
     // Now should have active task
     assert!(task_manager.has_active_task(project_id).await.unwrap());
-    
+
     // Different project should not have active task
     let other_project_id = Uuid::now_v7();
-    assert!(!task_manager.has_active_task(other_project_id).await.unwrap());
+    assert!(
+      !task_manager
+        .has_active_task(other_project_id)
+        .await
+        .unwrap()
+    );
   }
 
   #[tokio::test]
   #[cfg(feature = "local-embeddings")]
   async fn test_directory_deletion_removes_all_files() {
     let (task_manager, temp_dir, project_id) = create_test_task_manager().await;
-    
+
     // Create a test project directory structure
     let project_dir = temp_dir.path().join("test_project");
     tokio::fs::create_dir(&project_dir).await.unwrap();
-    
+
     // Create subdirectory with files
     let sub_dir = project_dir.join("src");
     tokio::fs::create_dir(&sub_dir).await.unwrap();
-    
+
     let file1 = sub_dir.join("main.rs");
     let file2 = sub_dir.join("lib.rs");
     let file3 = sub_dir.join("utils.rs");
-    
-    tokio::fs::write(&file1, "fn main() { println!(\"Main\"); }").await.unwrap();
-    tokio::fs::write(&file2, "pub fn lib() { println!(\"Lib\"); }").await.unwrap();
-    tokio::fs::write(&file3, "pub fn util() { println!(\"Util\"); }").await.unwrap();
-    
+
+    tokio::fs::write(&file1, "fn main() { println!(\"Main\"); }")
+      .await
+      .unwrap();
+    tokio::fs::write(&file2, "pub fn lib() { println!(\"Lib\"); }")
+      .await
+      .unwrap();
+    tokio::fs::write(&file3, "pub fn util() { println!(\"Util\"); }")
+      .await
+      .unwrap();
+
     // Also create a file with similar name prefix to test proper path separator handling
     let similar_dir = project_dir.join("src2");
     tokio::fs::create_dir(&similar_dir).await.unwrap();
     let similar_file = similar_dir.join("test.rs");
-    tokio::fs::write(&similar_file, "fn test() { println!(\"Test\"); }").await.unwrap();
-    
+    tokio::fs::write(&similar_file, "fn test() { println!(\"Test\"); }")
+      .await
+      .unwrap();
+
     // First, do a full index to populate the database
     let full_task_id = task_manager
       .submit_task(project_id, &project_dir)
       .await
       .unwrap();
-    
+
     // Process the full index task
     let task = task_manager.claim_pending_task().await.unwrap().unwrap();
     assert_eq!(task.id, full_task_id);
-    
+
     // Execute the full index
     let cancel_token = CancellationToken::new();
     let result = task_manager.execute_full_index(&task, &cancel_token).await;
     assert!(result.is_ok(), "Full index failed: {:?}", result);
-    
+
     // Verify all files were indexed
-    use lancedb::query::{ExecutableQuery, QueryBase};
     use futures::TryStreamExt;
+    use lancedb::query::{ExecutableQuery, QueryBase};
     let table = task_manager.code_table.read().await;
-    
+
     // Check that all files exist in the index
     for file_path in [&file1, &file2, &file3, &similar_file] {
       let mut query = table
         .query()
-        .only_if(format!("file_path = '{}'", file_path.to_string_lossy().replace("'", "''")))
+        .only_if(format!(
+          "file_path = '{}'",
+          file_path.to_string_lossy().replace("'", "''")
+        ))
         .execute()
         .await
         .unwrap();
-      
+
       let result = query.try_next().await.unwrap();
-      assert!(result.is_some(), "File {} should be in the index", file_path.display());
+      assert!(
+        result.is_some(),
+        "File {} should be in the index",
+        file_path.display()
+      );
     }
-    
+
     // Drop the read lock before creating the partial update
     drop(table);
-    
+
     // Now delete the directory
     tokio::fs::remove_dir_all(&sub_dir).await.unwrap();
-    
+
     // Create a partial update task for directory deletion
     let mut changes = std::collections::BTreeSet::new();
     changes.insert(crate::models::FileChange {
       path: sub_dir.clone(),
       operation: crate::models::FileOperation::Delete,
     });
-    
+
     let partial_task_id = task_manager
       .submit_task_with_type(
         project_id,
         &project_dir,
-        crate::models::TaskType::PartialUpdate { changes: changes.clone() },
+        crate::models::TaskType::PartialUpdate {
+          changes: changes.clone(),
+        },
       )
       .await
       .unwrap();
-    
+
     // Get the partial update task
-    let partial_task = task_manager.get_task(&partial_task_id).await.unwrap().unwrap();
-    
+    let partial_task = task_manager
+      .get_task(&partial_task_id)
+      .await
+      .unwrap()
+      .unwrap();
+
     // Execute the partial update
     let result = task_manager
       .execute_partial_update(&partial_task, &changes, &cancel_token)
       .await;
-    
+
     assert!(result.is_ok(), "Partial update failed: {:?}", result);
-    
+
     // Verify all files in the directory were deleted
     let table = task_manager.code_table.read().await;
-    
+
     for file_path in [&file1, &file2, &file3] {
       let mut query = table
         .query()
-        .only_if(format!("file_path = '{}'", file_path.to_string_lossy().replace("'", "''")))
+        .only_if(format!(
+          "file_path = '{}'",
+          file_path.to_string_lossy().replace("'", "''")
+        ))
         .execute()
         .await
         .unwrap();
-      
+
       let result = query.try_next().await.unwrap();
-      assert!(result.is_none(), "File {} should have been deleted", file_path.display());
+      assert!(
+        result.is_none(),
+        "File {} should have been deleted",
+        file_path.display()
+      );
     }
-    
+
     // Verify the similar directory file was NOT deleted
     let mut query = table
       .query()
-      .only_if(format!("file_path = '{}'", similar_file.to_string_lossy().replace("'", "''")))
+      .only_if(format!(
+        "file_path = '{}'",
+        similar_file.to_string_lossy().replace("'", "''")
+      ))
       .execute()
       .await
       .unwrap();
-    
+
     let result = query.try_next().await.unwrap();
-    assert!(result.is_some(), "File {} should NOT have been deleted", similar_file.display());
+    assert!(
+      result.is_some(),
+      "File {} should NOT have been deleted",
+      similar_file.display()
+    );
   }
 }

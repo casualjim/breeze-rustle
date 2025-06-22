@@ -34,7 +34,6 @@ accelerate-src = { version = "0.3.2", optional = true }
 # Core dependencies
 anyhow.workspace = true
 
-
 # Arrow dependencies
 arrow.workspace = true
 async-stream.workspace = true
@@ -50,13 +49,14 @@ candle-flash-attn = { version = "0.9.1", optional = true }
 candle-nn = "0.9.1"
 candle-transformers = { version = "0.9.1" }
 chrono.workspace = true
+dashmap = { workspace = true, features = ["serde", "rayon"] }
 flume.workspace = true
 futures.workspace = true
 futures-util.workspace = true
+hex = "0.4"
 
 # Additional dependencies for embeddings
 hf-hub = { version = "0.4.2", features = ["rustls-tls", "tokio", "ureq"], default-features = false }
-hex = "0.4"
 http = "1.2"
 intel-mkl-src = { version = "0.8.1", optional = true }
 lancedb.workspace = true
@@ -84,7 +84,6 @@ tokio-stream.workspace = true
 tokio-util.workspace = true
 tracing.workspace = true
 uuid.workspace = true
-dashmap = { workspace = true, features = ["serde", "rayon"] }
 
 [dev-dependencies]
 toml = "0.8"

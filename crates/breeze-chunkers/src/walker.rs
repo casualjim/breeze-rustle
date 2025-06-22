@@ -209,9 +209,11 @@ where
     let matcher = match CandidateMatcher::new(&project_root, max_file_size) {
       Ok(m) => m,
       Err(e) => {
-        let _ = tx.send(Err(ChunkError::IoError(
-          std::io::Error::new(std::io::ErrorKind::Other, e.to_string())
-        ))).await;
+        let _ = tx
+          .send(Err(ChunkError::IoError(std::io::Error::other(
+            e.to_string(),
+          ))))
+          .await;
         return;
       }
     };
@@ -219,7 +221,7 @@ where
     // Phase 1: Collect files from stream with their sizes
     let mut file_entries = Vec::new();
     let mut files = Box::pin(files);
-    
+
     while let Some(path) = files.next().await {
       // Use CandidateMatcher to check if file should be processed
       if matcher.matches(&path) {
@@ -381,7 +383,7 @@ async fn collect_files_with_sizes(
 ) -> Result<Vec<(PathBuf, u64)>, std::io::Error> {
   // Use tokio's spawn_blocking for the walker
   let path = path.to_owned();
-  
+
   tokio::task::spawn_blocking(move || {
     let mut entries = Vec::new();
     let mut builder = WalkBuilder::new(&path);
@@ -413,7 +415,6 @@ async fn collect_files_with_sizes(
   })
   .await?
 }
-
 
 /// Process files using dual-pool work-stealing approach
 async fn process_with_dual_pools(
@@ -475,7 +476,7 @@ async fn process_with_dual_pools(
             total_size_processed += size;
 
             let existing_hash = existing_hashes.get(&path).cloned();
-            
+
             // Check if file will be skipped
             let mut chunk_count = 0;
             let mut stream = Box::pin(process_file(&path, chunker.clone(), existing_hash));
@@ -486,7 +487,7 @@ async fn process_with_dual_pools(
                 return;
               }
             }
-            
+
             // If no chunks were produced, the file was skipped
             if chunk_count == 0 && existing_hash.is_some() {
               skipped_files.fetch_add(1, Ordering::Relaxed);
@@ -543,7 +544,7 @@ async fn process_with_dual_pools(
             total_size_processed += size;
 
             let existing_hash = existing_hashes.get(&path).cloned();
-            
+
             // Check if file will be skipped
             let mut chunk_count = 0;
             let mut stream = Box::pin(process_file(&path, chunker.clone(), existing_hash));
@@ -554,7 +555,7 @@ async fn process_with_dual_pools(
                 return;
               }
             }
-            
+
             // If no chunks were produced, the file was skipped
             if chunk_count == 0 && existing_hash.is_some() {
               skipped_files.fetch_add(1, Ordering::Relaxed);
@@ -592,7 +593,7 @@ async fn process_with_dual_pools(
   let skipped = skipped_files.load(Ordering::Relaxed);
   let skipped_mb = skipped_size.load(Ordering::Relaxed) as f64 / (1024.0 * 1024.0);
   let processed = total_files - skipped;
-  
+
   info!(
     "File processing complete: {} total files, {} processed, {} skipped ({:.2} MB saved)",
     total_files, processed, skipped, skipped_mb
@@ -630,14 +631,14 @@ fn process_file<P: AsRef<Path>>(
       if content.is_empty() {
           return;
       }
-      
+
       // Compute hash of the content
       let mut hasher = Hasher::new();
       hasher.update(content.as_bytes());
       let hash = hasher.finalize();
       let mut content_hash = [0u8; 32];
       content_hash.copy_from_slice(hash.as_bytes());
-      
+
       // Check if file has changed
       if let Some(existing) = existing_hash {
           if existing == content_hash {
@@ -1109,7 +1110,7 @@ fn helper() {
     .unwrap();
 
     let chunker = Arc::new(InnerChunker::new(100, Tokenizer::Characters).unwrap());
-    
+
     let mut stream = Box::pin(process_file(&rust_file, chunker, None));
 
     let mut chunks = Vec::new();
@@ -1148,38 +1149,48 @@ fn main() {
     println!("Hello, world!");
 }
 "#;
-    
+
     fs::write(&test_file, content).unwrap();
 
     let chunker = Arc::new(InnerChunker::new(100, Tokenizer::Characters).unwrap());
-    
+
     // First, process the file without any existing hashes
     let mut stream = Box::pin(process_file(&test_file, chunker.clone(), None));
-    
+
     let mut chunks = Vec::new();
     while let Some(result) = stream.next().await {
       chunks.push(result.unwrap());
     }
-    
+
     assert!(!chunks.is_empty(), "Should get chunks on first run");
-    
+
     // Extract the hash from the EOF chunk
-    let eof_chunk = chunks.iter().find(|c| matches!(c.chunk, Chunk::EndOfFile { .. })).unwrap();
+    let eof_chunk = chunks
+      .iter()
+      .find(|c| matches!(c.chunk, Chunk::EndOfFile { .. }))
+      .unwrap();
     let content_hash = match &eof_chunk.chunk {
       Chunk::EndOfFile { content_hash, .. } => *content_hash,
       _ => panic!("Expected EOF chunk"),
     };
-    
+
     // Now process the same file again with the hash
-    let mut stream = Box::pin(process_file(&test_file, chunker.clone(), Some(content_hash)));
-    
+    let mut stream = Box::pin(process_file(
+      &test_file,
+      chunker.clone(),
+      Some(content_hash),
+    ));
+
     let mut chunks = Vec::new();
     while let Some(result) = stream.next().await {
       chunks.push(result.unwrap());
     }
-    
-    assert!(chunks.is_empty(), "Should get no chunks when file is unchanged");
-    
+
+    assert!(
+      chunks.is_empty(),
+      "Should get no chunks when file is unchanged"
+    );
+
     // Now modify the file and process again
     let new_content = r#"
 fn main() {
@@ -1188,16 +1199,19 @@ fn main() {
 }
 "#;
     fs::write(&test_file, new_content).unwrap();
-    
+
     // Process with the old hash - should get chunks because file changed
     let mut stream = Box::pin(process_file(&test_file, chunker, Some(content_hash)));
-    
+
     let mut chunks = Vec::new();
     while let Some(result) = stream.next().await {
       chunks.push(result.unwrap());
     }
-    
-    assert!(!chunks.is_empty(), "Should get chunks when file is modified");
+
+    assert!(
+      !chunks.is_empty(),
+      "Should get chunks when file is modified"
+    );
   }
 
   // Tests to demonstrate inconsistencies between walker and CandidateMatcher

@@ -24,10 +24,7 @@ pub struct EmbeddingInput<'a> {
 #[async_trait]
 pub trait EmbeddingProvider: Send + Sync {
   /// Embed a batch of inputs
-  async fn embed(
-    &self,
-    inputs: &[EmbeddingInput<'_>],
-  ) -> EmbeddingResult<Vec<Vec<f32>>>;
+  async fn embed(&self, inputs: &[EmbeddingInput<'_>]) -> EmbeddingResult<Vec<Vec<f32>>>;
 
   /// Get the embedding dimension for this provider's model
   fn embedding_dim(&self) -> usize;

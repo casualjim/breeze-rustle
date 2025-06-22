@@ -7,11 +7,12 @@ use std::time::Instant;
 use breeze_chunkers::{Chunk, Tokenizer, WalkOptions, walk_project};
 use futures_util::StreamExt;
 use lancedb::Table;
-use lancedb::query::{QueryBase, ExecutableQuery};
+use lancedb::query::{ExecutableQuery, QueryBase};
 use tokio::sync::{RwLock, mpsc};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info};
 
+use crate::IndexerError;
 use crate::config::Config;
 use crate::converter::BufferedRecordBatchConverter;
 use crate::document_builder::build_document_from_accumulator;
@@ -19,7 +20,6 @@ use crate::embeddings::EmbeddingProvider;
 use crate::models::CodeDocument;
 use crate::pipeline::{ChunkBatch, EmbeddedChunk, EmbeddedChunkWithFile, FileAccumulator};
 use crate::sinks::lancedb_sink::LanceDbSink;
-use crate::IndexerError;
 
 pub struct BulkIndexer {
   config: Arc<Config>,
@@ -47,18 +47,21 @@ impl BulkIndexer {
   async fn get_existing_file_hashes(&self) -> Result<BTreeMap<PathBuf, [u8; 32]>, IndexerError> {
     use arrow::array::*;
     use futures_util::TryStreamExt;
-    
+
     let table = self.table.read().await;
     let mut hashes = BTreeMap::new();
-    
+
     // Query only the file_path and content_hash columns
     let mut query = table
       .query()
-      .select(lancedb::query::Select::columns(&["file_path", "content_hash"]))
+      .select(lancedb::query::Select::columns(&[
+        "file_path",
+        "content_hash",
+      ]))
       .execute()
       .await
       .map_err(|e| IndexerError::Database(e.to_string()))?;
-    
+
     while let Some(batch) = query
       .try_next()
       .await
@@ -68,12 +71,12 @@ impl BulkIndexer {
         .column_by_name("file_path")
         .and_then(|col| col.as_any().downcast_ref::<StringArray>())
         .ok_or_else(|| IndexerError::Database("Missing file_path column".to_string()))?;
-      
+
       let content_hashes = batch
         .column_by_name("content_hash")
         .and_then(|col| col.as_any().downcast_ref::<FixedSizeBinaryArray>())
         .ok_or_else(|| IndexerError::Database("Missing content_hash column".to_string()))?;
-      
+
       for i in 0..batch.num_rows() {
         let file_path = PathBuf::from(file_paths.value(i));
         let mut hash = [0u8; 32];
@@ -81,7 +84,7 @@ impl BulkIndexer {
         hashes.insert(file_path, hash);
       }
     }
-    
+
     info!("Loaded {} existing file hashes from database", hashes.len());
     Ok(hashes)
   }
@@ -265,20 +268,29 @@ impl BulkIndexer {
     // Check all results and report errors, cancelling other tasks on first error
     if let Err(e) = walk_result {
       cancel_token.cancel();
-      return Err(IndexerError::Task(format!("Stream processor task failed: {}", e)));
+      return Err(IndexerError::Task(format!(
+        "Stream processor task failed: {}",
+        e
+      )));
     }
 
     // Check embedding worker results
     for (i, result) in embed_results.iter().enumerate() {
       if let Err(e) = result {
         cancel_token.cancel();
-        return Err(IndexerError::Task(format!("Embedder task {} failed: {}", i, e)));
+        return Err(IndexerError::Task(format!(
+          "Embedder task {} failed: {}",
+          i, e
+        )));
       }
     }
 
     if let Err(e) = doc_result {
       cancel_token.cancel();
-      return Err(IndexerError::Task(format!("Document builder task failed: {}", e)));
+      return Err(IndexerError::Task(format!(
+        "Document builder task failed: {}",
+        e
+      )));
     }
 
     let documents_written = sink_result
