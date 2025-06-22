@@ -18,13 +18,13 @@ where
   S: Subscriber + for<'a> LookupSpan<'a>,
 {
   // if cfg!(debug_assertions) {
-  Box::new(tracing_subscriber::fmt::layer().compact().without_time())
+  Box::new(
+    tracing_subscriber::fmt::layer()
+      .pretty()
+      .with_timer(tracing_subscriber::fmt::time::time()),
+  )
   // } else {
-  //   Box::new(
-  //     tracing_subscriber::fmt::layer()
-  //       .json()
-  //       .with_timer(tracing_subscriber::fmt::time::time()),
-  //   )
+  //   Box::new(tracing_subscriber::fmt::layer().compact().without_time())
   // }
 }
 

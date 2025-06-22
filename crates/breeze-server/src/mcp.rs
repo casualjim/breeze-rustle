@@ -5,7 +5,7 @@ use breeze_indexer::Indexer;
 use rmcp::transport::streamable_http_server::{
   StreamableHttpService, session::local::LocalSessionManager,
 };
-use rmcp::{Error as McpError, RoleServer, ServerHandler, model::*, service::RequestContext, tool};
+use rmcp::{Error as McpError, RoleServer, ServerHandler, model::*, service::RequestContext, tool, resource};
 use serde_json::json;
 use tracing::info;
 use uuid::Uuid;
@@ -21,6 +21,35 @@ pub struct BreezeService {
 impl BreezeService {
   pub fn new(indexer: Arc<Indexer>) -> Self {
     Self { indexer }
+  }
+
+
+  #[tool(description = "Create a new project for indexing")]
+  async fn create_project(
+    &self,
+    #[tool(aggr)] CreateProjectRequest {
+      name,
+      directory,
+      description,
+    }: CreateProjectRequest,
+  ) -> Result<CallToolResult, McpError> {
+    info!("Creating project: {} at {}", name, directory);
+
+    match self
+      .indexer
+      .project_manager()
+      .create_project(name, directory, description)
+      .await
+    {
+      Ok(project) => Ok(CallToolResult::success(vec![Content::text(format!(
+        "Successfully created project '{}' with ID: {}",
+        project.name, project.id
+      ))])),
+      Err(e) => Ok(CallToolResult::error(vec![Content::text(format!(
+        "Failed to create project: {}",
+        e
+      ))])),
+    }
   }
 
   #[tool(description = "Search code using semantic understanding")]
@@ -66,58 +95,6 @@ impl BreezeService {
       }
       Err(e) => Ok(CallToolResult::error(vec![Content::text(format!(
         "Search failed: {}",
-        e
-      ))])),
-    }
-  }
-
-  #[tool(description = "Create a new project for indexing")]
-  async fn create_project(
-    &self,
-    #[tool(aggr)] CreateProjectRequest {
-      name,
-      directory,
-      description,
-    }: CreateProjectRequest,
-  ) -> Result<CallToolResult, McpError> {
-    info!("Creating project: {} at {}", name, directory);
-
-    match self
-      .indexer
-      .project_manager()
-      .create_project(name, directory, description)
-      .await
-    {
-      Ok(project) => Ok(CallToolResult::success(vec![Content::text(format!(
-        "Successfully created project '{}' with ID: {}",
-        project.name, project.id
-      ))])),
-      Err(e) => Ok(CallToolResult::error(vec![Content::text(format!(
-        "Failed to create project: {}",
-        e
-      ))])),
-    }
-  }
-
-  #[tool(description = "List all projects")]
-  async fn list_projects(&self) -> Result<CallToolResult, McpError> {
-    info!("Listing projects");
-
-    match self.indexer.project_manager().list_projects().await {
-      Ok(projects) => {
-        let mut content = String::from("Projects:\n\n");
-        for project in projects {
-          content.push_str(&format!("- {} ({})\n", project.name, project.id));
-          content.push_str(&format!("  Directory: {}\n", project.directory));
-          if let Some(desc) = project.description {
-            content.push_str(&format!("  Description: {}\n", desc));
-          }
-          content.push('\n');
-        }
-        Ok(CallToolResult::success(vec![Content::text(content)]))
-      }
-      Err(e) => Ok(CallToolResult::error(vec![Content::text(format!(
-        "Failed to list projects: {}",
         e
       ))])),
     }
@@ -179,6 +156,86 @@ impl BreezeService {
       }))?])),
       Err(e) => Ok(CallToolResult::error(vec![Content::text(format!(
         "Indexing failed: {}",
+        e
+      ))])),
+    }
+  }
+
+  #[tool(description = "Update an existing project")]
+  async fn update_project(
+    &self,
+    #[tool(aggr)] UpdateProjectByIdRequest {
+      project_id,
+      name,
+      description,
+    }: UpdateProjectByIdRequest,
+  ) -> Result<CallToolResult, McpError> {
+    info!("Updating project: {}", project_id);
+
+    let project_uuid = match Uuid::parse_str(&project_id) {
+      Ok(uuid) => uuid,
+      Err(e) => {
+        return Ok(CallToolResult::error(vec![Content::text(format!(
+          "Invalid project ID: {}",
+          e
+        ))]));
+      }
+    };
+
+    match self
+      .indexer
+      .project_manager()
+      .update_project(project_uuid, name, description)
+      .await
+    {
+      Ok(Some(project)) => Ok(CallToolResult::success(vec![Content::text(format!(
+        "Successfully updated project '{}' ({})",
+        project.name, project.id
+      ))])),
+      Ok(None) => Ok(CallToolResult::error(vec![Content::text(format!(
+        "Project not found: {}",
+        project_id
+      ))])),
+      Err(e) => Ok(CallToolResult::error(vec![Content::text(format!(
+        "Failed to update project: {}",
+        e
+      ))])),
+    }
+  }
+
+  #[tool(description = "Delete a project and all associated data")]
+  async fn delete_project(
+    &self,
+    #[tool(aggr)] DeleteProjectRequest { project_id }: DeleteProjectRequest,
+  ) -> Result<CallToolResult, McpError> {
+    info!("Deleting project: {}", project_id);
+
+    let project_uuid = match Uuid::parse_str(&project_id) {
+      Ok(uuid) => uuid,
+      Err(e) => {
+        return Ok(CallToolResult::error(vec![Content::text(format!(
+          "Invalid project ID: {}",
+          e
+        ))]));
+      }
+    };
+
+    match self
+      .indexer
+      .project_manager()
+      .delete_project(project_uuid)
+      .await
+    {
+      Ok(true) => Ok(CallToolResult::success(vec![Content::text(format!(
+        "Successfully deleted project: {}",
+        project_id
+      ))])),
+      Ok(false) => Ok(CallToolResult::error(vec![Content::text(format!(
+        "Project not found: {}",
+        project_id
+      ))])),
+      Err(e) => Ok(CallToolResult::error(vec![Content::text(format!(
+        "Failed to delete project: {}",
         e
       ))])),
     }

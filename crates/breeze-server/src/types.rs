@@ -99,6 +99,33 @@ pub struct IndexFileByProjectRequest {
   pub path: String,
 }
 
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+pub struct GetProjectRequest {
+  pub project_id: String,
+}
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+pub struct UpdateProjectByIdRequest {
+  pub project_id: String,
+  pub name: Option<String>,
+  pub description: Option<Option<String>>,
+}
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+pub struct DeleteProjectRequest {
+  pub project_id: String,
+}
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+pub struct GetTaskRequest {
+  pub task_id: String,
+}
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+pub struct ListTasksRequest {
+  pub limit: Option<usize>,
+}
+
 // Response types
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct IndexResponse {

@@ -56,7 +56,7 @@ pub fn router(_app: app::AppState) -> ApiRouter<AppState> {
           .response::<500, Json<ErrorResponse>>()
       }),
     )
-  .api_route("/api/v1/projects/:id",
+  .api_route("/api/v1/projects/{id}",
       get_with(get_project, |op| op
           .summary("Get project details")
           .description("Retrieves detailed information about a specific project")
@@ -82,7 +82,7 @@ pub fn router(_app: app::AppState) -> ApiRouter<AppState> {
           .response::<500, Json<ErrorResponse>>()
       )
   )
-  .api_route("/api/v1/projects/:id/index",
+  .api_route("/api/v1/projects/{id}/index",
       post_with(index_project_by_id, |op| op
           .summary("Index project")
           .description("Submits a background task to index all files in a project")
@@ -91,7 +91,7 @@ pub fn router(_app: app::AppState) -> ApiRouter<AppState> {
           .response::<500, Json<ErrorResponse>>()
       )
   )
-  .api_route("/api/v1/projects/:id/files",
+  .api_route("/api/v1/projects/{id}/files",
       post_with(index_file, |op| op
           .summary("Index file")
           .description("Submits a background task to index a single file within a project. Can provide content directly or read from filesystem.")
@@ -113,7 +113,7 @@ pub fn router(_app: app::AppState) -> ApiRouter<AppState> {
       )
   )
   // Task endpoints
-  .api_route("/api/v1/tasks/:id",
+  .api_route("/api/v1/tasks/{id}",
       get_with(get_task, |op| op
           .summary("Get task")
           .description("Retrieves the status and details of a background task")
