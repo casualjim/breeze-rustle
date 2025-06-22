@@ -57,7 +57,7 @@ tiktoken-rs = "0.7"
 # Tokenization
 tokenizers = { version = "0.21", default-features = false, features = ["esaxx_fast", "http", "onig"] }
 
-tokio = { version = "1", features = ["rt", "macros", "fs", "sync"] }
+tokio = { version = "1", features = ["rt", "macros", "fs", "sync", "io-util"] }
 tokio-stream = "0.1"
 tokio-util = "0.7"
 

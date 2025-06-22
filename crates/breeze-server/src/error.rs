@@ -92,6 +92,7 @@ impl IntoResponse for ApiError {
         }
         IndexerError::FileWatcher(_) => (StatusCode::INTERNAL_SERVER_ERROR, "FILE_WATCHER_ERROR"),
         IndexerError::Task(_) => (StatusCode::INTERNAL_SERVER_ERROR, "TASK_ERROR"),
+        IndexerError::Database(_) => (StatusCode::INTERNAL_SERVER_ERROR, "DATABASE_ERROR"),
       },
     };
 

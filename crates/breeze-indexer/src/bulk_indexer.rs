@@ -1,4 +1,5 @@
-use std::path::Path;
+use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Instant;
@@ -6,6 +7,7 @@ use std::time::Instant;
 use breeze_chunkers::{Chunk, Tokenizer, WalkOptions, walk_project};
 use futures_util::StreamExt;
 use lancedb::Table;
+use lancedb::query::{QueryBase, ExecutableQuery};
 use tokio::sync::{RwLock, mpsc};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info};
@@ -41,6 +43,49 @@ impl BulkIndexer {
     }
   }
 
+  /// Query existing file hashes from the database for work avoidance
+  async fn get_existing_file_hashes(&self) -> Result<BTreeMap<PathBuf, [u8; 32]>, IndexerError> {
+    use arrow::array::*;
+    use futures_util::TryStreamExt;
+    
+    let table = self.table.read().await;
+    let mut hashes = BTreeMap::new();
+    
+    // Query only the file_path and content_hash columns
+    let mut query = table
+      .query()
+      .select(lancedb::query::Select::columns(&["file_path", "content_hash"]))
+      .execute()
+      .await
+      .map_err(|e| IndexerError::Database(e.to_string()))?;
+    
+    while let Some(batch) = query
+      .try_next()
+      .await
+      .map_err(|e| IndexerError::Database(e.to_string()))?
+    {
+      let file_paths = batch
+        .column_by_name("file_path")
+        .and_then(|col| col.as_any().downcast_ref::<StringArray>())
+        .ok_or_else(|| IndexerError::Database("Missing file_path column".to_string()))?;
+      
+      let content_hashes = batch
+        .column_by_name("content_hash")
+        .and_then(|col| col.as_any().downcast_ref::<FixedSizeBinaryArray>())
+        .ok_or_else(|| IndexerError::Database("Missing content_hash column".to_string()))?;
+      
+      for i in 0..batch.num_rows() {
+        let file_path = PathBuf::from(file_paths.value(i));
+        let mut hash = [0u8; 32];
+        hash.copy_from_slice(content_hashes.value(i));
+        hashes.insert(file_path, hash);
+      }
+    }
+    
+    info!("Loaded {} existing file hashes from database", hashes.len());
+    Ok(hashes)
+  }
+
   pub async fn index(
     &self,
     path: &Path,
@@ -48,6 +93,12 @@ impl BulkIndexer {
   ) -> Result<usize, IndexerError> {
     let start_time = Instant::now();
     info!(path = %path.display(), "Starting channel-based indexing");
+
+    // Query existing hashes for work avoidance
+    let existing_hashes = self.get_existing_file_hashes().await.unwrap_or_else(|e| {
+      error!("Failed to get existing hashes: {}", e);
+      BTreeMap::new()
+    });
 
     // Setup
     // Get tokenizer from the embedding provider
@@ -71,6 +122,7 @@ impl BulkIndexer {
       max_parallel: self.config.max_parallel_files,
       max_file_size: self.config.max_file_size,
       large_file_threads: self.config.large_file_threads.unwrap_or(4),
+      existing_hashes,
     };
 
     let chunk_stream = walk_project(path.to_path_buf(), walk_options);
@@ -97,6 +149,12 @@ impl BulkIndexer {
     let project_root = project_root.as_ref().to_path_buf();
     info!(project_root = %project_root.display(), "Starting partial file indexing");
 
+    // Query existing hashes for work avoidance
+    let existing_hashes = self.get_existing_file_hashes().await.unwrap_or_else(|e| {
+      error!("Failed to get existing hashes: {}", e);
+      BTreeMap::new()
+    });
+
     // Get tokenizer from the embedding provider
     let tokenizer = if let Some(provider_tokenizer) = self.embedding_provider.tokenizer() {
       // Use the pre-loaded tokenizer from the provider
@@ -118,6 +176,7 @@ impl BulkIndexer {
       max_parallel: self.config.max_parallel_files,
       max_file_size: self.config.max_file_size,
       large_file_threads: self.config.large_file_threads.unwrap_or(4),
+      existing_hashes,
     };
 
     // Use the walk_files function from chunkers

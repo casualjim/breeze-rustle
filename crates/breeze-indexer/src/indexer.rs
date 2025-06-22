@@ -29,6 +29,9 @@ pub enum IndexerError {
   #[error("Storage error")]
   Storage(#[from] lancedb::Error),
 
+  #[error("Database error: {0}")]
+  Database(String),
+
   #[error("Embedding provider error")]
   Embedding(#[from] EmbeddingError),
 

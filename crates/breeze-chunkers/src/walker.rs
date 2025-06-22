@@ -88,6 +88,7 @@ pub struct WalkOptions {
   pub max_parallel: usize,
   pub max_file_size: Option<u64>,
   pub large_file_threads: usize,
+  pub existing_hashes: std::collections::BTreeMap<PathBuf, [u8; 32]>,
 }
 
 impl Default for WalkOptions {
@@ -98,6 +99,7 @@ impl Default for WalkOptions {
       max_parallel: 4,
       max_file_size: Some(5 * 1024 * 1024), // 5MB default
       large_file_threads: 4,
+      existing_hashes: std::collections::BTreeMap::new(),
     }
   }
 }
@@ -166,6 +168,7 @@ pub fn walk_project(
       tx,
       options.large_file_threads,
       options.max_parallel,
+      Arc::new(options.existing_hashes),
     )
     .await;
   });
@@ -262,6 +265,7 @@ where
       tx,
       options.large_file_threads,
       options.max_parallel,
+      Arc::new(options.existing_hashes),
     )
     .await;
   });
@@ -370,14 +374,15 @@ impl CandidateMatcher {
   }
 }
 
-/// Collect all files with their sizes
+/// Collect all files with their sizes (without reading content)
 async fn collect_files_with_sizes(
   path: &Path,
   max_file_size: Option<u64>,
 ) -> Result<Vec<(PathBuf, u64)>, std::io::Error> {
   // Use tokio's spawn_blocking for the walker
   let path = path.to_owned();
-  let entries = tokio::task::spawn_blocking(move || {
+  
+  tokio::task::spawn_blocking(move || {
     let mut entries = Vec::new();
     let mut builder = WalkBuilder::new(&path);
 
@@ -404,12 +409,11 @@ async fn collect_files_with_sizes(
         }
       }
     }
-    entries
+    Ok(entries)
   })
-  .await?;
-
-  Ok(entries)
+  .await?
 }
+
 
 /// Process files using dual-pool work-stealing approach
 async fn process_with_dual_pools(
@@ -418,6 +422,7 @@ async fn process_with_dual_pools(
   tx: mpsc::Sender<Result<ProjectChunk, ChunkError>>,
   large_file_threads: usize,
   small_file_threads: usize,
+  existing_hashes: Arc<std::collections::BTreeMap<PathBuf, [u8; 32]>>,
 ) {
   use std::collections::VecDeque;
   use std::sync::Mutex;
@@ -428,6 +433,8 @@ async fn process_with_dual_pools(
   // Track total work and completed work
   let total_files = file_entries.len();
   let remaining_work = Arc::new(AtomicUsize::new(total_files));
+  let skipped_files = Arc::new(AtomicUsize::new(0));
+  let skipped_size = Arc::new(AtomicUsize::new(0));
 
   info!(
     "Starting dual-pool processing: {} total files, {} large file threads, {} small file threads",
@@ -441,6 +448,9 @@ async fn process_with_dual_pools(
     let chunker = chunker.clone();
     let tx = tx.clone();
     let remaining = remaining_work.clone();
+    let existing_hashes = existing_hashes.clone();
+    let skipped_files = skipped_files.clone();
+    let skipped_size = skipped_size.clone();
 
     let handle = tokio::spawn(async move {
       debug!("Large file worker {} started", i);
@@ -464,12 +474,23 @@ async fn process_with_dual_pools(
             );
             total_size_processed += size;
 
-            let mut stream = Box::pin(process_file(&path, chunker.clone()));
+            let existing_hash = existing_hashes.get(&path).cloned();
+            
+            // Check if file will be skipped
+            let mut chunk_count = 0;
+            let mut stream = Box::pin(process_file(&path, chunker.clone(), existing_hash));
             while let Some(result) = stream.next().await {
+              chunk_count += 1;
               if tx.send(result).await.is_err() {
                 debug!("Large file worker {} exiting: receiver dropped", i);
                 return;
               }
+            }
+            
+            // If no chunks were produced, the file was skipped
+            if chunk_count == 0 && existing_hash.is_some() {
+              skipped_files.fetch_add(1, Ordering::Relaxed);
+              skipped_size.fetch_add(size as usize, Ordering::Relaxed);
             }
 
             processed += 1;
@@ -501,6 +522,9 @@ async fn process_with_dual_pools(
     let chunker = chunker.clone();
     let tx = tx.clone();
     let remaining = remaining_work.clone();
+    let existing_hashes = existing_hashes.clone();
+    let skipped_files = skipped_files.clone();
+    let skipped_size = skipped_size.clone();
 
     let handle = tokio::spawn(async move {
       debug!("Small file worker {} started", i);
@@ -518,12 +542,23 @@ async fn process_with_dual_pools(
           Some((path, size)) => {
             total_size_processed += size;
 
-            let mut stream = Box::pin(process_file(&path, chunker.clone()));
+            let existing_hash = existing_hashes.get(&path).cloned();
+            
+            // Check if file will be skipped
+            let mut chunk_count = 0;
+            let mut stream = Box::pin(process_file(&path, chunker.clone(), existing_hash));
             while let Some(result) = stream.next().await {
+              chunk_count += 1;
               if tx.send(result).await.is_err() {
                 debug!("Small file worker {} exiting: receiver dropped", i);
                 return;
               }
+            }
+            
+            // If no chunks were produced, the file was skipped
+            if chunk_count == 0 && existing_hash.is_some() {
+              skipped_files.fetch_add(1, Ordering::Relaxed);
+              skipped_size.fetch_add(size as usize, Ordering::Relaxed);
             }
 
             processed += 1;
@@ -554,13 +589,21 @@ async fn process_with_dual_pools(
     let _ = handle.await;
   }
 
-  info!("All files processed. Total: {}", total_files);
+  let skipped = skipped_files.load(Ordering::Relaxed);
+  let skipped_mb = skipped_size.load(Ordering::Relaxed) as f64 / (1024.0 * 1024.0);
+  let processed = total_files - skipped;
+  
+  info!(
+    "File processing complete: {} total files, {} processed, {} skipped ({:.2} MB saved)",
+    total_files, processed, skipped, skipped_mb
+  );
 }
 
 /// Process a single file and yield chunks as a stream
 fn process_file<P: AsRef<Path>>(
   path: P,
   chunker: Arc<InnerChunker>,
+  existing_hash: Option<[u8; 32]>,
 ) -> impl Stream<Item = Result<ProjectChunk, ChunkError>> + Send {
   let path = path.as_ref().to_owned();
 
@@ -587,13 +630,22 @@ fn process_file<P: AsRef<Path>>(
       if content.is_empty() {
           return;
       }
-
-      // Compute content hash
+      
+      // Compute hash of the content
       let mut hasher = Hasher::new();
       hasher.update(content.as_bytes());
       let hash = hasher.finalize();
       let mut content_hash = [0u8; 32];
       content_hash.copy_from_slice(hash.as_bytes());
+      
+      // Check if file has changed
+      if let Some(existing) = existing_hash {
+          if existing == content_hash {
+              // File unchanged, skip it entirely
+              debug!("Skipping unchanged file: {}", path.display());
+              return;
+          }
+      }
 
       // Check if hyperpolyglot detects a supported language
       let detected_language = if let Ok(Some(detection)) = hyperpolyglot::detect(&path) {
@@ -891,6 +943,7 @@ python -m pytest tests/
         max_parallel: 4,
         max_file_size: None,
         large_file_threads: 2,
+        existing_hashes: std::collections::BTreeMap::new(),
       },
     );
 
@@ -948,6 +1001,7 @@ python -m pytest tests/
         max_parallel: 2,
         max_file_size: None,
         large_file_threads: 2,
+        existing_hashes: std::collections::BTreeMap::new(),
       },
     );
 
@@ -992,6 +1046,7 @@ python -m pytest tests/
         max_parallel: 4,
         max_file_size: None,
         large_file_threads: 2,
+        existing_hashes: std::collections::BTreeMap::new(),
       },
     );
 
@@ -1018,6 +1073,7 @@ python -m pytest tests/
           max_parallel,
           max_file_size: None,
           large_file_threads: 2,
+          existing_hashes: std::collections::BTreeMap::new(),
         },
       );
 
@@ -1053,7 +1109,8 @@ fn helper() {
     .unwrap();
 
     let chunker = Arc::new(InnerChunker::new(100, Tokenizer::Characters).unwrap());
-    let mut stream = Box::pin(process_file(&rust_file, chunker));
+    
+    let mut stream = Box::pin(process_file(&rust_file, chunker, None));
 
     let mut chunks = Vec::new();
     while let Some(result) = stream.next().await {
@@ -1080,6 +1137,67 @@ fn helper() {
       chunks.last().unwrap().chunk,
       Chunk::EndOfFile { .. }
     ));
+  }
+
+  #[tokio::test]
+  async fn test_work_avoidance_hash_comparison() {
+    let temp_dir = TempDir::new().unwrap();
+    let test_file = temp_dir.path().join("test.rs");
+    let content = r#"
+fn main() {
+    println!("Hello, world!");
+}
+"#;
+    
+    fs::write(&test_file, content).unwrap();
+
+    let chunker = Arc::new(InnerChunker::new(100, Tokenizer::Characters).unwrap());
+    
+    // First, process the file without any existing hashes
+    let mut stream = Box::pin(process_file(&test_file, chunker.clone(), None));
+    
+    let mut chunks = Vec::new();
+    while let Some(result) = stream.next().await {
+      chunks.push(result.unwrap());
+    }
+    
+    assert!(!chunks.is_empty(), "Should get chunks on first run");
+    
+    // Extract the hash from the EOF chunk
+    let eof_chunk = chunks.iter().find(|c| matches!(c.chunk, Chunk::EndOfFile { .. })).unwrap();
+    let content_hash = match &eof_chunk.chunk {
+      Chunk::EndOfFile { content_hash, .. } => *content_hash,
+      _ => panic!("Expected EOF chunk"),
+    };
+    
+    // Now process the same file again with the hash
+    let mut stream = Box::pin(process_file(&test_file, chunker.clone(), Some(content_hash)));
+    
+    let mut chunks = Vec::new();
+    while let Some(result) = stream.next().await {
+      chunks.push(result.unwrap());
+    }
+    
+    assert!(chunks.is_empty(), "Should get no chunks when file is unchanged");
+    
+    // Now modify the file and process again
+    let new_content = r#"
+fn main() {
+    println!("Hello, world!");
+    println!("Modified!");
+}
+"#;
+    fs::write(&test_file, new_content).unwrap();
+    
+    // Process with the old hash - should get chunks because file changed
+    let mut stream = Box::pin(process_file(&test_file, chunker, Some(content_hash)));
+    
+    let mut chunks = Vec::new();
+    while let Some(result) = stream.next().await {
+      chunks.push(result.unwrap());
+    }
+    
+    assert!(!chunks.is_empty(), "Should get chunks when file is modified");
   }
 
   // Tests to demonstrate inconsistencies between walker and CandidateMatcher
