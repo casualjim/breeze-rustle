@@ -1,42 +1,21 @@
-# breeze-rustle Context - Embedding Pipeline Bug Investigation
+# breeze-rustle Context - Embedding Pipeline Bug Fix
 
-## Current Issue: Missing EOF Chunks
+## Problem: EOF Chunks Lost on Embedding Failure
 
-### Problem Summary
-When embedding is slow or fails, EOF chunks can be lost, causing "No EOF chunk found" errors in the document builder. This is intermittent and provider-specific.
+### Root Cause
+When embedding fails (timeout, rate limit, etc.), the entire batch fails including EOF chunks. Since EOF chunks don't need embedding but were being sent with the batch, they were lost when the batch failed. This caused "No EOF chunk found" errors in the document builder.
 
-### Root Cause Analysis
+### Key Architecture Insights
 
-1. **Batch-Level Failures**: When embedding fails (timeout, rate limit), the entire batch fails
-2. **Lost EOF Chunks**: EOF chunks in failed batches are dropped along with content chunks
-3. **Silent Data Loss**: No error propagation - chunks just disappear from the pipeline
-
-### The Pipeline Flow
-
-```
-StreamProcessor → Batcher → Embedder → DocumentBuilder → Sink
-                                ↓
-                          (failure = dropped chunks)
-```
-
-### Key Insights
-
-1. **EOF chunks don't need embedding** - they're sent with empty vectors
+1. **EOF chunks don't need embedding** - they just mark file completion
 2. **Batches mix chunks from multiple files** - one batch can contain:
-   - Content chunks from files A, B
+   - Content chunks from files A, B (need embedding)
    - EOF chunks from files C, D, E (whose content was in earlier batches)
-3. **Partial file failure** - if any chunk of a file fails, the entire file should be marked as failed
+3. **EOF chunks must maintain batch order** - they signal completion after all content chunks are processed
 
-### Edge Cases
+## Implemented Solution
 
-1. **EOF-only batches**: A batch might contain only EOF chunks for files whose content chunks were successfully processed earlier
-2. **Mixed failure impact**: When a batch fails:
-   - Files with content chunks in the batch → failed
-   - Files with only EOF chunks in the batch → should still complete
-
-## Proposed Solution: Proper Terminal States
-
-Transform EmbeddedChunkWithFile into an enum that captures all states:
+Transformed EmbeddedChunkWithFile from a struct to an enum with three variants:
 
 ```rust
 pub enum EmbeddedChunkWithFile {
@@ -44,7 +23,7 @@ pub enum EmbeddedChunkWithFile {
     Embedded {
         batch_id: usize,
         file_path: String,
-        chunk: PipelineChunk,  // Semantic or Text
+        chunk: PipelineChunk,
         embedding: Vec<f32>,
     },
     // EOF marker - no embedding needed
@@ -57,58 +36,48 @@ pub enum EmbeddedChunkWithFile {
     // Batch failure notification
     BatchFailure {
         batch_id: usize,
-        failed_files: HashSet<String>,  // Files with content chunks in this batch
+        failed_files: BTreeSet<String>,  // Files with content chunks in this batch
         error: String,
     }
 }
 ```
 
-### Benefits
+### How It Works
 
-1. **Type safety** - Each state is explicitly modeled, no empty embeddings hack
-2. **Clear semantics** - EOF chunks are recognized as terminal markers
-3. **Batch-level failure handling** - Matches how embedding actually works
-4. **Selective processing** - Can handle EOF chunks for non-failed files
-5. **Better observability** - Can track embedded vs EOF vs failed chunks
+1. **Embedder behavior**:
+   - On success: Sends `Embedded` variants for content chunks
+   - On failure: Sends `BatchFailure` with list of files that had content in the batch
+   - Always: Sends `EndOfFile` variants after batch processing (success or failure)
+   - EOF chunks maintain batch ordering - sent after their batch is processed
 
-### Implementation Strategy
+2. **Document builder behavior**:
+   - Maintains a `failed_files` set
+   - On `BatchFailure`: Adds files to the failed set
+   - On `Embedded`: Skips if file is in failed set, otherwise accumulates
+   - On `EndOfFile`: Skips if file is in failed set, otherwise builds document
+   - This ensures EOF chunks for non-failed files still complete successfully
 
-1. **In embedder**:
-   - Send embedded chunks as `Embedded` variant
-   - Send EOF chunks as `EndOfFile` variant immediately (no batching needed)
-   - On batch failure:
-     - Identify files with content chunks in the failed batch
-     - Send `BatchFailure` with affected file set
-     - Still send `EndOfFile` variants for unaffected files
+### Why This Works
 
-2. **In document builder**:
-   - Pattern match on the enum:
-     - `Embedded`: Accumulate in file accumulator
-     - `EndOfFile`: Trigger document building for that file
-     - `BatchFailure`: Mark files as failed, skip their chunks
-   - Only build documents for non-failed files
+- **Files with content in failed batch**: Marked as failed, all chunks ignored
+- **Files with only EOF in failed batch**: Not marked as failed, EOF processed normally
+- **No more EOF loss**: EOF chunks are sent regardless of embedding success/failure
+- **Correct ordering**: EOF chunks still wait for their batch to complete
 
-## Test Plan
+## What We Didn't Do (And Why)
 
-Create a test with a mock embedding provider that:
-1. Fails deterministically (e.g., every 3rd batch)
-2. Process multiple files with varying chunk counts
-3. Verify:
-   - Files with chunks in failed batches don't produce documents
-   - Files with only EOF chunks in failed batches complete successfully
-   - No "No EOF chunk found" errors for partial files
+1. **Timeout-based flushing**: Not needed - EOF chunks are sent immediately after batch processing
+2. **Filtering EOF chunks at sender**: Wrong approach - document builder handles this by tracking failed files
+3. **Retry logic**: Separate concern, not part of the EOF loss fix
 
-## Current Code Issues
+## Test Coverage
 
-1. **No retry on embedding failure** (bulk_indexer.rs:1260-1264)
-2. **EOF chunks held in pending_batches** until batch threshold met
-3. **No timeout-based flushing** for small files
-4. **Silent chunk dropping** on `embedded_tx.send()` failure
+Added comprehensive tests including:
+- `test_eof_chunk_loss_on_embedding_failure`: Verifies EOF chunks aren't lost
+- `test_document_builder_handles_batch_failures`: Verifies correct handling of mixed batches
 
-## Next Steps
+## Remaining Tasks
 
-1. Write the test to reproduce the issue
-2. Implement the Failed variant
-3. Update embedder error handling to create Failed chunks
-4. Update document builder to handle Failed chunks
-5. Add metrics/logging for failed files
+1. **Add retry logic for embedding failures** - For transient API errors
+2. **Fix silent chunk dropping** - When `embedded_tx.send()` fails
+3. **Add metrics/logging** - Track failed files for observability

@@ -57,11 +57,27 @@ pub(crate) struct ChunkBatch {
 
 /// Embedded chunks with file path information
 #[derive(Debug, Clone)]
-pub(crate) struct EmbeddedChunkWithFile {
-  pub batch_id: usize,
-  pub file_path: String,
-  pub chunk: PipelineChunk,
-  pub embedding: Vec<f32>,
+pub(crate) enum EmbeddedChunkWithFile {
+  /// Regular embedded chunk
+  Embedded {
+    batch_id: usize,
+    file_path: String,
+    chunk: PipelineChunk,
+    embedding: Vec<f32>,
+  },
+  /// EOF marker - no embedding needed
+  EndOfFile {
+    batch_id: usize,
+    file_path: String,
+    content: String,
+    content_hash: [u8; 32],
+  },
+  /// Batch failure notification
+  BatchFailure {
+    batch_id: usize,
+    failed_files: std::collections::BTreeSet<String>,
+    error: String,
+  },
 }
 
 /// File accumulator for building documents

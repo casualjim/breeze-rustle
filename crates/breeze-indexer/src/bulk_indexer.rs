@@ -895,13 +895,13 @@ async fn remote_embedder_worker_task(
 
             // Send EOF chunks if this batch is complete
             for eof_chunk in embedding_batch.eof_chunks {
-              if let PipelineChunk::EndOfFile { .. } = eof_chunk.chunk {
+              if let PipelineChunk::EndOfFile { file_path, content, content_hash } = eof_chunk.chunk {
                 total_files_processed += 1;
-                let eof = EmbeddedChunkWithFile {
+                let eof = EmbeddedChunkWithFile::EndOfFile {
                   batch_id: embedding_batch.batch_id,
-                  file_path: eof_chunk.file_path.clone(),
-                  chunk: eof_chunk.chunk,
-                  embedding: vec![],
+                  file_path,
+                  content,
+                  content_hash,
                 };
                 if embedded_tx.send(eof).await.is_err() {
                   return;
@@ -952,13 +952,13 @@ async fn remote_embedder_worker_task(
 
               // Send EOF chunks
               for eof_chunk in embedding_batch.eof_chunks {
-                if let PipelineChunk::EndOfFile { .. } = eof_chunk.chunk {
+                if let PipelineChunk::EndOfFile { file_path, content, content_hash } = eof_chunk.chunk {
                   total_files_processed += 1;
-                  let eof = EmbeddedChunkWithFile {
+                  let eof = EmbeddedChunkWithFile::EndOfFile {
                     batch_id: embedding_batch.batch_id,
-                    file_path: eof_chunk.file_path.clone(),
-                    chunk: eof_chunk.chunk,
-                    embedding: vec![],
+                    file_path,
+                    content,
+                    content_hash,
                   };
                   if embedded_tx.send(eof).await.is_err() {
                     return;
@@ -971,13 +971,13 @@ async fn remote_embedder_worker_task(
           // Send any remaining EOF chunks
           for (bid, pending_batch) in pending_batches {
             for eof_chunk in pending_batch.eof_chunks {
-              if let PipelineChunk::EndOfFile { .. } = eof_chunk.chunk {
+              if let PipelineChunk::EndOfFile { file_path, content, content_hash } = eof_chunk.chunk {
                 total_files_processed += 1;
-                let eof = EmbeddedChunkWithFile {
+                let eof = EmbeddedChunkWithFile::EndOfFile {
                   batch_id: bid,
-                  file_path: eof_chunk.file_path.clone(),
-                  chunk: eof_chunk.chunk,
-                  embedding: vec![],
+                  file_path,
+                  content,
+                  content_hash,
                 };
                 if embedded_tx.send(eof).await.is_err() {
                   return;
@@ -1093,13 +1093,13 @@ async fn embedder_task(
 
                 // Send EOF chunks if this batch is complete
                 for eof_chunk in embedding_batch.eof_chunks {
-                  if let PipelineChunk::EndOfFile { .. } = eof_chunk.chunk {
+                  if let PipelineChunk::EndOfFile { file_path, content, content_hash } = eof_chunk.chunk {
                     total_files_processed += 1;
-                    let eof = EmbeddedChunkWithFile {
+                    let eof = EmbeddedChunkWithFile::EndOfFile {
                       batch_id: embedding_batch.batch_id,
-                      file_path: eof_chunk.file_path.clone(),
-                      chunk: eof_chunk.chunk,
-                      embedding: vec![],
+                      file_path,
+                      content,
+                      content_hash,
                     };
                     if embedded_tx.send(eof).await.is_err() {
                       return;
@@ -1142,13 +1142,13 @@ async fn embedder_task(
 
                   // Send EOF chunks
                   for eof_chunk in embedding_batch.eof_chunks {
-                    if let PipelineChunk::EndOfFile { .. } = eof_chunk.chunk {
+                    if let PipelineChunk::EndOfFile { file_path, content, content_hash } = eof_chunk.chunk {
                       total_files_processed += 1;
-                      let eof = EmbeddedChunkWithFile {
+                      let eof = EmbeddedChunkWithFile::EndOfFile {
                         batch_id: embedding_batch.batch_id,
-                        file_path: eof_chunk.file_path.clone(),
-                        chunk: eof_chunk.chunk,
-                        embedding: vec![],
+                        file_path,
+                        content,
+                        content_hash,
                       };
                       if embedded_tx.send(eof).await.is_err() {
                         return;
@@ -1161,13 +1161,13 @@ async fn embedder_task(
               // Send any remaining EOF chunks
               for (bid, pending_batch) in pending_batches {
                 for eof_chunk in pending_batch.eof_chunks {
-                  if let PipelineChunk::EndOfFile { .. } = eof_chunk.chunk {
+                  if let PipelineChunk::EndOfFile { file_path, content, content_hash } = eof_chunk.chunk {
                     total_files_processed += 1;
-                    let eof = EmbeddedChunkWithFile {
+                    let eof = EmbeddedChunkWithFile::EndOfFile {
                       batch_id: bid,
-                      file_path: eof_chunk.file_path.clone(),
-                      chunk: eof_chunk.chunk,
-                      embedding: vec![],
+                      file_path,
+                      content,
+                      content_hash,
                     };
                     if embedded_tx.send(eof).await.is_err() {
                       return;
@@ -1209,6 +1209,10 @@ async fn process_embedding_batch(
     total_chunks_processed,
     total_files_processed
   );
+  
+  // Collect files in this batch for failure tracking
+  let mut files_in_batch = std::collections::BTreeSet::new();
+  
   // Create embedding inputs from chunks (without cloning text)
   let mut chunks_to_embed = Vec::new();
   let inputs: Vec<crate::embeddings::EmbeddingInput> = batch
@@ -1216,6 +1220,7 @@ async fn process_embedding_batch(
     .enumerate()
     .filter_map(|(idx, pc)| match &pc.chunk {
       PipelineChunk::Semantic(sc) | PipelineChunk::Text(sc) => {
+        files_in_batch.insert(pc.file_path.clone());
         let input = crate::embeddings::EmbeddingInput {
           text: &sc.text,
           token_count: sc.tokens.as_ref().map(|t| t.len()),
@@ -1243,7 +1248,7 @@ async fn process_embedding_batch(
       for (idx, pc) in batch.into_iter().enumerate() {
         if chunk_idx_iter.next() == Some(idx) {
           if let Some(embedding_vec) = embedding_iter.next() {
-            let item = EmbeddedChunkWithFile {
+            let item = EmbeddedChunkWithFile::Embedded {
               batch_id,
               file_path: pc.file_path,
               chunk: pc.chunk,
@@ -1259,7 +1264,17 @@ async fn process_embedding_batch(
     }
     Err(e) => {
       error!("Failed to embed batch of {} chunks: {}", batch.len(), e);
-      // Continue processing other batches
+      
+      // Send BatchFailure notification
+      let failure = EmbeddedChunkWithFile::BatchFailure {
+        batch_id,
+        failed_files: files_in_batch,
+        error: e.to_string(),
+      };
+      
+      if embedded_tx.send(failure).await.is_err() {
+        error!("Failed to send batch failure notification - receiver dropped");
+      }
     }
   }
 }
@@ -1285,6 +1300,9 @@ async fn document_builder_task(
     std::collections::BTreeMap::new();
   let mut next_expected_batch_id = 0;
 
+  // Track failed files
+  let mut failed_files: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+
   loop {
     tokio::select! {
       _ = cancel_token.cancelled() => {
@@ -1294,7 +1312,11 @@ async fn document_builder_task(
       embedded_chunk = embedded_rx.recv() => {
         match embedded_chunk {
           Some(embedded_chunk) => {
-            let batch_id = embedded_chunk.batch_id;
+            let batch_id = match &embedded_chunk {
+              EmbeddedChunkWithFile::Embedded { batch_id, .. } => *batch_id,
+              EmbeddedChunkWithFile::EndOfFile { batch_id, .. } => *batch_id,
+              EmbeddedChunkWithFile::BatchFailure { batch_id, .. } => *batch_id,
+            };
 
             // Add chunk to pending buffer
             pending_chunks.entry(batch_id)
@@ -1308,45 +1330,71 @@ async fn document_builder_task(
                 let batch_chunks = pending_chunks.remove(&current_batch_id).unwrap();
 
                 for embedded_chunk in batch_chunks {
-                  let file_path = embedded_chunk.file_path.clone();
+                  match embedded_chunk {
+                    EmbeddedChunkWithFile::Embedded { file_path, chunk, embedding, .. } => {
+                      // Skip chunks for failed files
+                      if failed_files.contains(&file_path) {
+                        continue;
+                      }
 
-                  if matches!(embedded_chunk.chunk, PipelineChunk::EndOfFile { .. }) {
-                    // Build document for completed file
-                    if let Some(mut accumulator) = file_accumulators.remove(&file_path) {
-                      total_files_built += 1;
-                      debug!(file_path, total_files_built, batch_id = current_batch_id,
-                        "Building document for file: {file_path}");
-                      // Add the EOF chunk to the accumulator
+                      // Accumulate chunk
+                      let accumulator = file_accumulators.entry(file_path.clone())
+                        .or_insert_with(|| FileAccumulator::new(file_path));
+
                       accumulator.add_chunk(EmbeddedChunk {
-                        chunk: embedded_chunk.chunk,
-                        embedding: embedded_chunk.embedding,
+                        chunk,
+                        embedding,
                       });
-                      if let Some(doc) = build_document_from_accumulator(project_id, accumulator, embedding_dim).await {
-                        stats.documents.fetch_add(1, Ordering::Relaxed);
-                        document_batch.push(doc);
+                    }
+                    EmbeddedChunkWithFile::EndOfFile { file_path, content, content_hash, .. } => {
+                      // Skip EOF for failed files
+                      if failed_files.contains(&file_path) {
+                        continue;
+                      }
 
-                        // Send batch when we reach 100 documents
-                        if document_batch.len() >= 100 {
-                          debug!(total_files_built, batch_len=document_batch.len(),
-                            "Sending batch of {} documents", document_batch.len());
-                          for doc in document_batch.drain(..) {
-                            if doc_tx.send(doc).await.is_err() {
-                              debug!("Document receiver dropped");
-                              return;
+                      // Build document for completed file
+                      if let Some(mut accumulator) = file_accumulators.remove(&file_path) {
+                        total_files_built += 1;
+                        debug!(file_path, total_files_built, batch_id = current_batch_id,
+                          "Building document for file: {file_path}");
+                        
+                        // Add the EOF chunk to the accumulator
+                        accumulator.add_chunk(EmbeddedChunk {
+                          chunk: PipelineChunk::EndOfFile { 
+                            file_path: file_path.clone(), 
+                            content,
+                            content_hash 
+                          },
+                          embedding: vec![],
+                        });
+                        
+                        if let Some(doc) = build_document_from_accumulator(project_id, accumulator, embedding_dim).await {
+                          stats.documents.fetch_add(1, Ordering::Relaxed);
+                          document_batch.push(doc);
+
+                          // Send batch when we reach 100 documents
+                          if document_batch.len() >= 100 {
+                            debug!(total_files_built, batch_len=document_batch.len(),
+                              "Sending batch of {} documents", document_batch.len());
+                            for doc in document_batch.drain(..) {
+                              if doc_tx.send(doc).await.is_err() {
+                                debug!("Document receiver dropped");
+                                return;
+                              }
                             }
                           }
                         }
+                      } else {
+                        error!("Received EOF chunk for file without content chunks: {}", file_path);
                       }
                     }
-                  } else {
-                    // Accumulate chunk
-                    let accumulator = file_accumulators.entry(file_path)
-                      .or_insert_with(|| FileAccumulator::new(embedded_chunk.file_path.clone()));
-
-                    accumulator.add_chunk(EmbeddedChunk {
-                      chunk: embedded_chunk.chunk,
-                      embedding: embedded_chunk.embedding,
-                    });
+                    EmbeddedChunkWithFile::BatchFailure { failed_files: batch_failed_files, error, .. } => {
+                      error!("Batch {} failed: {}", current_batch_id, error);
+                      // Mark all files in the failed batch as failed
+                      for file in batch_failed_files {
+                        failed_files.insert(file);
+                      }
+                    }
                   }
                 }
 
@@ -1372,46 +1420,76 @@ async fn document_builder_task(
       batch_chunks.len()
     );
     for embedded_chunk in batch_chunks {
-      let file_path = embedded_chunk.file_path.clone();
+      match embedded_chunk {
+        EmbeddedChunkWithFile::Embedded { file_path, chunk, embedding, .. } => {
+          // Skip chunks for failed files
+          if failed_files.contains(&file_path) {
+            continue;
+          }
 
-      if matches!(embedded_chunk.chunk, PipelineChunk::EndOfFile { .. }) {
-        // Build document for completed file
-        if let Some(mut accumulator) = file_accumulators.remove(&file_path) {
-          total_files_built += 1;
-          debug!(
-            file_path,
-            total_files_built,
-            batch_id,
-            "Building document for file from remaining chunks: {file_path}"
-          );
-          // Add the EOF chunk to the accumulator
+          // Accumulate chunk
+          let accumulator = file_accumulators.entry(file_path.clone())
+            .or_insert_with(|| FileAccumulator::new(file_path));
+
           accumulator.add_chunk(EmbeddedChunk {
-            chunk: embedded_chunk.chunk,
-            embedding: embedded_chunk.embedding,
+            chunk,
+            embedding,
           });
-          if let Some(doc) =
-            build_document_from_accumulator(project_id, accumulator, embedding_dim).await
-          {
-            stats.documents.fetch_add(1, Ordering::Relaxed);
-            document_batch.push(doc);
+        }
+        EmbeddedChunkWithFile::EndOfFile { file_path, content, content_hash, .. } => {
+          // Skip EOF for failed files
+          if failed_files.contains(&file_path) {
+            continue;
+          }
+
+          // Build document for completed file
+          if let Some(mut accumulator) = file_accumulators.remove(&file_path) {
+            total_files_built += 1;
+            debug!(
+              file_path,
+              total_files_built,
+              batch_id,
+              "Building document for file from remaining chunks: {file_path}"
+            );
+            
+            // Add the EOF chunk to the accumulator
+            accumulator.add_chunk(EmbeddedChunk {
+              chunk: PipelineChunk::EndOfFile { 
+                file_path: file_path.clone(), 
+                content,
+                content_hash 
+              },
+              embedding: vec![],
+            });
+            
+            if let Some(doc) =
+              build_document_from_accumulator(project_id, accumulator, embedding_dim).await
+            {
+              stats.documents.fetch_add(1, Ordering::Relaxed);
+              document_batch.push(doc);
+            }
+          } else {
+            error!("Received EOF chunk for file without content chunks: {}", file_path);
           }
         }
-      } else {
-        // Accumulate chunk
-        let accumulator = file_accumulators
-          .entry(file_path)
-          .or_insert_with(|| FileAccumulator::new(embedded_chunk.file_path.clone()));
-
-        accumulator.add_chunk(EmbeddedChunk {
-          chunk: embedded_chunk.chunk,
-          embedding: embedded_chunk.embedding,
-        });
+        EmbeddedChunkWithFile::BatchFailure { failed_files: batch_failed_files, error, .. } => {
+          error!("Batch {} failed: {}", batch_id, error);
+          // Mark all files in the failed batch as failed
+          for file in batch_failed_files {
+            failed_files.insert(file);
+          }
+        }
       }
     }
   }
 
   // Process remaining files (those without EOF chunks)
-  for (_, accumulator) in file_accumulators {
+  for (file_path, accumulator) in file_accumulators {
+    // Skip failed files
+    if failed_files.contains(&file_path) {
+      continue;
+    }
+    
     if let Some(doc) = build_document_from_accumulator(project_id, accumulator, embedding_dim).await
     {
       stats.documents.fetch_add(1, Ordering::Relaxed);
@@ -1754,7 +1832,7 @@ mod tests {
     // Send chunks out of order to simulate race condition
     // Batch 1 chunks
     embedded_tx
-      .send(EmbeddedChunkWithFile {
+      .send(EmbeddedChunkWithFile::Embedded {
         batch_id: 1,
         file_path: "file2.rs".to_string(),
         chunk: PipelineChunk::Text(SemanticChunk {
@@ -1781,7 +1859,7 @@ mod tests {
 
     // Batch 0 chunks arrive later (out of order)
     embedded_tx
-      .send(EmbeddedChunkWithFile {
+      .send(EmbeddedChunkWithFile::Embedded {
         batch_id: 0,
         file_path: "file1.rs".to_string(),
         chunk: PipelineChunk::Text(SemanticChunk {
@@ -1808,30 +1886,22 @@ mod tests {
 
     // Send EOF for file1 (batch 0)
     embedded_tx
-      .send(EmbeddedChunkWithFile {
+      .send(EmbeddedChunkWithFile::EndOfFile {
         batch_id: 0,
         file_path: "file1.rs".to_string(),
-        chunk: PipelineChunk::EndOfFile {
-          file_path: "file1.rs".to_string(),
-          content: "chunk1".to_string(),
-          content_hash: [0u8; 32],
-        },
-        embedding: vec![],
+        content: "chunk1".to_string(),
+        content_hash: [0u8; 32],
       })
       .await
       .unwrap();
 
     // Send EOF for file2 (batch 1)
     embedded_tx
-      .send(EmbeddedChunkWithFile {
+      .send(EmbeddedChunkWithFile::EndOfFile {
         batch_id: 1,
         file_path: "file2.rs".to_string(),
-        chunk: PipelineChunk::EndOfFile {
-          file_path: "file2.rs".to_string(),
-          content: "chunk1".to_string(),
-          content_hash: [1u8; 32],
-        },
-        embedding: vec![],
+        content: "chunk1".to_string(),
+        content_hash: [1u8; 32],
       })
       .await
       .unwrap();
@@ -2204,5 +2274,392 @@ def goodbye():
       .unwrap();
     info!("Indexing completed, document count: {}", count);
     assert_eq!(count, 1);
+  }
+
+  #[tokio::test]
+  async fn test_eof_chunk_loss_on_embedding_failure() {
+    let _ = tracing_subscriber::fmt()
+      .with_env_filter("breeze=debug")
+      .try_init();
+
+    // Mock embedding provider that fails on specific batches
+    struct FailingEmbeddingProvider {
+      fail_batch_count: std::sync::atomic::AtomicUsize,
+      fail_every_n: usize,
+      embedding_dim: usize,
+    }
+
+    impl FailingEmbeddingProvider {
+      fn new(fail_every_n: usize, embedding_dim: usize) -> Self {
+        Self {
+          fail_batch_count: std::sync::atomic::AtomicUsize::new(0),
+          fail_every_n,
+          embedding_dim,
+        }
+      }
+    }
+
+    #[async_trait::async_trait]
+    impl EmbeddingProvider for FailingEmbeddingProvider {
+      async fn embed(
+        &self,
+        inputs: &[crate::embeddings::EmbeddingInput<'_>],
+      ) -> crate::embeddings::EmbeddingResult<Vec<Vec<f32>>> {
+        let batch_num = self.fail_batch_count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        
+        // Fail every nth batch
+        if (batch_num + 1) % self.fail_every_n == 0 {
+          Err(crate::embeddings::EmbeddingError::EmbeddingFailed(
+            "Mock embedding failure".to_string(),
+          ))
+        } else {
+          // Return dummy embeddings
+          Ok(inputs.iter().map(|_| vec![0.0; self.embedding_dim]).collect())
+        }
+      }
+
+      fn embedding_dim(&self) -> usize {
+        self.embedding_dim
+      }
+
+      fn context_length(&self) -> usize {
+        8192
+      }
+
+      fn create_batching_strategy(&self) -> Box<dyn crate::embeddings::batching::BatchingStrategy> {
+        Box::new(crate::embeddings::batching::LocalBatchingStrategy::new(3)) // Small batch size
+      }
+
+      fn tokenizer(&self) -> Option<Arc<tokenizers::Tokenizer>> {
+        None
+      }
+    }
+
+    // Create test setup
+    let embedding_dim = 384;
+    let cancel_token = CancellationToken::new();
+    let stats = IndexingStats::new();
+
+    // Set up channels
+    let (batch_tx, batch_rx) = mpsc::channel(100);
+    let (embedded_tx, mut embedded_rx) = mpsc::channel(100);
+
+    // Create test data with multiple files
+    let test_files = vec![
+      ("file1.rs", vec!["chunk1_1", "chunk1_2"], "file1 content"),
+      ("file2.rs", vec!["chunk2_1", "chunk2_2", "chunk2_3"], "file2 content"),
+      ("file3.rs", vec!["chunk3_1"], "file3 content"),
+      ("file4.rs", vec!["chunk4_1", "chunk4_2"], "file4 content"),
+      ("file5.rs", vec!["chunk5_1", "chunk5_2", "chunk5_3", "chunk5_4"], "file5 content"),
+    ];
+
+    // Create chunks
+    let mut all_chunks = Vec::new();
+    
+    for (file_path, chunks, _) in &test_files {
+      for chunk_text in chunks {
+        let chunk = PipelineProjectChunk {
+          file_path: file_path.to_string(),
+          chunk: PipelineChunk::Text(SemanticChunk {
+            text: chunk_text.to_string(),
+            start_byte: 0,
+            end_byte: chunk_text.len(),
+            start_line: 1,
+            end_line: 1,
+            tokens: Some(vec![1234; 5]), // Mock tokens
+            metadata: ChunkMetadata {
+              node_type: "test".to_string(),
+              node_name: None,
+              language: "rust".to_string(),
+              parent_context: None,
+              scope_path: vec![],
+              definitions: vec![],
+              references: vec![],
+            },
+          }),
+        };
+        all_chunks.push(chunk);
+      }
+    }
+
+    // Add EOF chunks
+    for (file_path, _, content) in &test_files {
+      let hash = blake3::hash(content.as_bytes());
+      let mut content_hash = [0u8; 32];
+      content_hash.copy_from_slice(hash.as_bytes());
+
+      let eof = PipelineProjectChunk {
+        file_path: file_path.to_string(),
+        chunk: PipelineChunk::EndOfFile {
+          file_path: file_path.to_string(),
+          content: content.to_string(),
+          content_hash,
+        },
+      };
+      all_chunks.push(eof);
+    }
+
+    // Create batches manually (simulating what stream_processor would do)
+    let mut batch_id = 0;
+    let batch_size = 3;
+    for chunk_batch in all_chunks.chunks(batch_size) {
+      let batch = ChunkBatch {
+        batch_id,
+        chunks: chunk_batch.to_vec(),
+      };
+      batch_tx.send(batch).await.unwrap();
+      batch_id += 1;
+    }
+
+    drop(batch_tx); // Close the channel
+
+    // Create failing embedding provider
+    let embedding_provider = Arc::new(FailingEmbeddingProvider::new(3, embedding_dim)); // Fail every 3rd batch
+    let batching_strategy = embedding_provider.create_batching_strategy();
+
+    // Start embedder task
+    let embedder_handle = tokio::spawn({
+      let embedded_tx = embedded_tx.clone();
+      let stats = stats.clone();
+      let cancel_token = cancel_token.clone();
+      let embedding_provider = embedding_provider.clone();
+      
+      async move {
+        embedder_task(
+          embedding_provider,
+          batching_strategy,
+          batch_rx,
+          embedded_tx,
+          stats,
+          cancel_token,
+        )
+        .await;
+      }
+    });
+
+    drop(embedded_tx); // Close the embedded channel after embedder starts
+
+    // Collect results
+    let mut file_chunks: std::collections::HashMap<String, Vec<String>> = std::collections::HashMap::new();
+    let mut eof_received: std::collections::HashMap<String, bool> = std::collections::HashMap::new();
+
+    // Initialize tracking maps
+    for (file_path, _, _) in &test_files {
+      file_chunks.insert(file_path.to_string(), Vec::new());
+      eof_received.insert(file_path.to_string(), false);
+    }
+
+    while let Some(chunk) = embedded_rx.recv().await {
+      match chunk {
+        EmbeddedChunkWithFile::Embedded { file_path, chunk, .. } => {
+          match &chunk {
+            PipelineChunk::Text(sc) | PipelineChunk::Semantic(sc) => {
+              file_chunks.get_mut(&file_path).unwrap().push(sc.text.clone());
+            }
+            _ => {}
+          }
+        }
+        EmbeddedChunkWithFile::EndOfFile { file_path, .. } => {
+          eof_received.insert(file_path, true);
+        }
+        EmbeddedChunkWithFile::BatchFailure { .. } => {
+          // Ignore for this test
+        }
+      }
+    }
+
+    embedder_handle.await.unwrap();
+
+    // Check results
+    info!("File chunks received:");
+    for (file, chunks) in &file_chunks {
+      info!("  {}: {} chunks", file, chunks.len());
+    }
+
+    info!("EOF chunks received:");
+    for (file, received) in &eof_received {
+      info!("  {}: {}", file, if *received { "YES" } else { "NO" });
+    }
+
+    // Verify that all files received their EOF chunks (because EOF chunks are sent separately)
+    let files_missing_eof: Vec<_> = eof_received
+      .iter()
+      .filter(|(_, received)| !**received)
+      .map(|(file, _)| file.clone())
+      .collect();
+
+    info!("Files missing EOF: {:?}", files_missing_eof);
+
+    // With the fix, no files should be missing EOF chunks
+    assert!(
+      files_missing_eof.is_empty(),
+      "No files should be missing EOF chunks with the new implementation"
+    );
+
+    // Check that some files didn't receive all their content chunks due to batch failure
+    let incomplete_files: Vec<_> = test_files
+      .iter()
+      .filter(|(file_path, expected_chunks, _)| {
+        let received = file_chunks.get(*file_path).unwrap();
+        received.len() < expected_chunks.len()
+      })
+      .map(|(file_path, _, _)| file_path.to_string())
+      .collect();
+
+    info!("Files with incomplete chunks: {:?}", incomplete_files);
+    assert!(
+      !incomplete_files.is_empty(),
+      "Expected some files to have incomplete chunks due to embedding failures"
+    );
+    
+    // Verify that file4 specifically lost its chunks (it was in batch 2 which failed)
+    assert_eq!(
+      file_chunks.get("file4.rs").unwrap().len(), 
+      0, 
+      "file4.rs should have lost all its chunks because they were in the failed batch"
+    );
+  }
+
+  #[tokio::test]
+  async fn test_document_builder_handles_batch_failures() {
+    let embedding_dim = 384;
+    let (embedded_tx, embedded_rx) = mpsc::channel(100);
+    let (doc_tx, mut doc_rx) = mpsc::channel(100);
+    let stats = IndexingStats::new();
+    let cancel_token = CancellationToken::new();
+    let project_id = Uuid::now_v7();
+
+    // Spawn document builder task
+    let builder_handle = tokio::spawn(async move {
+      document_builder_task(
+        project_id,
+        embedded_rx,
+        doc_tx,
+        embedding_dim,
+        stats,
+        cancel_token,
+      )
+      .await;
+    });
+
+    // Send chunks for file1 (successful)
+    embedded_tx
+      .send(EmbeddedChunkWithFile::Embedded {
+        batch_id: 0,
+        file_path: "file1.rs".to_string(),
+        chunk: PipelineChunk::Text(SemanticChunk {
+          text: "content1".to_string(),
+          tokens: Some(vec![1, 2, 3]),
+          start_byte: 0,
+          end_byte: 8,
+          start_line: 1,
+          end_line: 1,
+          metadata: ChunkMetadata {
+            node_type: "text".to_string(),
+            node_name: None,
+            language: "rust".to_string(),
+            parent_context: None,
+            scope_path: vec![],
+            definitions: vec![],
+            references: vec![],
+          },
+        }),
+        embedding: vec![0.1; embedding_dim],
+      })
+      .await
+      .unwrap();
+
+    // Send EOF for file1
+    embedded_tx
+      .send(EmbeddedChunkWithFile::EndOfFile {
+        batch_id: 0,
+        file_path: "file1.rs".to_string(),
+        content: "content1".to_string(),
+        content_hash: [1u8; 32],
+      })
+      .await
+      .unwrap();
+
+    // Send batch failure notification for batch 1
+    let mut failed_files = std::collections::BTreeSet::new();
+    failed_files.insert("file2.rs".to_string());
+    failed_files.insert("file3.rs".to_string());
+    
+    embedded_tx
+      .send(EmbeddedChunkWithFile::BatchFailure {
+        batch_id: 1,
+        failed_files: failed_files.clone(),
+        error: "Mock embedding failure".to_string(),
+      })
+      .await
+      .unwrap();
+
+    // Send EOF for file2 (should be ignored because it's in failed_files)
+    embedded_tx
+      .send(EmbeddedChunkWithFile::EndOfFile {
+        batch_id: 1,
+        file_path: "file2.rs".to_string(),
+        content: "content2".to_string(),
+        content_hash: [2u8; 32],
+      })
+      .await
+      .unwrap();
+
+    // Send chunks for file3 (should be ignored because it's in failed_files)
+    embedded_tx
+      .send(EmbeddedChunkWithFile::Embedded {
+        batch_id: 1,
+        file_path: "file3.rs".to_string(),
+        chunk: PipelineChunk::Text(SemanticChunk {
+          text: "content3".to_string(),
+          tokens: Some(vec![4, 5, 6]),
+          start_byte: 0,
+          end_byte: 8,
+          start_line: 1,
+          end_line: 1,
+          metadata: ChunkMetadata {
+            node_type: "text".to_string(),
+            node_name: None,
+            language: "rust".to_string(),
+            parent_context: None,
+            scope_path: vec![],
+            definitions: vec![],
+            references: vec![],
+          },
+        }),
+        embedding: vec![0.3; embedding_dim],
+      })
+      .await
+      .unwrap();
+
+    // Send EOF for file3 (should be ignored)
+    embedded_tx
+      .send(EmbeddedChunkWithFile::EndOfFile {
+        batch_id: 1,
+        file_path: "file3.rs".to_string(),
+        content: "content3".to_string(),
+        content_hash: [3u8; 32],
+      })
+      .await
+      .unwrap();
+
+    // Close channel
+    drop(embedded_tx);
+
+    // Wait for builder to finish
+    builder_handle.await.unwrap();
+
+    // Collect all documents
+    let mut documents_received: Vec<CodeDocument> = Vec::new();
+    while let Ok(doc) = doc_rx.try_recv() {
+      documents_received.push(doc);
+    }
+
+    // Only file1 should have been processed
+    assert_eq!(documents_received.len(), 1, "Should have only 1 document");
+    assert_eq!(documents_received[0].file_path, "file1.rs");
+    
+    // Verify the document has correct content
+    assert_eq!(documents_received[0].content, "content1");
   }
 }

@@ -46,7 +46,7 @@ batch_size = 256 # Number of chunks to collect in a batch betfore sending to the
 # The selected embedding provider, from the providers defined below
 # provider = "local" | "openai" | "ollama"  | "llamacpp"| "voyage" | "cohere" | "my-provider"
 provider = "qwen3"  # Default embedding provider
-workers = 5 # Number of concurrent embedding requests
+workers = 2 # Number of concurrent embedding requests
 
 # [embeddings.local]
 # model = "ibm-granite/granite-embedding-125m-english"  # Local model for embeddings
@@ -72,37 +72,37 @@ workers = 5 # Number of concurrent embedding requests
 # max_concurrent_requests = 50
 
 [embeddings.ollama]
-model = "nomic-embed-text"  # Ollama model for embeddings
+model = "hf.co/Qwen/Qwen3-Embedding-0.6B-GGUF:q8_0"  # Ollama model for embeddings
 api_base = "http://localhost:11434/v1"  # Ollama API base URL
 # Optional: Override if auto-detection fails
-context_length = 8192
-embedding_dim = 768
-max_batch_size = 30  # Local servers might need smaller batches
-tokenizer = "hf:nomic-ai/nomic-embed-text-v1.5"  # huggingface tokenizer for Ollama model
+context_length = 32768
+embedding_dim = 1024
+max_batch_size = 64  # Local servers might need smaller batches
+tokenizer = "hf:Qwen/Qwen3-Embedding-0.6B"  # huggingface tokenizer for Ollama model
 
 # Rate limiting for the provider
 requests_per_minute = 3000
 tokens_per_minute = 1_000_000
-max_concurrent_requests = 15
+max_concurrent_requests = 5
 
 [embeddings.llamacpp]
-model = "nomic-embed-text-v2-moe"  # llama.cpp model for embeddings
+model = "qwen3-embed"  # llama.cpp model for embeddings
 api_base = "http://voltaire:8080/v1"  # llama.cpp API base URL
 # Optional: Override if auto-detection fails
-context_length = 4096
-embedding_dim = 768
-max_batch_size = 50  # Local servers might need smaller batches
-tokenizer = "hf:nomic-ai/nomic-embed-text-v2-moe"  # huggingface tokenizer for llama.cpp model
+context_length = 32768
+embedding_dim = 1024
+max_batch_size = 32
+tokenizer = "hf:Qwen/Qwen3-Embedding-0.6B"  # huggingface tokenizer for llama.cpp model
 
 # Rate limiting for the provider
 requests_per_minute = 3000
 tokens_per_minute = 1_000_000
-max_concurrent_requests = 15
+max_concurrent_requests = 1
 
 # --host 0.0.0.0 --port 8000 --model Qwen/Qwen3-Embedding-0.6B --gpu-memory-utilization 0.95 --api-key sk-moFgaeiq8K76FXkCNx2ydwtnxWutYotT --max-model-len 32768
 [embeddings.qwen3]
 model = "Qwen/Qwen3-Embedding-0.6B"
-api_base = "https://vh49bb9vh5vpcn-8000.proxy.runpod.net/v1"
+api_base = "https://fea4tyw5fcuwdr-8000.proxy.runpod.net/v1"
 context_length = 32768
 embedding_dim = 1024
 max_batch_size = 32
