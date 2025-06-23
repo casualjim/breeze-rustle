@@ -1,288 +1,114 @@
-# breeze-rustle Context & Current State
+# breeze-rustle Context - Embedding Pipeline Bug Investigation
 
-## Overview
+## Current Issue: Missing EOF Chunks
 
-`breeze-rustle` is a high-performance Rust library for semantic code chunking and embedding. It provides:
+### Problem Summary
+When embedding is slow or fails, EOF chunks can be lost, causing "No EOF chunk found" errors in the document builder. This is intermittent and provider-specific.
 
-- Semantic code chunking using tree-sitter parsers (163 languages)
-- Smart batching for different embedding providers
-- Streaming pipeline architecture for processing large codebases
-- Python bindings via PyO3
-- Hybrid search combining vector similarity and full-text search
+### Root Cause Analysis
 
-## Current Architecture
+1. **Batch-Level Failures**: When embedding fails (timeout, rate limit), the entire batch fails
+2. **Lost EOF Chunks**: EOF chunks in failed batches are dropped along with content chunks
+3. **Silent Data Loss**: No error propagation - chunks just disappear from the pipeline
 
-### Core Components
+### The Pipeline Flow
 
-1. **breeze-chunkers**: High-performance chunking library
-   - Leverages text-splitter for core chunking logic
-   - Adds semantic metadata extraction
-   - Supports both code and text chunking
-   - Streaming API with async iterators
-
-2. **breeze-grammars**: Tree-sitter grammar compilation
-   - 163 language support via precompiled binaries
-   - ~5 second build times with precompilation
-   - Cross-platform support
-
-3. **breeze**: Main application with embedding pipeline
-   - Trait-based pipeline architecture
-   - Provider-specific batching and rate limiting
-   - LanceDB integration for storage
-
-4. **breeze-napi**: Node.js bindings
-
-5. **breeze-py**: Python bindings via PyO3
-
-## Pipeline Architecture
-
-### Current Design
-
-```text
-                  ┌─> TEI Embedder (local)    ─┐
-                  │                             │
-PathWalker ────>─├─> Voyage Embedder (remote) ├─> DocumentBuilder → RecordBatchConverter → Sink
-                  │                             │
-                  └─> OpenAI Embedder (remote) ─┘
+```
+StreamProcessor → Batcher → Embedder → DocumentBuilder → Sink
+                                ↓
+                          (failure = dropped chunks)
 ```
 
-### Key Design Principles
+### Key Insights
 
-1. **Chunking for Embedder Constraints**: Files are chunked to respect embedder token limits
-2. **Semantic Boundaries**: Chunks split at function/class boundaries, preserving code structure
-3. **File-Level Storage**: Despite chunking, we store one embedding per file via aggregation
-4. **Token Optimization**: Store tokens in chunks to avoid double tokenization
-5. **Multiple Providers**: Support local (TEI), Voyage, and OpenAI embedders
-6. **Aggregation Strategy**: Weighted average by token count (pluggable for future strategies)
-7. **Single File Read**: EOF chunks include file content and hash to avoid multiple file reads
+1. **EOF chunks don't need embedding** - they're sent with empty vectors
+2. **Batches mix chunks from multiple files** - one batch can contain:
+   - Content chunks from files A, B
+   - EOF chunks from files C, D, E (whose content was in earlier batches)
+3. **Partial file failure** - if any chunk of a file fails, the entire file should be marked as failed
 
-### Key Pipeline Traits
+### Edge Cases
+
+1. **EOF-only batches**: A batch might contain only EOF chunks for files whose content chunks were successfully processed earlier
+2. **Mixed failure impact**: When a batch fails:
+   - Files with content chunks in the batch → failed
+   - Files with only EOF chunks in the batch → should still complete
+
+## Proposed Solution: Proper Terminal States
+
+Transform EmbeddedChunkWithFile into an enum that captures all states:
 
 ```rust
-pub trait PathWalker {
-    fn walk(&self, path: &Path) -> BoxStream<ProjectFile>;
-}
-
-pub trait Embedder {
-    fn embed(&self, files: BoxStream<ProjectFile>) -> BoxStream<ProjectFileWithEmbeddings>;
-}
-
-pub trait DocumentBuilder {
-    fn build_documents(&self, files: BoxStream<ProjectFileWithEmbeddings>) -> BoxStream<CodeDocument>;
-}
-
-pub trait RecordBatchConverter {
-    fn convert(&self, documents: BoxStream<CodeDocument>) -> BoxStream<RecordBatch>;
-}
-
-pub trait Sink {
-    fn sink(&self, batches: BoxStream<RecordBatch>) -> BoxStream<()>;
-}
-```
-
-## Embedding System Design
-
-### Provider Types
-
-1. **Local Provider (TEI)**
-   - Text-embeddings-inference backend
-   - 20+ model architectures (BERT, DistilBERT, JinaBERT, MPNet, etc.)
-   - Hardware acceleration (CUDA, Metal, MKL)
-   - Token optimization via pre-tokenized input
-
-2. **Remote Providers** (via async_openai)
-   - OpenAI: Standard limits, text-embedding-3-small/large
-   - Voyage: High limits (3M tokens/min), voyage-code-2
-   - Built-in retry logic and error handling
-
-### Processing Strategy
-
-| Provider | Token Handling | Optimization | Hardware |
-|----------|---------------|--------------|----------|
-| TEI      | Pre-tokenized | Flash attention | CUDA/Metal/CPU |
-| Voyage   | Text chunks   | Large batches | Cloud API |
-| OpenAI   | Text chunks   | Standard batches | Cloud API |
-
-### Key Improvements in Progress
-
-1. **Token storage in chunks**: Store token IDs in chunks to avoid double tokenization
-2. **TEI integration**: Replace custom local embedder with text-embeddings-inference
-3. **Multiple provider support**: Local (TEI), Voyage, and OpenAI embedders
-4. **DocumentBuilder pattern**: Separate chunk embedding from file aggregation
-5. **Tokenizer compatibility**: Ensure chunking and embedding use same tokenizer
-
-## Code Document Model
-
-```rust
-pub struct CodeDocument {
-    pub id: String,
-    pub file_path: String,
-    pub content: String,
-    pub content_hash: [u8; 32],
-    pub content_embedding: Vec<f32>,
-    pub file_size: u64,
-    pub last_modified: chrono::NaiveDateTime,
-    pub indexed_at: chrono::NaiveDateTime,
+pub enum EmbeddedChunkWithFile {
+    // Regular embedded chunk
+    Embedded {
+        batch_id: usize,
+        file_path: String,
+        chunk: PipelineChunk,  // Semantic or Text
+        embedding: Vec<f32>,
+    },
+    // EOF marker - no embedding needed
+    EndOfFile {
+        batch_id: usize,
+        file_path: String,
+        content: String,
+        content_hash: [u8; 32],
+    },
+    // Batch failure notification
+    BatchFailure {
+        batch_id: usize,
+        failed_files: HashSet<String>,  // Files with content chunks in this batch
+        error: String,
+    }
 }
 ```
 
-## Configuration System
+### Benefits
 
-```toml
-[repository]
-path = "."
-max_file_size = 5242880  # 5MB
-exclude_patterns = ["*.git*", "node_modules", "target"]
+1. **Type safety** - Each state is explicitly modeled, no empty embeddings hack
+2. **Clear semantics** - EOF chunks are recognized as terminal markers
+3. **Batch-level failure handling** - Matches how embedding actually works
+4. **Selective processing** - Can handle EOF chunks for non-failed files
+5. **Better observability** - Can track embedded vs EOF vs failed chunks
 
-[embedding]
-provider = { type = "voyage", model = "voyage-code-2" }
+### Implementation Strategy
 
-[embedding.chunking]
-max_chunk_size = 2048
-chunk_overlap = 0.1
-use_semantic_chunking = true
+1. **In embedder**:
+   - Send embedded chunks as `Embedded` variant
+   - Send EOF chunks as `EndOfFile` variant immediately (no batching needed)
+   - On batch failure:
+     - Identify files with content chunks in the failed batch
+     - Send `BatchFailure` with affected file set
+     - Still send `EndOfFile` variants for unaffected files
 
-[embedding.processing]
-max_concurrent_requests = 10
-retry_attempts = 3
-batch_timeout_seconds = 5
+2. **In document builder**:
+   - Pattern match on the enum:
+     - `Embedded`: Accumulate in file accumulator
+     - `EndOfFile`: Trigger document building for that file
+     - `BatchFailure`: Mark files as failed, skip their chunks
+   - Only build documents for non-failed files
 
-[storage]
-database_path = "./embeddings.db"
-table_name = "code_embeddings"
+## Test Plan
 
-[processing]
-max_parallel_files = 16
-progress_report_interval = 100
-```
+Create a test with a mock embedding provider that:
+1. Fails deterministically (e.g., every 3rd batch)
+2. Process multiple files with varying chunk counts
+3. Verify:
+   - Files with chunks in failed batches don't produce documents
+   - Files with only EOF chunks in failed batches complete successfully
+   - No "No EOF chunk found" errors for partial files
 
-## Implementation Status
+## Current Code Issues
 
-### ✅ Completed
+1. **No retry on embedding failure** (bulk_indexer.rs:1260-1264)
+2. **EOF chunks held in pending_batches** until batch threshold met
+3. **No timeout-based flushing** for small files
+4. **Silent chunk dropping** on `embedded_tx.send()` failure
 
-- Core chunking with breeze-chunkers
-- 163 language support via breeze-grammars
-- Python bindings with async support
-- Project directory walker
-- Basic pipeline traits
-- Configuration system
-- PassthroughBatcher implementation
-- **LanceDB sink implementation** ✨
-  - Arc<RwLock<Table>> based design
-  - Merge insert for upsert behavior
-  - Streaming batch processing
-  - Full test coverage
-- **EOF chunks with content and hash** ✨
-  - Single file read optimization
-  - Content and Blake3 hash in EOF chunks
-  - Updated Python and Node.js bindings
-  - Full test coverage
-- **Comprehensive Indexer Testing** ✨
-  - Mock implementations for TEIEmbedder, Table, and walk_project
-  - Pipeline error propagation and cancellation
-  - Channel backpressure and bounded capacity
-  - Batch processing logic (accumulation, flushing, EOF handling)
-  - Pipeline resilience (stage panics, receiver drops)
-  - Stats tracking accuracy
-  - Edge cases (empty input, EOF-only files)
-  - Real embedding model integration (sentence-transformers/all-MiniLM-L6-v2)
-  - Performance profiling (identified chunking as bottleneck, not parsing)
-- **Hybrid Search Implementation** ✨
-  - Integrated vector search and full-text search using LanceDB
-  - FTS index creation added to CodeDocument::ensure_table
-  - Uses RRF (Reciprocal Rank Fusion) reranking with k=60
-  - Single query builder with full_text_search() and nearest_to()
-  - Proper RecordBatch stream processing
-  - CLI search command integration in main.rs
-  - SearchResult struct with full metadata (id, content_hash, timestamps)
-  - Comprehensive test suite for search functionality
-  - Score-based result formatting in CLI
-- **Token Storage in Chunks** ✨
-  - Added `tokens: Option<Vec<u32>>` to SemanticChunk
-  - Chunker populates tokens during chunking when using tokenizers
-  - Supports character, tiktoken, and HuggingFace tokenizers
-- **TEI Embedder Implementation** ✨
-  - Full text-embeddings-inference backend integration
-  - Supports pre-tokenized input for performance
-  - Hardware acceleration (CUDA/Metal/CPU auto-detection)
-  - Batch processing with configurable limits
-  - Proper error handling and type safety
+## Next Steps
 
-### 🚧 In Progress
-
-- **Remote embedders** - Implement Voyage and OpenAI providers with rate limiting
-- **CLI application** - Create the main breeze executable with commands for indexing
-- **Configuration loading** - Wire up TOML config to select providers and models
-
-### 📋 TODO
-
-- **Documentation** - User guide, API docs, and examples
-- **Python package publishing** - PyPI release workflow
-- **Node.js package publishing** - npm release workflow
-- **Integration tests** - End-to-end tests with real models and databases
-- **Error recovery** - Retry logic and circuit breakers for remote providers
-
-## Performance Benchmarks
-
-Current performance (kuzu project):
-
-- **337,327 chunks** from 4,457 files
-- **26.2 seconds** total time
-- **12,883 chunks/second** throughput
-
-## Hybrid Search Design
-
-### Overview
-
-Implement hybrid search that combines vector similarity search and full-text search (FTS) using LanceDB's capabilities, with results combined using Reciprocal Rank Fusion (RRF).
-
-### Key Components
-
-1. **HybridSearcher**: Main search implementation that orchestrates both search types
-2. **Vector Search**: Uses our existing embeddings with LanceDB's vector search
-3. **Full-Text Search**: Uses LanceDB's built-in FTS capabilities
-4. **RRF Reranking**: Combines results using reciprocal rank fusion (k=60)
-
-### Search Flow
-
-1. Execute FTS query with 2x requested limit
-2. Execute vector search with 2x requested limit
-3. Normalize scores from both searches to [0,1] range
-4. Apply RRF formula: `score = 1 / (rank + k)` where k=60
-5. Merge results, removing duplicates
-6. Sort by combined RRF score
-7. Return top N results
-
-### Technical Details
-
-- FTS index on `content` field for text search
-- Vector search on `content_embedding` field
-- Score normalization using min-max scaling
-- Configurable result limit and display modes
-- Error handling for missing indexes
-
-## Key Technical Decisions
-
-1. **Streaming-first**: All operations use async streams
-2. **Provider-specific optimization**: Different strategies for different providers
-3. **Token counting**: Essential for API optimization
-4. **Leverage text-splitter**: Don't reinvent chunking logic
-5. **Arrow/LanceDB**: Efficient storage with vector search
-6. **Hybrid search**: Combine vector and FTS for better results
-
-## Development Commands
-
-```bash
-# Build and install Python package
-maturin develop --release
-
-# Run tests
-cargo test
-pytest tests/
-
-# Build all grammars
-./tools/build-grammars --all-platforms
-
-# Run benchmarks
-cargo bench
-```
+1. Write the test to reproduce the issue
+2. Implement the Failed variant
+3. Update embedder error handling to create Failed chunks
+4. Update document builder to handle Failed chunks
+5. Add metrics/logging for failed files

@@ -1,7 +1,7 @@
 # Example configuration for Breeze
 
 # Database configuration
-db_dir = "./embeddings.db"
+db_dir = "./embeddings.qwen.db"
 
 [server]
 
@@ -29,12 +29,13 @@ tls_key = "breeze.local.wagyu.icu+3-key.pem"  # Path to the TLS private key
 
 [indexer]
 # Optional: Number of overlapping tokens between chunks (helps preserve context)
-# chunk_overlap = 0.1
+chunk_overlap = 0.1
 
 [indexer.limits]
 file_size = "5M"  # 5M - files larger than this are skipped
 # Optional: Override the automatic chunk size calculation
 # max_chunk_size = 512  # Maximum tokens per chunk
+max_chunk_size = 4096  # Maximum tokens per chunk
 
 [indexer.workers]
 small_file = 8   # Number of files to process concurrently
@@ -44,8 +45,8 @@ batch_size = 256 # Number of chunks to collect in a batch betfore sending to the
 [embeddings]
 # The selected embedding provider, from the providers defined below
 # provider = "local" | "openai" | "ollama"  | "llamacpp"| "voyage" | "cohere" | "my-provider"
-provider = "voyage"  # Default embedding provider
-workers = 10  # Number of concurrent embedding requests
+provider = "qwen3"  # Default embedding provider
+workers = 5 # Number of concurrent embedding requests
 
 # [embeddings.local]
 # model = "ibm-granite/granite-embedding-125m-english"  # Local model for embeddings
@@ -98,6 +99,19 @@ requests_per_minute = 3000
 tokens_per_minute = 1_000_000
 max_concurrent_requests = 15
 
+# --host 0.0.0.0 --port 8000 --model Qwen/Qwen3-Embedding-0.6B --gpu-memory-utilization 0.95 --api-key sk-moFgaeiq8K76FXkCNx2ydwtnxWutYotT --max-model-len 32768
+[embeddings.qwen3]
+model = "Qwen/Qwen3-Embedding-0.6B"
+api_base = "https://vh49bb9vh5vpcn-8000.proxy.runpod.net/v1"
+context_length = 32768
+embedding_dim = 1024
+max_batch_size = 32
+tokenizer = "hf:Qwen/Qwen3-Embedding-0.6B"
+
+requests_per_minute = 3000
+tokens_per_minute = 10_000_000
+max_concurrent_requests = 10
+
 [embeddings.voyage]
 # api_key = "${VOYAGE_API_KEY}"  # Set your Voyage API key in the environment
 tier = "tier-1"  # "free" | "tier-1" | "tier-2" | "tier-3" - affects rate limits
@@ -123,7 +137,7 @@ model = "voyage-code-3" # Best for code embeddings
 # Rate limiting for the provider
 # requests_per_minute = 3000
 # tokens_per_minute = 1000000
-max_concurrent_requests = 10
+max_concurrent_requests = 5
 
 # [embeddings.my-provider]
 # api_base = "https://api.myprovider.com/v1"

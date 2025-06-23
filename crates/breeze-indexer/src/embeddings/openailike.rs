@@ -19,6 +19,8 @@ struct EmbeddingRequest {
   model: String,
   #[serde(skip_serializing_if = "Option::is_none")]
   encoding_format: Option<String>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  dimensions: Option<usize>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -130,6 +132,7 @@ impl EmbeddingProvider for OpenAILikeEmbeddingProvider {
       input: inputs.iter().map(|input| input.text.to_string()).collect(),
       model: self.model.clone(),
       encoding_format: Some("float".to_string()),
+      dimensions: None, //Some(self.embedding_dim),
     };
 
     // Calculate total tokens for rate limiting

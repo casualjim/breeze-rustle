@@ -385,11 +385,8 @@ impl TaskManager {
   async fn reset_stuck_tasks(&self) -> Result<(), IndexerError> {
     let table = self.task_table.write().await;
 
-    // Reset tasks that have been running for more than 30 minutes
-    let thirty_minutes_ago = chrono::Utc::now().naive_utc() - chrono::Duration::minutes(30);
-    let threshold_micros = thirty_minutes_ago.and_utc().timestamp_micros();
-
-    // Use a simpler approach - get all running tasks and check them individually
+    // On startup, ALL running tasks should be reset to pending
+    // because there can't be any legitimately running tasks if the process just started
     let running_tasks = table
       .query()
       .only_if("status = 'running'")
@@ -398,25 +395,26 @@ impl TaskManager {
       .try_collect::<Vec<_>>()
       .await?;
 
+    let mut reset_count = 0;
     for batch in running_tasks {
       for i in 0..batch.num_rows() {
         let task = IndexTask::from_record_batch(&batch, i)?;
 
-        if let Some(started_at) = task.started_at {
-          let started_micros = started_at.and_utc().timestamp_micros();
-          if started_micros < threshold_micros {
-            // This task has been running too long, reset it
-            table
-              .update()
-              .only_if(format!("id = '{}'", task.id).as_str())
-              .column("status", "'pending'")
-              .column("started_at", "null")
-              .execute()
-              .await?;
-            debug!("Reset stuck task {} to pending", task.id);
-          }
-        }
+        // Reset ALL running tasks to pending
+        table
+          .update()
+          .only_if(format!("id = '{}'", task.id).as_str())
+          .column("status", "'pending'")
+          .column("started_at", "null")
+          .execute()
+          .await?;
+        
+        reset_count += 1;
       }
+    }
+
+    if reset_count > 0 {
+      info!("Reset {} running tasks to pending on startup", reset_count);
     }
 
     Ok(())
@@ -1517,5 +1515,50 @@ mod tests {
       "File {} should NOT have been deleted",
       similar_file.display()
     );
+  }
+
+  #[tokio::test]
+  async fn test_reset_stuck_tasks_on_startup() {
+    let (task_manager, _code_table, temp_dir, project_id) = create_test_task_manager().await;
+
+    // Create a project directory
+    let project_dir = temp_dir.path().join("test_project");
+    std::fs::create_dir_all(&project_dir).unwrap();
+
+    // Submit a task
+    let task_id = task_manager
+      .submit_task(project_id, &project_dir, crate::models::TaskType::FullIndex)
+      .await
+      .unwrap();
+
+    // Manually set the task to running state (simulating a killed process)
+    {
+      let table = task_manager.task_table.write().await;
+      
+      // Set to running with a recent timestamp
+      let now_micros = chrono::Utc::now().naive_utc().and_utc().timestamp_micros();
+      table
+        .update()
+        .only_if(format!("id = '{}'", task_id).as_str())
+        .column("status", "'running'")
+        .column("started_at", format!("{}", now_micros))
+        .execute()
+        .await
+        .unwrap();
+    }
+
+    // Verify task is running
+    let task = task_manager.get_task(&task_id).await.unwrap().unwrap();
+    assert_eq!(task.status, crate::models::TaskStatus::Running);
+    assert!(task.started_at.is_some());
+
+    // Call reset_stuck_tasks (simulating server restart)
+    task_manager.reset_stuck_tasks().await.unwrap();
+
+    // Verify task was reset to pending (ALL running tasks should be reset on startup)
+    let task = task_manager.get_task(&task_id).await.unwrap().unwrap();
+    assert_eq!(task.status, crate::models::TaskStatus::Pending, 
+      "ALL running tasks should be reset to pending on startup");
+    assert!(task.started_at.is_none());
   }
 }
