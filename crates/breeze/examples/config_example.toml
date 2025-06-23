@@ -62,6 +62,7 @@ tokenizer = "characters"
 # context_length = 8191
 # embedding_dim = 1536
 # max_batch_size = 2048  # OpenAI allows large batches
+# max_tokens_per_request = 8191  # Optional: defaults to context_length if not specified
 
 # Rate limiting for the provider
 # requests_per_minute = 3000
@@ -75,6 +76,7 @@ api_base = "http://localhost:11434/v1"  # Ollama API base URL
 # context_length = 8192
 # embedding_dim = 768
 # max_batch_size = 512  # Local servers might need smaller batches
+# max_tokens_per_request = 8192  # Optional: defaults to context_length if not specified
 
 # Rate limiting for the provider
 # requests_per_minute = 3000
@@ -102,6 +104,7 @@ model = "voyage-code-3" # Best for code embeddings
 # api_key = "..."
 # context_length = 512
 # embedding_dim = 1024
+# max_tokens_per_request = 512  # Optional: defaults to context_length if not specified
 
 # Rate limiting for the provider
 # requests_per_minute = 3000
@@ -115,6 +118,7 @@ model = "voyage-code-3" # Best for code embeddings
 # api_key = "..."
 # context_length = 512
 # embedding_dim = 1024
+# max_tokens_per_request = 512  # Optional: defaults to context_length if not specified
 
 # Rate limiting for the provider
 # requests_per_minute = 3000

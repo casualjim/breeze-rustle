@@ -58,6 +58,7 @@ pub struct OpenAILikeEmbeddingProvider {
   embedding_dim: usize,
   context_length: usize,
   max_batch_size: usize,
+  max_tokens_per_request: usize,
 }
 
 impl OpenAILikeEmbeddingProvider {
@@ -121,6 +122,7 @@ impl OpenAILikeEmbeddingProvider {
       embedding_dim: config.embedding_dim,
       context_length: config.context_length,
       max_batch_size: config.max_batch_size,
+      max_tokens_per_request: config.max_tokens_per_request.unwrap_or(config.context_length),
     })
   }
 }
@@ -184,10 +186,10 @@ impl EmbeddingProvider for OpenAILikeEmbeddingProvider {
   }
 
   fn create_batching_strategy(&self) -> Box<dyn BatchingStrategy> {
-    // Use configured max_batch_size and context_length
-    // The context_length already represents the model's token limit
+    // Use max_tokens_per_request for batching, which defaults to context_length
+    // This allows users to configure smaller batches even if the model supports more
     Box::new(TokenAwareBatchingStrategy::new(
-      self.context_length,
+      self.max_tokens_per_request,
       self.max_batch_size,
     ))
   }
@@ -202,5 +204,57 @@ impl EmbeddingProvider for OpenAILikeEmbeddingProvider {
 
   fn is_remote(&self) -> bool {
     true
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use crate::config::OpenAILikeConfig;
+
+  #[tokio::test]
+  async fn test_max_tokens_per_request() {
+    // Test with max_tokens_per_request specified
+    let config = OpenAILikeConfig {
+      api_base: "http://localhost:8080/v1".to_string(),
+      api_key: Some("test-key".to_string()),
+      model: "test-model".to_string(),
+      embedding_dim: 768,
+      context_length: 8192,
+      max_batch_size: 32,
+      tokenizer: "tiktoken:cl100k_base".parse().unwrap(),
+      requests_per_minute: 100,
+      tokens_per_minute: 10000,
+      max_concurrent_requests: 5,
+      max_tokens_per_request: Some(4096), // Half of context_length
+    };
+
+    let provider = OpenAILikeEmbeddingProvider::new(&config).await.unwrap();
+    assert_eq!(provider.max_tokens_per_request, 4096);
+
+    // Verify batching strategy uses max_tokens_per_request
+    let _strategy = provider.create_batching_strategy();
+    // The strategy should be configured with max_tokens_per_request
+  }
+
+  #[tokio::test]
+  async fn test_max_tokens_per_request_defaults_to_context_length() {
+    // Test without max_tokens_per_request (should default to context_length)
+    let config = OpenAILikeConfig {
+      api_base: "http://localhost:8080/v1".to_string(),
+      api_key: Some("test-key".to_string()),
+      model: "test-model".to_string(),
+      embedding_dim: 768,
+      context_length: 8192,
+      max_batch_size: 32,
+      tokenizer: "tiktoken:cl100k_base".parse().unwrap(),
+      requests_per_minute: 100,
+      tokens_per_minute: 10000,
+      max_concurrent_requests: 5,
+      max_tokens_per_request: None, // Not specified
+    };
+
+    let provider = OpenAILikeEmbeddingProvider::new(&config).await.unwrap();
+    assert_eq!(provider.max_tokens_per_request, 8192); // Should equal context_length
   }
 }

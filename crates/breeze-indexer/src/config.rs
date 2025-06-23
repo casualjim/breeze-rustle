@@ -74,6 +74,10 @@ pub struct OpenAILikeConfig {
   /// Maximum concurrent requests (defaults to 50)
   #[serde(default = "default_max_concurrent_requests")]
   pub max_concurrent_requests: usize,
+
+  /// Maximum tokens per request (defaults to context_length if not specified)
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub max_tokens_per_request: Option<usize>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

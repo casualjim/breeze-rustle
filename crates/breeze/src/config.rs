@@ -193,6 +193,8 @@ pub struct ProviderConfig {
   pub tokens_per_minute: Option<u32>,
   #[serde(skip_serializing_if = "Option::is_none")]
   pub max_concurrent_requests: Option<usize>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub max_tokens_per_request: Option<usize>,
 }
 
 // Default functions
@@ -408,6 +410,7 @@ impl Config {
                 name
               )
             })?,
+            max_tokens_per_request: config.max_tokens_per_request,
           },
         );
       }

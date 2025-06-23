@@ -118,8 +118,7 @@ impl EmbeddingProvider for VoyageEmbeddingProvider {
   }
 
   fn create_batching_strategy(&self) -> Box<dyn BatchingStrategy> {
-    // Use conservative batch sizes to avoid rate limits
-    // Python uses 80% safety margin on these limits
+
     const MAX_TOKENS_PER_BATCH: usize = 96_000;
     const MAX_TEXTS_PER_BATCH: usize = 100;
 
