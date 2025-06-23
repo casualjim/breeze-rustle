@@ -47,6 +47,9 @@ impl IntoResponse for ApiError {
         IndexerError::Task(msg) if msg.contains("already has an active indexing task") => {
           (StatusCode::CONFLICT, "TASK_ALREADY_RUNNING")
         }
+        IndexerError::ProjectAlreadyExists { .. } => {
+          (StatusCode::CONFLICT, "PROJECT_ALREADY_EXISTS")
+        }
 
         // IO errors
         IndexerError::Io(io_err) => match io_err.kind() {

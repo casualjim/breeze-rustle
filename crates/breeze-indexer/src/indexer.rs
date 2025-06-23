@@ -53,6 +53,9 @@ pub enum IndexerError {
   #[error("Path must be absolute: {0}")]
   PathNotAbsolute(String),
 
+  #[error("Project already exists for directory: {directory} (existing project ID: {existing_id})")]
+  ProjectAlreadyExists { directory: String, existing_id: Uuid },
+
   #[error("Arrow conversion error")]
   Arrow(#[from] arrow::error::ArrowError),
 

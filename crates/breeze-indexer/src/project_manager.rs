@@ -81,6 +81,14 @@ impl ProjectManager {
     // Canonicalize the directory path (validates it's absolute)
     let canonical_directory = Self::canonicalize_path(&directory)?;
 
+    // Check if a project already exists for this directory
+    if let Some(existing) = self.find_by_path(&canonical_directory).await? {
+      return Err(IndexerError::ProjectAlreadyExists {
+        directory: canonical_directory,
+        existing_id: existing.id,
+      });
+    }
+
     // Create the project (validates directory exists and is a directory)
     let project =
       Project::new(name, canonical_directory, description).map_err(IndexerError::Config)?;
@@ -511,5 +519,40 @@ mod tests {
     // Try non-existent directory
     let not_found = project_manager.find_by_path("/non/existent").await.unwrap();
     assert!(not_found.is_none());
+  }
+
+  #[tokio::test]
+  async fn test_create_project_duplicate_directory() {
+    let (project_manager, temp_dir) = create_test_project_manager().await;
+
+    // Create a test directory
+    let test_dir = temp_dir.path().join("test_project");
+    std::fs::create_dir(&test_dir).unwrap();
+    let dir_path = test_dir.to_str().unwrap().to_string();
+
+    // Create first project
+    let project1 = project_manager
+      .create_project("Project 1".to_string(), dir_path.clone(), None)
+      .await
+      .unwrap();
+
+    // Try to create another project with the same directory
+    let result = project_manager
+      .create_project("Project 2".to_string(), dir_path.clone(), None)
+      .await;
+
+    assert!(result.is_err());
+    match result.unwrap_err() {
+      IndexerError::ProjectAlreadyExists { directory, existing_id } => {
+        assert!(directory.ends_with("test_project"));
+        assert_eq!(existing_id, project1.id);
+      }
+      _ => panic!("Expected ProjectAlreadyExists error"),
+    }
+
+    // Verify only one project exists
+    let projects = project_manager.list_projects().await.unwrap();
+    assert_eq!(projects.len(), 1);
+    assert_eq!(projects[0].id, project1.id);
   }
 }

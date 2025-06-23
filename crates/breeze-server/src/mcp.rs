@@ -61,37 +61,7 @@ impl BreezeService {
     info!("Searching for '{}' with limit {}", query, limit);
 
     match self.indexer.search(&query, limit).await {
-      Ok(results) => {
-        let mut content = String::new();
-        content.push_str(&format!(
-          "Found {} results for '{}':\n\n",
-          results.len(),
-          query
-        ));
-
-        for (idx, result) in results.iter().enumerate() {
-          content.push_str(&format!(
-            "{}. {} (score: {:.3})\n",
-            idx + 1,
-            result.file_path,
-            result.relevance_score
-          ));
-
-          // Show first few lines as preview
-          let preview_lines: Vec<&str> = result.content.lines().take(3).collect();
-          for line in preview_lines {
-            content.push_str(&format!("   {}\n", line));
-          }
-
-          let total_lines = result.content.lines().count();
-          if total_lines > 3 {
-            content.push_str(&format!("   ... ({} more lines)\n", total_lines - 3));
-          }
-          content.push('\n');
-        }
-
-        Ok(CallToolResult::success(vec![Content::text(content)]))
-      }
+      Ok(results) => Ok(CallToolResult::success(vec![Content::json(results)?])),
       Err(e) => Ok(CallToolResult::error(vec![Content::text(format!(
         "Search failed: {}",
         e
