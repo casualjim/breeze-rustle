@@ -2,6 +2,8 @@
 
 Keeping some bullet points so I don't forget
 
+* search needs to be bounded by project and/or language
+* implement a runpod serverless dialect
 * Implement reranking models
 * Add extra information about the semantic content of a chunk
 * Track failed files/batches and broadcast

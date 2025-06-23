@@ -214,6 +214,12 @@ mod tests {
       .unwrap();
     let code_table = Arc::new(RwLock::new(code_table));
 
+    let failed_batches_table =
+      crate::models::FailedEmbeddingBatch::ensure_table(&connection, "test_failed_batches")
+        .await
+        .unwrap();
+    let failed_batches_table = Arc::new(RwLock::new(failed_batches_table));
+
     let (_temp_dir_config, config) = Config::test();
     let embedding_provider = create_embedding_provider(&config).await.unwrap();
 
@@ -224,7 +230,11 @@ mod tests {
       code_table.clone(),
     );
 
-    let task_manager = Arc::new(TaskManager::new(task_table, bulk_indexer));
+    let task_manager = Arc::new(TaskManager::new(
+      task_table,
+      failed_batches_table,
+      bulk_indexer,
+    ));
 
     let project_id = Uuid::now_v7();
     let project_dir = temp_dir.path().join("project");

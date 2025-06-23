@@ -114,7 +114,7 @@ pub struct Config {
 
   /// Number of concurrent embedding workers for remote providers
   pub embedding_workers: usize,
-  
+
   /// LanceDB optimization threshold - optimize when table version advances by this amount
   #[serde(default = "default_optimize_threshold")]
   pub optimize_threshold: u64,

@@ -14,8 +14,12 @@ pub struct LanceDbSink {
 
 impl LanceDbSink {
   /// Create a new LanceDB sink with a shared table reference
-  pub fn new(table: Arc<RwLock<lancedb::Table>>, last_optimize_version: Arc<RwLock<u64>>, optimize_threshold: u64) -> Self {
-    Self { 
+  pub fn new(
+    table: Arc<RwLock<lancedb::Table>>,
+    last_optimize_version: Arc<RwLock<u64>>,
+    optimize_threshold: u64,
+  ) -> Self {
+    Self {
       table,
       last_optimize_version,
       optimize_threshold,
@@ -105,7 +109,7 @@ impl LanceDbSink {
                         threshold = optimize_threshold,
                         "Running LanceDB table optimization"
                     );
-                    
+
                     match table_guard.optimize(lancedb::table::OptimizeAction::All).await {
                         Ok(_) => {
                             // Update the last optimize version
@@ -236,7 +240,11 @@ mod tests {
     let table = create_test_table(db_path, "test_documents", 3).await;
 
     let current_version = table.version().await.unwrap();
-    let sink = LanceDbSink::new(Arc::new(RwLock::new(table)), Arc::new(RwLock::new(current_version)), 250);
+    let sink = LanceDbSink::new(
+      Arc::new(RwLock::new(table)),
+      Arc::new(RwLock::new(current_version)),
+      250,
+    );
 
     // Create test documents
     let mut doc1 = CodeDocument::new(
@@ -288,13 +296,13 @@ mod tests {
 
     // Get initial version
     let initial_version = table.version().await.unwrap();
-    
+
     // Create sink with a low threshold for testing
     let last_optimize_version = Arc::new(RwLock::new(initial_version));
     let sink = LanceDbSink::new(
-      Arc::new(RwLock::new(table)), 
-      last_optimize_version.clone(), 
-      2  // Low threshold to trigger optimization in test
+      Arc::new(RwLock::new(table)),
+      last_optimize_version.clone(),
+      2, // Low threshold to trigger optimization in test
     );
 
     // Insert multiple documents to advance the version
@@ -319,9 +327,12 @@ mod tests {
 
     // Verify optimization was triggered
     let final_optimize_version = *last_optimize_version.read().await;
-    assert!(final_optimize_version > initial_version, 
-      "Optimization should have updated the version. Initial: {}, Final: {}", 
-      initial_version, final_optimize_version);
+    assert!(
+      final_optimize_version > initial_version,
+      "Optimization should have updated the version. Initial: {}, Final: {}",
+      initial_version,
+      final_optimize_version
+    );
   }
 
   #[tokio::test]
@@ -331,7 +342,11 @@ mod tests {
     let table = create_test_table(db_path, "upsert_test", 3).await;
 
     let current_version = table.version().await.unwrap();
-    let sink = LanceDbSink::new(Arc::new(RwLock::new(table)), Arc::new(RwLock::new(current_version)), 250);
+    let sink = LanceDbSink::new(
+      Arc::new(RwLock::new(table)),
+      Arc::new(RwLock::new(current_version)),
+      250,
+    );
 
     // First insert
     let mut doc = CodeDocument::new(

@@ -54,7 +54,10 @@ pub enum IndexerError {
   PathNotAbsolute(String),
 
   #[error("Project already exists for directory: {directory} (existing project ID: {existing_id})")]
-  ProjectAlreadyExists { directory: String, existing_id: Uuid },
+  ProjectAlreadyExists {
+    directory: String,
+    existing_id: Uuid,
+  },
 
   #[error("Arrow conversion error")]
   Arrow(#[from] arrow::error::ArrowError),
@@ -110,8 +113,14 @@ impl Indexer {
     // Ensure projects table exists
     let project_table = Project::ensure_table(&connection, "projects").await?;
 
+    // Ensure failed batches table exists
+    let failed_batches_table =
+      crate::models::FailedEmbeddingBatch::ensure_table(&connection, "failed_embedding_batches")
+        .await?;
+
     let project_table = Arc::new(RwLock::new(project_table));
     let task_table = Arc::new(RwLock::new(task_table));
+    let failed_batches_table = Arc::new(RwLock::new(failed_batches_table));
     let table = Arc::new(RwLock::new(table));
     let config = Arc::new(config);
     let embedding_provider: Arc<dyn EmbeddingProvider> = Arc::from(embedding_provider);
@@ -119,6 +128,7 @@ impl Indexer {
     // Create task manager first
     let task_manager = Arc::new(TaskManager::new(
       task_table,
+      failed_batches_table,
       BulkIndexer::new(
         config.clone(),
         embedding_provider.clone(),

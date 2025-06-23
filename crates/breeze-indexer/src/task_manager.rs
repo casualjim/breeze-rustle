@@ -13,17 +13,23 @@ use uuid::Uuid;
 
 use crate::IndexerError;
 use crate::bulk_indexer::BulkIndexer;
-use crate::models::{IndexTask, TaskStatus};
+use crate::models::{FailedEmbeddingBatch, IndexTask, TaskStatus};
 
 pub struct TaskManager {
   task_table: Arc<RwLock<Table>>,
+  failed_batches_table: Arc<RwLock<Table>>,
   indexer: BulkIndexer,
 }
 
 impl TaskManager {
-  pub fn new(task_table: Arc<RwLock<Table>>, indexer: BulkIndexer) -> Self {
+  pub fn new(
+    task_table: Arc<RwLock<Table>>,
+    failed_batches_table: Arc<RwLock<Table>>,
+    indexer: BulkIndexer,
+  ) -> Self {
     Self {
       task_table,
+      failed_batches_table,
       indexer,
     }
   }
@@ -225,6 +231,116 @@ impl TaskManager {
     Ok(tasks)
   }
 
+  /// Check for failed batches that need retry
+  async fn check_retry_batches(&self) -> Result<Option<FailedEmbeddingBatch>, IndexerError> {
+    let table = self.failed_batches_table.read().await;
+    let now = chrono::Utc::now().naive_utc();
+
+    // Query for batches where retry_after <= now, excluding the dummy row
+    // Format as timestamp without timezone (YYYY-MM-DD HH:MM:SS.ffffff)
+    let filter = format!(
+      "retry_after <= timestamp '{}' AND id != '{}'",
+      now
+        .and_utc()
+        .to_rfc3339_opts(chrono::SecondsFormat::Micros, true),
+      Uuid::nil()
+    );
+    let mut stream = table.query().only_if(&filter).limit(1).execute().await?;
+
+    if let Some(batch) = stream.try_next().await? {
+      if let Ok(failed_batch) = FailedEmbeddingBatch::from_record_batch(&batch, 0) {
+        return Ok(Some(failed_batch));
+      }
+    }
+
+    Ok(None)
+  }
+
+  /// Process a retry batch
+  async fn process_retry_batch(
+    &self,
+    mut failed_batch: FailedEmbeddingBatch,
+    cancel_token: &CancellationToken,
+  ) -> Result<bool, IndexerError> {
+    info!(
+      batch_id = %failed_batch.id,
+      retry_count = failed_batch.retry_count,
+      failed_files_count = failed_batch.failed_files.len(),
+      "Processing retry batch"
+    );
+
+    let project_path = std::path::Path::new(&failed_batch.project_path);
+
+    // Convert BTreeSet<String> to BTreeSet<FileChange>
+    let changes = failed_batch
+      .failed_files
+      .iter()
+      .map(|path| crate::models::FileChange {
+        path: std::path::PathBuf::from(path),
+        operation: crate::models::FileOperation::Update,
+      })
+      .collect();
+
+    // Execute partial update for the failed files
+    let start_time = std::time::Instant::now();
+    let result = self
+      .indexer
+      .index_file_changes(
+        failed_batch.project_id,
+        project_path,
+        &changes,
+        Some(cancel_token.clone()),
+      )
+      .await;
+
+    let elapsed = start_time.elapsed();
+
+    match result {
+      Ok((files_indexed, new_failures)) => {
+        if let Some((newly_failed_files, error)) = new_failures {
+          // Update the failed batch
+          failed_batch.failed_files = newly_failed_files;
+          failed_batch.update_for_retry(error);
+
+          info!(
+            batch_id = %failed_batch.id,
+            retry_count = failed_batch.retry_count,
+            remaining_failures = failed_batch.failed_files.len(),
+            elapsed_secs = elapsed.as_secs_f64(),
+            "Retry batch partially succeeded"
+          );
+
+          // Update the batch in the database
+          self.update_failed_batch(&failed_batch).await?;
+        } else {
+          // All files succeeded, delete the batch
+          info!(
+            batch_id = %failed_batch.id,
+            files_indexed,
+            elapsed_secs = elapsed.as_secs_f64(),
+            "Retry batch fully succeeded"
+          );
+
+          self.delete_failed_batch(&failed_batch.id).await?;
+        }
+      }
+      Err(e) => {
+        error!(
+          batch_id = %failed_batch.id,
+          error = %e,
+          elapsed_secs = elapsed.as_secs_f64(),
+          "Retry batch failed"
+        );
+
+        // Update for next retry
+        failed_batch.update_for_retry(e.to_string());
+        self.update_failed_batch(&failed_batch).await?;
+      }
+    }
+
+    Ok(true)
+  }
+
   /// Process the next pending task
   async fn process_next_task(
     &self,
@@ -233,7 +349,13 @@ impl TaskManager {
     // Try to claim the oldest pending task
     let task = match self.claim_pending_task().await? {
       Some(task) => task,
-      None => return Ok(false), // No pending tasks
+      None => {
+        // No pending tasks, check for retry tasks
+        if let Some(retry_batch) = self.check_retry_batches().await? {
+          return self.process_retry_batch(retry_batch, cancel_token).await;
+        }
+        return Ok(false); // No tasks at all
+      }
     };
 
     info!(
@@ -257,14 +379,46 @@ impl TaskManager {
 
     // Update task based on result
     match result {
-      Ok(files_indexed) => {
-        info!(
-          task_id = %task.id,
-          files_indexed,
-          elapsed_secs = elapsed.as_secs_f64(),
-          "Task completed successfully"
-        );
-        self.update_task_completed(&task.id, files_indexed).await?;
+      Ok((files_indexed, failures)) => {
+        if let Some((failed_files, error)) = failures {
+          info!(
+            task_id = %task.id,
+            failed_files_count = failed_files.len(),
+            error = %error,
+            "Some files failed to embed"
+          );
+
+          // Create a FailedEmbeddingBatch record
+          let failed_batch = FailedEmbeddingBatch::new(
+            task.id,
+            task.project_id,
+            task.path.clone(),
+            failed_files,
+            error,
+          );
+
+          let table = self.failed_batches_table.write().await;
+          table.add(failed_batch.into_arrow()?).execute().await?;
+
+          // Use PartiallyCompleted status when there are failures
+          info!(
+            task_id = %task.id,
+            files_indexed,
+            elapsed_secs = elapsed.as_secs_f64(),
+            "Task partially completed with failures"
+          );
+          self
+            .update_task_partially_completed(&task.id, files_indexed)
+            .await?;
+        } else {
+          info!(
+            task_id = %task.id,
+            files_indexed,
+            elapsed_secs = elapsed.as_secs_f64(),
+            "Task completed successfully"
+          );
+          self.update_task_completed(&task.id, files_indexed).await?;
+        }
       }
       Err(e) => {
         error!(
@@ -359,6 +513,32 @@ impl TaskManager {
     Ok(())
   }
 
+  /// Update task as partially completed (with some failures)
+  async fn update_task_partially_completed(
+    &self,
+    task_id: &Uuid,
+    files_indexed: usize,
+  ) -> Result<(), IndexerError> {
+    let table = self.task_table.write().await;
+
+    table
+      .update()
+      .only_if(format!("id = '{}'", task_id).as_str())
+      .column("status", "'partially_completed'")
+      .column(
+        "completed_at",
+        format!(
+          "{}",
+          chrono::Utc::now().naive_utc().and_utc().timestamp_micros()
+        ),
+      )
+      .column("files_indexed", format!("{}", files_indexed))
+      .execute()
+      .await?;
+
+    Ok(())
+  }
+
   /// Update task as failed
   async fn update_task_failed(&self, task_id: &Uuid, error: &str) -> Result<(), IndexerError> {
     let table = self.task_table.write().await;
@@ -376,6 +556,32 @@ impl TaskManager {
       )
       .column("error", format!("'{}'", error.replace("'", "''")))
       .execute()
+      .await?;
+
+    Ok(())
+  }
+
+  /// Update a failed batch in the database
+  async fn update_failed_batch(&self, batch: &FailedEmbeddingBatch) -> Result<(), IndexerError> {
+    let table = self.failed_batches_table.write().await;
+
+    // Use merge insert to update the batch
+    let mut op = table.merge_insert(&["id"]);
+    op.when_matched_update_all(None)
+      .when_not_matched_insert_all()
+      .clone()
+      .execute(batch.clone().into_arrow()?)
+      .await?;
+
+    Ok(())
+  }
+
+  /// Delete a failed batch from the database
+  async fn delete_failed_batch(&self, batch_id: &Uuid) -> Result<(), IndexerError> {
+    let table = self.failed_batches_table.write().await;
+
+    table
+      .delete(format!("id = '{}'", batch_id).as_str())
       .await?;
 
     Ok(())
@@ -408,7 +614,7 @@ impl TaskManager {
           .column("started_at", "null")
           .execute()
           .await?;
-        
+
         reset_count += 1;
       }
     }
@@ -425,7 +631,7 @@ impl TaskManager {
     &self,
     task: &crate::models::IndexTask,
     cancel_token: &CancellationToken,
-  ) -> Result<usize, IndexerError> {
+  ) -> Result<(usize, Option<(std::collections::BTreeSet<String>, String)>), IndexerError> {
     info!(
       task_id = %task.id,
       path = task.path,
@@ -448,7 +654,7 @@ impl TaskManager {
     task: &crate::models::IndexTask,
     changes: &std::collections::BTreeSet<crate::models::FileChange>,
     cancel_token: &CancellationToken,
-  ) -> Result<usize, IndexerError> {
+  ) -> Result<(usize, Option<(std::collections::BTreeSet<String>, String)>), IndexerError> {
     info!(
       task_id = %task.id,
       files_count = changes.len(),
@@ -457,7 +663,7 @@ impl TaskManager {
 
     let project_root = std::path::Path::new(&task.path);
 
-    let files_processed = self
+    self
       .indexer
       .index_file_changes(
         task.project_id,
@@ -465,9 +671,7 @@ impl TaskManager {
         changes,
         Some(cancel_token.clone()),
       )
-      .await?;
-
-    Ok(files_processed)
+      .await
   }
 }
 
@@ -497,6 +701,12 @@ mod tests {
       .unwrap();
     let task_table = Arc::new(RwLock::new(task_table));
 
+    let failed_batches_table =
+      FailedEmbeddingBatch::ensure_table(&connection, "test_failed_batches")
+        .await
+        .unwrap();
+    let failed_batches_table = Arc::new(RwLock::new(failed_batches_table));
+
     let code_table = CodeDocument::ensure_table(&connection, "test_docs", 384)
       .await
       .unwrap();
@@ -514,7 +724,7 @@ mod tests {
       code_table.clone(),
     );
 
-    let task_manager = TaskManager::new(task_table, bulk_indexer);
+    let task_manager = TaskManager::new(task_table, failed_batches_table, bulk_indexer);
 
     // Create a test project ID
     let test_project_id = Uuid::now_v7();
@@ -1212,7 +1422,8 @@ mod tests {
       .await;
 
     assert!(result.is_ok(), "Partial update failed: {:?}", result);
-    let files_processed = result.unwrap();
+    let (files_processed, failures) = result.unwrap();
+    assert!(failures.is_none(), "Should have no failures");
 
     // Should have processed at least 3 files (1 delete + 2 add/update)
     // Note: The count might be higher if the indexer processes additional files
@@ -1534,7 +1745,7 @@ mod tests {
     // Manually set the task to running state (simulating a killed process)
     {
       let table = task_manager.task_table.write().await;
-      
+
       // Set to running with a recent timestamp
       let now_micros = chrono::Utc::now().naive_utc().and_utc().timestamp_micros();
       table
@@ -1557,8 +1768,365 @@ mod tests {
 
     // Verify task was reset to pending (ALL running tasks should be reset on startup)
     let task = task_manager.get_task(&task_id).await.unwrap().unwrap();
-    assert_eq!(task.status, crate::models::TaskStatus::Pending, 
-      "ALL running tasks should be reset to pending on startup");
+    assert_eq!(
+      task.status,
+      crate::models::TaskStatus::Pending,
+      "ALL running tasks should be reset to pending on startup"
+    );
     assert!(task.started_at.is_none());
+  }
+
+  #[tokio::test]
+  async fn test_failed_batch_creation() {
+    let (task_manager, _code_table, _temp_dir, _project_id) = create_test_task_manager().await;
+
+    let task_id = Uuid::now_v7();
+    let project_id = Uuid::now_v7();
+
+    let mut failed_files = std::collections::BTreeSet::new();
+    failed_files.insert("/test/file1.rs".to_string());
+    failed_files.insert("/test/file2.rs".to_string());
+
+    let failed_batch = crate::models::FailedEmbeddingBatch::new(
+      task_id,
+      project_id,
+      "/test".to_string(),
+      failed_files.clone(),
+      "Test error".to_string(),
+    );
+
+    let batch_id = failed_batch.id;
+
+    // Add the failed batch
+    let table = task_manager.failed_batches_table.write().await;
+    table
+      .add(failed_batch.clone().into_arrow().unwrap())
+      .execute()
+      .await
+      .unwrap();
+
+    // Check it was created by querying directly
+    let mut stream = table
+      .query()
+      .only_if(format!("id = '{}'", batch_id).as_str())
+      .limit(1)
+      .execute()
+      .await
+      .unwrap();
+
+    let batch_record = stream.try_next().await.unwrap();
+    assert!(batch_record.is_some());
+
+    let created_batch =
+      crate::models::FailedEmbeddingBatch::from_record_batch(&batch_record.unwrap(), 0).unwrap();
+    assert_eq!(created_batch.task_id, task_id);
+    assert_eq!(created_batch.project_id, project_id);
+    assert_eq!(created_batch.failed_files, failed_files);
+    assert_eq!(created_batch.errors.len(), 1);
+    assert_eq!(created_batch.errors[0].error, "Test error");
+    assert_eq!(created_batch.retry_count, 0);
+
+    // Verify retry_after is set to future (1 minute from creation)
+    assert!(created_batch.retry_after > chrono::Utc::now().naive_utc());
+  }
+
+  #[tokio::test]
+  async fn test_exponential_backoff_schedule() {
+    let (task_manager, _code_table, _temp_dir, _project_id) = create_test_task_manager().await;
+
+    // Test the backoff schedule values
+    let expected_minutes = vec![
+      (0, 1),  // retry_count 0 -> 1 minute
+      (1, 5),  // retry_count 1 -> 5 minutes
+      (2, 10), // retry_count 2 -> 10 minutes
+      (3, 20), // retry_count 3 -> 20 minutes
+      (4, 40), // retry_count 4 -> 40 minutes
+      (5, 60), // retry_count 5 -> 60 minutes (capped)
+      (6, 60), // retry_count 6 -> 60 minutes (stays capped)
+    ];
+
+    for (retry_count, expected) in expected_minutes {
+      let now = chrono::Utc::now().naive_utc();
+      let retry_after =
+        crate::models::FailedEmbeddingBatch::calculate_next_retry_after(retry_count);
+      let actual_minutes = (retry_after - now).num_seconds() / 60;
+      assert_eq!(
+        actual_minutes, expected,
+        "retry_count {} should yield {} minute delay",
+        retry_count, expected
+      );
+    }
+
+    let task_id = Uuid::now_v7();
+    let project_id = Uuid::now_v7();
+
+    let mut failed_files = std::collections::BTreeSet::new();
+    failed_files.insert("/test/file1.rs".to_string());
+
+    let mut failed_batch = crate::models::FailedEmbeddingBatch::new(
+      task_id,
+      project_id,
+      "/test".to_string(),
+      failed_files,
+      "Initial error".to_string(),
+    );
+
+    // Set retry_after to past so it's ready for retry
+    failed_batch.retry_after = chrono::Utc::now().naive_utc() - chrono::Duration::hours(1);
+
+    // Add the failed batch
+    let table = task_manager.failed_batches_table.write().await;
+    table
+      .add(failed_batch.clone().into_arrow().unwrap())
+      .execute()
+      .await
+      .unwrap();
+    drop(table);
+
+    // Expected delays after calling update_for_retry
+    // When update_for_retry is called on retry_count=0, it becomes retry_count=1 with 5 minute delay
+    let expected_delays_after_update = [
+      5,  // retry_count 0->1
+      10, // retry_count 1->2
+      20, // retry_count 2->3
+      40, // retry_count 3->4
+      60, // retry_count 4->5 (capped)
+      60, // retry_count 5->6 (stays capped)
+    ];
+
+    for (i, expected_minutes) in expected_delays_after_update.iter().enumerate() {
+      // Get the batch
+      let batch = task_manager.check_retry_batches().await.unwrap().unwrap();
+      assert_eq!(batch.retry_count as usize, i);
+
+      let now_before_update = chrono::Utc::now().naive_utc();
+
+      // Update for next retry
+      let mut updated_batch = batch.clone();
+      updated_batch.update_for_retry(format!("Retry {} failed", i));
+
+      // Check the retry_after is set correctly
+      let delay_seconds = (updated_batch.retry_after - now_before_update).num_seconds();
+      let expected_seconds = expected_minutes * 60;
+
+      assert!(
+        delay_seconds >= expected_seconds - 5 && delay_seconds <= expected_seconds + 5,
+        "After update from retry_count {} to {}, expected delay {} minutes ({} seconds), got {} seconds",
+        i,
+        i + 1,
+        expected_minutes,
+        expected_seconds,
+        delay_seconds
+      );
+
+      // Update in database
+      task_manager
+        .update_failed_batch(&updated_batch)
+        .await
+        .unwrap();
+
+      // Set retry_after to past for next iteration
+      let table = task_manager.failed_batches_table.write().await;
+      table
+        .update()
+        .only_if(format!("id = '{}'", updated_batch.id).as_str())
+        .column(
+          "retry_after",
+          format!(
+            "{}",
+            (chrono::Utc::now().naive_utc() - chrono::Duration::hours(1))
+              .and_utc()
+              .timestamp_micros()
+          ),
+        )
+        .execute()
+        .await
+        .unwrap();
+    }
+  }
+
+  #[tokio::test]
+  async fn test_retry_queue_priority() {
+    let (task_manager, _code_table, _temp_dir, project_id) = create_test_task_manager().await;
+
+    // Create a regular pending task
+    let regular_task_id = task_manager
+      .submit_task(
+        project_id,
+        std::path::Path::new("/test"),
+        crate::models::TaskType::FullIndex,
+      )
+      .await
+      .unwrap();
+
+    // Create a failed batch ready for retry
+    let mut failed_files = std::collections::BTreeSet::new();
+    failed_files.insert("/test/failed.rs".to_string());
+
+    let mut failed_batch = crate::models::FailedEmbeddingBatch::new(
+      Uuid::now_v7(),
+      project_id,
+      "/test".to_string(),
+      failed_files,
+      "Test error".to_string(),
+    );
+    failed_batch.retry_after = chrono::Utc::now().naive_utc() - chrono::Duration::hours(1);
+
+    let table = task_manager.failed_batches_table.write().await;
+    table
+      .add(failed_batch.clone().into_arrow().unwrap())
+      .execute()
+      .await
+      .unwrap();
+    drop(table);
+
+    // Process next task - should process regular task first
+    let cancel_token = CancellationToken::new();
+    let processed = task_manager.process_next_task(&cancel_token).await.unwrap();
+    assert!(processed);
+
+    // Verify regular task was processed
+    let task = task_manager
+      .get_task(&regular_task_id)
+      .await
+      .unwrap()
+      .unwrap();
+    assert_ne!(task.status, crate::models::TaskStatus::Pending);
+
+    // Now process retry task (since no more pending tasks)
+    let processed_retry = task_manager.process_next_task(&cancel_token).await.unwrap();
+    assert!(processed_retry);
+
+    // The failed batch should have been processed (either deleted or updated)
+    // We can't easily check the exact outcome without mocking the indexer
+  }
+
+  #[tokio::test]
+  async fn test_merge_insert_update() {
+    let (task_manager, _code_table, _temp_dir, _project_id) = create_test_task_manager().await;
+
+    let task_id = Uuid::now_v7();
+    let project_id = Uuid::now_v7();
+
+    let mut failed_files = std::collections::BTreeSet::new();
+    failed_files.insert("/test/file1.rs".to_string());
+
+    let mut failed_batch = crate::models::FailedEmbeddingBatch::new(
+      task_id,
+      project_id,
+      "/test".to_string(),
+      failed_files.clone(),
+      "Initial error".to_string(),
+    );
+
+    // Set retry_after to past so it shows up in queries
+    failed_batch.retry_after = chrono::Utc::now().naive_utc() - chrono::Duration::hours(1);
+
+    // Add the failed batch
+    let table = task_manager.failed_batches_table.write().await;
+    table
+      .add(failed_batch.clone().into_arrow().unwrap())
+      .execute()
+      .await
+      .unwrap();
+    drop(table);
+
+    // Update it with more failures
+    let mut updated_batch = failed_batch.clone();
+    updated_batch
+      .failed_files
+      .insert("/test/file2.rs".to_string());
+    updated_batch.update_for_retry("Second error".to_string());
+
+    // Also set retry_after to past for testing
+    updated_batch.retry_after = chrono::Utc::now().naive_utc() - chrono::Duration::hours(1);
+
+    // Use merge insert to update
+    task_manager
+      .update_failed_batch(&updated_batch)
+      .await
+      .unwrap();
+
+    // Verify the update by querying directly
+    let table = task_manager.failed_batches_table.read().await;
+    let mut stream = table
+      .query()
+      .only_if(format!("id = '{}'", failed_batch.id).as_str())
+      .limit(1)
+      .execute()
+      .await
+      .unwrap();
+
+    let batch_record = stream.try_next().await.unwrap().unwrap();
+    let batch = crate::models::FailedEmbeddingBatch::from_record_batch(&batch_record, 0).unwrap();
+
+    assert_eq!(batch.failed_files.len(), 2);
+    assert_eq!(batch.retry_count, 1);
+    assert_eq!(batch.errors.len(), 2);
+    assert_eq!(batch.errors[1].error, "Second error");
+  }
+
+  #[tokio::test]
+  async fn test_delete_successful_retry() {
+    let (task_manager, _code_table, _temp_dir, _project_id) = create_test_task_manager().await;
+
+    let batch_id = Uuid::now_v7();
+    let task_id = Uuid::now_v7();
+    let project_id = Uuid::now_v7();
+
+    let mut failed_files = std::collections::BTreeSet::new();
+    failed_files.insert("/test/file1.rs".to_string());
+
+    let mut failed_batch = crate::models::FailedEmbeddingBatch::new(
+      task_id,
+      project_id,
+      "/test".to_string(),
+      failed_files,
+      "Test error".to_string(),
+    );
+    failed_batch.id = batch_id;
+
+    // Add the failed batch
+    let table = task_manager.failed_batches_table.write().await;
+    table
+      .add(failed_batch.clone().into_arrow().unwrap())
+      .execute()
+      .await
+      .unwrap();
+    drop(table);
+
+    // Delete it
+    task_manager.delete_failed_batch(&batch_id).await.unwrap();
+
+    // Verify it's gone
+    let batches = task_manager.check_retry_batches().await.unwrap();
+    assert!(batches.is_none());
+  }
+
+  #[tokio::test]
+  async fn test_task_status_partially_completed() {
+    let (task_manager, _code_table, temp_dir, project_id) = create_test_task_manager().await;
+
+    // Create a test directory
+    let project_dir = temp_dir.path().join("test_project");
+    std::fs::create_dir_all(&project_dir).unwrap();
+
+    // Submit a task
+    let task_id = task_manager
+      .submit_task(project_id, &project_dir, crate::models::TaskType::FullIndex)
+      .await
+      .unwrap();
+
+    // Update task to partially completed
+    task_manager
+      .update_task_partially_completed(&task_id, 50)
+      .await
+      .unwrap();
+
+    // Verify the task status
+    let task = task_manager.get_task(&task_id).await.unwrap().unwrap();
+    assert_eq!(task.status, crate::models::TaskStatus::PartiallyCompleted);
+    assert_eq!(task.files_indexed, Some(50));
+    assert!(task.completed_at.is_some());
   }
 }

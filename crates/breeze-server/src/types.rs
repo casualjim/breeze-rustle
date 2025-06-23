@@ -221,6 +221,7 @@ pub enum TaskStatus {
   Completed,
   Failed,
   Merged,
+  PartiallyCompleted,
 }
 
 impl From<breeze_indexer::TaskStatus> for TaskStatus {
@@ -231,6 +232,7 @@ impl From<breeze_indexer::TaskStatus> for TaskStatus {
       breeze_indexer::TaskStatus::Completed => TaskStatus::Completed,
       breeze_indexer::TaskStatus::Failed => TaskStatus::Failed,
       breeze_indexer::TaskStatus::Merged => TaskStatus::Merged,
+      breeze_indexer::TaskStatus::PartiallyCompleted => TaskStatus::PartiallyCompleted,
     }
   }
 }

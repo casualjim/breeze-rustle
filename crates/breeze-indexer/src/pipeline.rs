@@ -62,7 +62,7 @@ pub(crate) enum EmbeddedChunkWithFile {
   Embedded {
     batch_id: usize,
     file_path: String,
-    chunk: PipelineChunk,
+    chunk: Box<PipelineChunk>,
     embedding: Vec<f32>,
   },
   /// EOF marker - no embedding needed

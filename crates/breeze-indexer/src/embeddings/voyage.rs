@@ -118,7 +118,6 @@ impl EmbeddingProvider for VoyageEmbeddingProvider {
   }
 
   fn create_batching_strategy(&self) -> Box<dyn BatchingStrategy> {
-
     const MAX_TOKENS_PER_BATCH: usize = 96_000;
     const MAX_TEXTS_PER_BATCH: usize = 100;
 

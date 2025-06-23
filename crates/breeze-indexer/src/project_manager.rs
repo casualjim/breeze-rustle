@@ -279,6 +279,12 @@ mod tests {
     let task_table = Arc::new(RwLock::new(task_table));
     let code_table = Arc::new(RwLock::new(code_table));
 
+    let failed_batches_table =
+      crate::models::FailedEmbeddingBatch::ensure_table(&connection, "test_failed_batches")
+        .await
+        .unwrap();
+    let failed_batches_table = Arc::new(RwLock::new(failed_batches_table));
+
     // Create a minimal config and embedding provider for BulkIndexer
     let config = crate::Config {
       database_path: db_path.clone(),
@@ -305,7 +311,11 @@ mod tests {
       code_table.clone(),
     );
 
-    let task_manager = Arc::new(TaskManager::new(task_table, bulk_indexer));
+    let task_manager = Arc::new(TaskManager::new(
+      task_table,
+      failed_batches_table,
+      bulk_indexer,
+    ));
     let project_manager = ProjectManager::new(project_table, task_manager);
 
     (project_manager, temp_dir)
@@ -543,7 +553,10 @@ mod tests {
 
     assert!(result.is_err());
     match result.unwrap_err() {
-      IndexerError::ProjectAlreadyExists { directory, existing_id } => {
+      IndexerError::ProjectAlreadyExists {
+        directory,
+        existing_id,
+      } => {
         assert!(directory.ends_with("test_project"));
         assert_eq!(existing_id, project1.id);
       }

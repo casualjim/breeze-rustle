@@ -122,7 +122,9 @@ impl OpenAILikeEmbeddingProvider {
       embedding_dim: config.embedding_dim,
       context_length: config.context_length,
       max_batch_size: config.max_batch_size,
-      max_tokens_per_request: config.max_tokens_per_request.unwrap_or(config.context_length),
+      max_tokens_per_request: config
+        .max_tokens_per_request
+        .unwrap_or(config.context_length),
     })
   }
 }
