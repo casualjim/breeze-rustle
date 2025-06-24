@@ -168,13 +168,8 @@ fn use_npm_parsers(parser_lib_path: &Path, out_path: &Path) {
   );
 
   // Always link C++ standard library as some grammars use C++ scanners
-  if cfg!(target_os = "macos") {
-    println!("cargo:rustc-link-lib=c++");
-  } else if cfg!(target_os = "linux") {
-    println!("cargo:rustc-link-lib=stdc++");
-  } else if cfg!(target_os = "windows") {
-    // Windows doesn't need explicit C++ runtime linking with MSVC
-  }
+  println!("cargo:rustc-link-lib=c++");
+  println!("cargo:rustc-link-lib=c++abi");
 
   // Check if there's a metadata file alongside the library
   let metadata_path = parser_lib_path.parent().unwrap().join(
