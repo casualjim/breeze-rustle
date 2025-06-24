@@ -43,7 +43,7 @@ test: test-rust test-python test-node
 
 # Run Rust tests with nextest
 test-rust:
-    cargo nextest run --workspace
+    cargo nextest run --workspace --features local-embeddings
 
 # Run Python tests
 test-python:

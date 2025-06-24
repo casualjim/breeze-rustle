@@ -34,7 +34,9 @@ fn get_target_parser_path() -> Result<PathBuf, String> {
     "x86_64-unknown-linux-gnu" => "@kumos/tree-sitter-parsers-linux-x64",
     "aarch64-unknown-linux-musl" => "@kumos/tree-sitter-parsers-linux-arm64-musl",
     "x86_64-unknown-linux-musl" => "@kumos/tree-sitter-parsers-linux-x64-musl",
-    "aarch64-pc-windows-msvc" => "@kumos/tree-sitter-parsers-win32-arm64",
+    "aarch64-pc-windows-msvc" | "aarch64-pc-windows-gnu" => {
+      "@kumos/tree-sitter-parsers-win32-arm64"
+    }
     "x86_64-pc-windows-msvc" | "x86_64-pc-windows-gnu" => "@kumos/tree-sitter-parsers-win32-x64",
     _ => {
       // For unknown targets, try to use npx which will auto-install if needed
@@ -54,8 +56,8 @@ fn get_target_parser_path() -> Result<PathBuf, String> {
     let expected_filename = match target.as_str() {
       "aarch64-apple-darwin" => "libtree-sitter-parsers-all-macos-aarch64.a",
       "x86_64-apple-darwin" => "libtree-sitter-parsers-all-macos-x86_64.a",
-      "aarch64-unknown-linux-gnu" => "libtree-sitter-parsers-all-linux-aarch64.a",
-      "x86_64-unknown-linux-gnu" => "libtree-sitter-parsers-all-linux-x86_64.a",
+      "aarch64-unknown-linux-gnu" => "libtree-sitter-parsers-all-linux-aarch64-glibc.a",
+      "x86_64-unknown-linux-gnu" => "libtree-sitter-parsers-all-linux-x86_64-glibc.a",
       "aarch64-unknown-linux-musl" => "libtree-sitter-parsers-all-linux-aarch64-musl.a",
       "x86_64-unknown-linux-musl" => "libtree-sitter-parsers-all-linux-x86_64-musl.a",
       "aarch64-pc-windows-msvc" => "libtree-sitter-parsers-all-windows-aarch64.a",
