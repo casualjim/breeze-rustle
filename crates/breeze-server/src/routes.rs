@@ -17,6 +17,8 @@ use axum::{
 use tracing::info;
 use uuid::Uuid;
 
+use breeze_indexer::{SearchGranularity as IndexerSearchGranularity, SearchOptions};
+
 use crate::error::ApiError;
 use crate::types::*;
 use crate::{
@@ -106,9 +108,11 @@ pub fn router(_app: app::AppState) -> ApiRouter<AppState> {
   .api_route("/api/v1/search",
       post_with(search, |op| op
           .summary("Search code")
-          .description("Performs semantic search across all indexed content")
+          .description("Performs semantic search across all indexed content with advanced filtering options. \
+                       Supports document-level and chunk-level search granularity with semantic filters.")
           .tag("Search")
           .response::<200, Json<Vec<SearchResult>>>()
+          .response::<400, Json<ErrorResponse>>()
           .response::<500, Json<ErrorResponse>>()
       )
   )
@@ -259,9 +263,26 @@ async fn search(
 ) -> impl IntoApiResponse {
   info!(query = %req.query, limit = ?req.limit, "Performing search");
 
-  let limit = req.limit.unwrap_or(10);
+  let limit = req.limit.unwrap_or(5);
 
-  match state.indexer.search(&req.query, limit).await {
+  // Build SearchOptions from request
+  let options = SearchOptions {
+    file_limit: limit,
+    chunks_per_file: req.chunks_per_file.unwrap_or(3),
+    languages: req.languages,
+    granularity: match req.granularity {
+      Some(crate::types::SearchGranularity::Chunk) => IndexerSearchGranularity::Chunk,
+      _ => IndexerSearchGranularity::Document,
+    },
+    node_types: req.node_types,
+    node_name_pattern: req.node_name_pattern,
+    parent_context_pattern: req.parent_context_pattern,
+    scope_depth: req.scope_depth,
+    has_definitions: req.has_definitions,
+    has_references: req.has_references,
+  };
+
+  match state.indexer.search(&req.query, options).await {
     Ok(results) => {
       info!(results = results.len(), "Search completed");
       Json(

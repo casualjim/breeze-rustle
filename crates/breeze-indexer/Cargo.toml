@@ -83,6 +83,7 @@ tokio.workspace = true
 tokio-stream.workspace = true
 tokio-util.workspace = true
 tracing.workspace = true
+typed-builder = "0.21"
 uuid.workspace = true
 
 [dev-dependencies]

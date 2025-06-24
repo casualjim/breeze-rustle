@@ -3,7 +3,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::{info, instrument};
 
 use crate::config::Config;
-use breeze_indexer::{Indexer, SearchResult};
+use breeze_indexer::{Indexer, SearchOptions, SearchResult};
 
 pub struct App {
   indexer: Indexer,
@@ -71,10 +71,15 @@ impl App {
   ) -> Result<Vec<SearchResult>, Box<dyn std::error::Error + Send + Sync>> {
     info!("Searching codebase");
 
+    let options = SearchOptions {
+      file_limit: limit,
+      ..Default::default()
+    };
+
     // Use the facade to search
     self
       .indexer
-      .search(query, limit)
+      .search(query, options)
       .await
       .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)
   }

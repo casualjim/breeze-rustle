@@ -2,6 +2,9 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use breeze_indexer::Indexer;
+use breeze_indexer::SearchGranularity as IndexerSearchGranularity;
+use breeze_indexer::SearchOptions;
+
 use rmcp::transport::streamable_http_server::{
   StreamableHttpService, session::local::LocalSessionManager,
 };
@@ -54,13 +57,29 @@ impl BreezeService {
   #[tool(description = "Search code using semantic understanding")]
   async fn search_code(
     &self,
-    #[tool(aggr)] SearchRequest { query, limit }: SearchRequest,
+    #[tool(aggr)] search_req: SearchRequest,
   ) -> Result<CallToolResult, McpError> {
-    let limit = limit.unwrap_or(10);
+    let limit = search_req.limit.unwrap_or(10);
 
-    info!("Searching for '{}' with limit {}", query, limit);
+    info!("Searching for '{}' with limit {}", search_req.query, limit);
 
-    match self.indexer.search(&query, limit).await {
+    let options = SearchOptions {
+      file_limit: limit,
+      chunks_per_file: search_req.chunks_per_file.unwrap_or(3),
+      languages: search_req.languages,
+      granularity: match search_req.granularity {
+        Some(SearchGranularity::Chunk) => IndexerSearchGranularity::Chunk,
+        _ => IndexerSearchGranularity::Document,
+      },
+      node_types: search_req.node_types,
+      node_name_pattern: search_req.node_name_pattern,
+      parent_context_pattern: search_req.parent_context_pattern,
+      scope_depth: search_req.scope_depth,
+      has_definitions: search_req.has_definitions,
+      has_references: search_req.has_references,
+    };
+
+    match self.indexer.search(&search_req.query, options).await {
       Ok(results) => Ok(CallToolResult::success(vec![Content::json(results)?])),
       Err(e) => Ok(CallToolResult::error(vec![Content::text(format!(
         "Search failed: {}",

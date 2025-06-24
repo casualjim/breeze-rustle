@@ -100,35 +100,48 @@ pub fn format_results(results: &[breeze_indexer::SearchResult], show_full_conten
   for (idx, result) in results.iter().enumerate() {
     output.push_str(&format!("\n[{}] {}\n", idx + 1, result.file_path));
 
-    // Only show score if it's meaningful (not 0.0)
-    if result.relevance_score > 0.0 {
+    // Show relevance score and chunk count
+    output.push_str(&format!(
+      "   Score: {:.4} | Chunks: {}\n",
+      result.relevance_score, result.chunk_count
+    ));
+
+    // Show chunk previews
+    if !result.chunks.is_empty() {
       output.push_str(&format!(
-        "   Score: {:.4} | Size: {} bytes\n",
-        result.relevance_score, result.file_size
+        "   Found {} relevant chunks:\n",
+        result.chunks.len()
       ));
-    } else {
-      output.push_str(&format!("   Size: {} bytes\n", result.file_size));
-    }
 
-    if show_full_content {
-      output.push('\n');
-      output.push_str(&result.content);
-      output.push('\n');
-    } else {
-      // Show first 5 lines as preview
-      let preview_lines: Vec<&str> = result.content.lines().take(5).collect();
+      for (chunk_idx, chunk) in result.chunks.iter().enumerate() {
+        output.push_str(&format!(
+          "\n   Chunk {} (lines {}-{}, score: {:.4}):\n",
+          chunk_idx + 1,
+          chunk.start_line,
+          chunk.end_line,
+          chunk.relevance_score
+        ));
 
-      if !preview_lines.is_empty() {
-        output.push('\n');
-        for line in preview_lines {
-          output.push_str("   ");
-          output.push_str(line);
-          output.push('\n');
-        }
+        if show_full_content {
+          // Show full chunk content
+          for line in chunk.content.lines() {
+            output.push_str("      ");
+            output.push_str(line);
+            output.push('\n');
+          }
+        } else {
+          // Show first 5 lines of chunk as preview
+          let preview_lines: Vec<&str> = chunk.content.lines().take(5).collect();
+          for line in preview_lines {
+            output.push_str("      ");
+            output.push_str(line);
+            output.push('\n');
+          }
 
-        let total_lines = result.content.lines().count();
-        if total_lines > 5 {
-          output.push_str(&format!("   ... ({} more lines)\n", total_lines - 5));
+          let total_lines = chunk.content.lines().count();
+          if total_lines > 5 {
+            output.push_str(&format!("      ... ({} more lines)\n", total_lines - 5));
+          }
         }
       }
     }

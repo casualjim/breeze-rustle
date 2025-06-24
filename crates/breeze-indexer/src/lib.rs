@@ -23,7 +23,7 @@ pub use embeddings::EmbeddingError;
 pub use indexer::{Indexer, IndexerError};
 pub use models::{FileChange, FileOperation, IndexTask, Project, TaskStatus, TaskType};
 pub use project_manager::ProjectManager;
-pub use search::{SearchResult, hybrid_search};
+pub use search::{ChunkResult, SearchGranularity, SearchOptions, SearchResult, hybrid_search};
 pub use task_manager::TaskManager;
 
 // Global ONNX runtime initialization to prevent multiple initialization issues

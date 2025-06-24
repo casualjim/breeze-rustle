@@ -1,39 +1,117 @@
+mod chunks;
+mod documents;
+
+#[cfg(all(test, feature = "local-embeddings"))]
+mod chunk_tests;
+
 use std::sync::Arc;
 
 use anyhow::{Result, anyhow};
-use arrow::array::Float32Array;
-use futures::TryStreamExt;
 use lancedb::Table;
 use lancedb::index::scalar::FullTextSearchQuery;
-use lancedb::query::{ExecutableQuery, QueryBase};
+use lancedb::query::QueryBase;
 use lancedb::rerankers::rrf;
 use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
 use tracing::info;
 
 use crate::embeddings::EmbeddingProvider;
-use crate::models::CodeDocument;
+use chunks::search_chunks;
+use documents::search_documents;
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub enum SearchGranularity {
+  #[default]
+  Document, // Default - search files, return with top chunks
+  Chunk, // Search chunks directly, return chunks grouped by file
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SearchOptions {
+  pub languages: Option<Vec<String>>, // Filter by languages
+  pub file_limit: usize,              // Number of files to return (default: 5)
+  pub chunks_per_file: usize,         // Number of chunks per file (default: 3)
+  pub granularity: SearchGranularity, // Search mode: Document or Chunk
+
+  // Semantic filters (mainly for Chunk mode)
+  pub node_types: Option<Vec<String>>,   // ["function", "class"]
+  pub node_name_pattern: Option<String>, // Regex or glob pattern
+  pub parent_context_pattern: Option<String>, // Pattern match on parent
+  pub scope_depth: Option<(usize, usize)>, // Min and max nesting level
+  pub has_definitions: Option<Vec<String>>, // Must define these symbols
+  pub has_references: Option<Vec<String>>, // Must reference these symbols
+}
+
+impl Default for SearchOptions {
+  fn default() -> Self {
+    Self {
+      languages: None,
+      file_limit: 5,
+      chunks_per_file: 3,
+      granularity: SearchGranularity::default(),
+      node_types: None,
+      node_name_pattern: None,
+      parent_context_pattern: None,
+      scope_depth: None,
+      has_definitions: None,
+      has_references: None,
+    }
+  }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChunkResult {
+  pub content: String,
+  pub start_line: usize,
+  pub end_line: usize,
+  pub relevance_score: f32,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SearchResult {
   pub id: String,
   pub file_path: String,
-  pub content: String,
-  pub content_hash: [u8; 32],
   pub relevance_score: f32,
-  pub file_size: u64,
-  pub last_modified: chrono::NaiveDateTime,
-  pub indexed_at: chrono::NaiveDateTime,
+  pub chunk_count: u32,
+  pub chunks: Vec<ChunkResult>, // Top chunks from this file
 }
 
-/// Perform hybrid search combining vector and FTS
+/// Build a hybrid search query with common filters
+async fn build_hybrid_query(
+  table: &Table,
+  query: &str,
+  query_vector: &[f32],
+  project_id: Option<&str>,
+  embedding_column: &str,
+) -> Result<lancedb::query::VectorQuery> {
+  let mut query_builder = table
+    .query()
+    .only_if("project_id != '00000000-0000-0000-0000-000000000000'");
+
+  // Add project filter if provided
+  if let Some(pid) = project_id {
+    query_builder = query_builder.only_if(format!("project_id = '{}'", pid));
+  }
+
+  Ok(
+    query_builder
+      .full_text_search(FullTextSearchQuery::new(query.to_string()))
+      .nearest_to(query_vector)?
+      .column(embedding_column)
+      .rerank(Arc::new(rrf::RRFReranker::new(60.0))),
+  )
+}
+
+/// Perform hybrid search combining vector and FTS with optional language filtering
 pub async fn hybrid_search(
-  table: Arc<RwLock<Table>>,
+  documents_table: Arc<RwLock<Table>>,
+  chunks_table: Arc<RwLock<Table>>,
   embedding_provider: Arc<dyn EmbeddingProvider>,
   query: &str,
-  limit: usize,
+  options: SearchOptions,
+  project_id: Option<String>,
 ) -> Result<Vec<SearchResult>> {
-  info!(query = %query, limit = limit, "Performing hybrid search");
+  info!(query = %query, options = ?options, "Performing hybrid search");
 
   // Generate embedding for query
   let query_embedding = embedding_provider
@@ -50,59 +128,29 @@ pub async fn hybrid_search(
 
   let query_vector = query_embedding[0].as_slice();
 
-  // Execute hybrid search
-  let table = table.read().await;
-
-  // Build hybrid query with vector search and FTS
-  // Filter out the dummy project
-  let mut results = table
-    .query()
-    .only_if(format!("project_id != '{}'", uuid::Uuid::nil()).as_str())
-    .full_text_search(FullTextSearchQuery::new(query.to_string()))
-    .nearest_to(query_vector)?
-    .column("content_embedding")
-    .rerank(Arc::new(rrf::RRFReranker::new(60.0)))
-    .limit(limit)
-    .execute()
-    .await?;
-
-  // Collect results from RecordBatch stream
-  let mut search_results = Vec::new();
-
-  while let Some(batch) = results
-    .try_next()
-    .await
-    .map_err(|e| anyhow!("Error reading results: {}", e))?
-  {
-    // Get reranked relevance scores (from hybrid search with reranker)
-    // We always use reranking, so this column should always be present
-    let relevance_scores = batch
-      .column_by_name("_relevance_score")
-      .and_then(|col| col.as_any().downcast_ref::<Float32Array>())
-      .ok_or_else(|| anyhow!("Missing _relevance_score column in results"))?;
-
-    // Process each row
-    for row in 0..batch.num_rows() {
-      let doc = CodeDocument::from_record_batch(&batch, row)
-        .map_err(|e| anyhow!("Failed to convert row {}: {}", row, e))?;
-
-      // Get the reranked relevance score from hybrid search
-      let relevance_score = relevance_scores.value(row);
-
-      search_results.push(SearchResult {
-        id: doc.id,
-        file_path: doc.file_path,
-        content: doc.content,
-        content_hash: doc.content_hash,
-        relevance_score,
-        file_size: doc.file_size,
-        last_modified: doc.last_modified,
-        indexed_at: doc.indexed_at,
-      });
+  match options.granularity {
+    SearchGranularity::Document => {
+      search_documents(
+        documents_table,
+        chunks_table,
+        query,
+        query_vector,
+        &options,
+        project_id.as_deref(),
+      )
+      .await
+    }
+    SearchGranularity::Chunk => {
+      search_chunks(
+        chunks_table,
+        query,
+        query_vector,
+        &options,
+        project_id.as_deref(),
+      )
+      .await
     }
   }
-
-  Ok(search_results)
 }
 
 #[cfg(all(test, feature = "local-embeddings"))]
@@ -110,7 +158,7 @@ mod tests {
   use super::*;
   use crate::Config;
   use crate::embeddings::factory::create_embedding_provider;
-  use crate::models::CodeDocument;
+  use crate::models::{ChunkMetadataUpdate, CodeChunk, CodeDocument};
   use lancedb::arrow::IntoArrow;
   use std::collections::HashSet;
   use tempfile::TempDir;
@@ -168,7 +216,7 @@ mod tests {
     }
   }
 
-  async fn setup_test_table() -> (TempDir, Arc<RwLock<Table>>) {
+  async fn setup_test_table_with_chunks() -> (TempDir, Arc<RwLock<Table>>, Arc<RwLock<Table>>) {
     let temp_dir = TempDir::new().unwrap();
     let db_path = temp_dir.path().join("test.lance");
 
@@ -178,52 +226,99 @@ mod tests {
       .unwrap();
 
     let embedding_dim = 384;
-    let table = CodeDocument::ensure_table(&connection, "test_embeddings", embedding_dim)
+    let doc_table = CodeDocument::ensure_table(&connection, "test_embeddings", embedding_dim)
+      .await
+      .unwrap();
+    let chunk_table = CodeChunk::ensure_table(&connection, "code_chunks", embedding_dim)
       .await
       .unwrap();
 
-    // ensure the table twice
-    CodeDocument::ensure_table(&connection, "test_embeddings", embedding_dim)
-      .await
-      .expect("Table ensure should be idempotent");
-
-    // Insert test documents
+    // Insert test documents with language info
     let test_documents = vec![
-      create_test_document(
+      create_test_document_with_lang(
         "src/main.rs",
         "fn main() {\n    println!(\"Hello, world!\");\n}",
         embedding_dim,
+        vec!["rust".to_string()],
+        Some("rust".to_string()),
+        2,
       ),
-      create_test_document(
+      create_test_document_with_lang(
         "src/lib.rs",
         "pub fn search(query: &str) -> Vec<String> {\n    // Search implementation\n    vec![]\n}",
         embedding_dim,
+        vec!["rust".to_string()],
+        Some("rust".to_string()),
+        1,
       ),
-      create_test_document(
+      create_test_document_with_lang(
         "tests/test_search.rs",
         "#[test]\nfn test_search() {\n    let results = search(\"test\");\n    assert!(results.is_empty());\n}",
         embedding_dim,
+        vec!["rust".to_string()],
+        Some("rust".to_string()),
+        1,
       ),
-      create_test_document(
+      create_test_document_with_lang(
         "README.md",
         "# Search Library\n\nA simple search implementation in Rust.",
         embedding_dim,
+        vec!["markdown".to_string()],
+        Some("markdown".to_string()),
+        1,
       ),
     ];
 
-    for doc in test_documents {
-      // Use the IntoArrow trait from CodeDocument
-      let arrow_data = doc.into_arrow().unwrap();
-      table.add(arrow_data).execute().await.unwrap();
+    // Insert documents and create chunks
+    for doc in &test_documents {
+      let arrow_data = doc.clone().into_arrow().unwrap();
+      doc_table.add(arrow_data).execute().await.unwrap();
+
+      // Create a chunk for each document
+      let mut chunk = CodeChunk::builder()
+        .file_id(doc.id)
+        .project_id(doc.project_id)
+        .file_path(doc.file_path.clone())
+        .content(doc.content.clone())
+        .start_byte(0)
+        .end_byte(doc.content.len())
+        .start_line(1)
+        .end_line(doc.content.lines().count())
+        .build();
+      chunk.update_embedding(doc.content_embedding.clone());
+      chunk.update_metadata(
+        ChunkMetadataUpdate::builder()
+          .node_type("file".to_string())
+          .node_name(Some(doc.file_path.clone()))
+          .language(doc.primary_language.clone().unwrap_or("text".to_string()))
+          .parent_context(None)
+          .scope_path(vec![])
+          .definitions(vec![])
+          .references(vec![])
+          .build(),
+      );
+
+      let chunk_arrow = chunk.into_arrow().unwrap();
+      chunk_table.add(chunk_arrow).execute().await.unwrap();
     }
 
-    (temp_dir, Arc::new(RwLock::new(table)))
+    (
+      temp_dir,
+      Arc::new(RwLock::new(doc_table)),
+      Arc::new(RwLock::new(chunk_table)),
+    )
   }
 
-  fn create_test_document(file_path: &str, content: &str, embedding_dim: usize) -> CodeDocument {
-    let project_id = uuid::Uuid::now_v7(); // Use a valid project ID, not nil
+  fn create_test_document_with_lang(
+    file_path: &str,
+    content: &str,
+    embedding_dim: usize,
+    languages: Vec<String>,
+    primary_language: Option<String>,
+    chunk_count: u32,
+  ) -> CodeDocument {
+    let project_id = uuid::Uuid::now_v7();
     let mut doc = CodeDocument::new(project_id, file_path.to_string(), content.to_string());
-    // Generate a deterministic embedding based on content
     let hash = CodeDocument::compute_hash(content);
     let mut embedding = vec![0.0; embedding_dim];
     for (i, &byte) in hash.iter().enumerate() {
@@ -232,17 +327,27 @@ mod tests {
       }
     }
     doc.update_embedding(embedding);
+    doc.languages = languages;
+    doc.primary_language = primary_language;
+    doc.chunk_count = chunk_count;
     doc
   }
 
   #[tokio::test]
   async fn test_hybrid_search_basic() {
-    let (_temp_dir, table) = setup_test_table().await;
+    let (_temp_dir, doc_table, chunk_table) = setup_test_table_with_chunks().await;
     let embedding_provider = Arc::new(MockEmbeddingProvider::new(384));
 
-    let results = hybrid_search(table, embedding_provider, "search", 10)
-      .await
-      .unwrap();
+    let results = hybrid_search(
+      doc_table,
+      chunk_table,
+      embedding_provider,
+      "search",
+      SearchOptions::default(),
+      None,
+    )
+    .await
+    .unwrap();
 
     assert!(!results.is_empty());
 
@@ -255,28 +360,59 @@ mod tests {
     // We expect at least lib.rs and test_search.rs to match
     assert!(file_paths.contains("src/lib.rs"));
     assert!(file_paths.contains("tests/test_search.rs"));
+
+    // Check that chunks are included - documents are created from chunks so must have them
+    for result in &results {
+      assert!(
+        !result.chunks.is_empty(),
+        "Documents are created from chunks, so must have chunks"
+      );
+      assert!(
+        result.chunk_count > 0,
+        "chunk_count must be > 0 since documents are aggregated from chunks"
+      );
+    }
   }
 
   #[tokio::test]
   async fn test_hybrid_search_limit() {
-    let (_temp_dir, table) = setup_test_table().await;
+    let (_temp_dir, doc_table, chunk_table) = setup_test_table_with_chunks().await;
     let embedding_provider = Arc::new(MockEmbeddingProvider::new(384));
 
-    let results = hybrid_search(table, embedding_provider, "test", 2)
-      .await
-      .unwrap();
+    let options = SearchOptions {
+      file_limit: 2,
+      ..Default::default()
+    };
+
+    let results = hybrid_search(
+      doc_table,
+      chunk_table,
+      embedding_provider,
+      "test",
+      options,
+      None,
+    )
+    .await
+    .unwrap();
 
     assert_eq!(results.len(), 2);
   }
 
   #[tokio::test]
   async fn test_hybrid_search_no_results() {
-    let (_temp_dir, table) = setup_test_table().await;
+    let (_temp_dir, doc_table, chunk_table) = setup_test_table_with_chunks().await;
     let embedding_provider = Arc::new(MockEmbeddingProvider::new(384));
 
-    let results = hybrid_search(table, embedding_provider, "nonexistent", 10)
-      .await
-      .unwrap();
+    let results = hybrid_search(
+      doc_table,
+      chunk_table,
+      embedding_provider,
+      "nonexistent",
+      SearchOptions::default(),
+      None,
+    )
+    .await
+    .unwrap();
 
     // Hybrid search might still return results based on vector similarity
     // even if FTS doesn't match, so we just verify it completes without error
@@ -285,12 +421,19 @@ mod tests {
 
   #[tokio::test]
   async fn test_hybrid_search_returns_complete_results() {
-    let (_temp_dir, table) = setup_test_table().await;
+    let (_temp_dir, doc_table, chunk_table) = setup_test_table_with_chunks().await;
     let embedding_provider = Arc::new(MockEmbeddingProvider::new(384));
 
-    let results = hybrid_search(table, embedding_provider, "main", 10)
-      .await
-      .unwrap();
+    let results = hybrid_search(
+      doc_table,
+      chunk_table,
+      embedding_provider,
+      "main",
+      SearchOptions::default(),
+      None,
+    )
+    .await
+    .unwrap();
 
     assert!(!results.is_empty());
 
@@ -298,22 +441,41 @@ mod tests {
     for result in results {
       assert!(!result.id.is_empty());
       assert!(!result.file_path.is_empty());
-      assert!(!result.content.is_empty());
-      assert_ne!(result.content_hash, [0u8; 32]);
-      assert!(result.file_size > 0);
-      // Relevance score might be 0 if no distance column
       assert!(result.relevance_score >= 0.0);
+      assert!(result.chunk_count > 0);
+
+      // Verify chunks - documents must have chunks since they're created from them
+      assert!(
+        !result.chunks.is_empty(),
+        "Documents are created from chunks, so must have at least one"
+      );
+      for chunk in &result.chunks {
+        assert!(!chunk.content.is_empty());
+        assert!(chunk.start_line > 0);
+        assert!(chunk.end_line >= chunk.start_line);
+        assert!(chunk.relevance_score >= 0.0);
+      }
     }
   }
 
   #[tokio::test]
   async fn test_search_result_fields() {
-    let (_temp_dir, table) = setup_test_table().await;
+    let (_temp_dir, doc_table, chunk_table) = setup_test_table_with_chunks().await;
     let embedding_provider = Arc::new(MockEmbeddingProvider::new(384));
 
-    let results = hybrid_search(table, embedding_provider, "fn", 1)
-      .await
-      .unwrap();
+    let results = hybrid_search(
+      doc_table,
+      chunk_table,
+      embedding_provider,
+      "fn",
+      SearchOptions {
+        file_limit: 1,
+        ..Default::default()
+      },
+      None,
+    )
+    .await
+    .unwrap();
 
     assert_eq!(results.len(), 1);
     let result = &results[0];
@@ -321,12 +483,16 @@ mod tests {
     // Verify the new fields are present
     assert!(!result.id.is_empty());
     assert!(uuid::Uuid::parse_str(&result.id).is_ok()); // Valid UUID
-    assert_ne!(result.content_hash, [0u8; 32]); // Non-zero hash
-    assert!(result.last_modified <= chrono::Utc::now().naive_utc());
-    assert!(result.indexed_at <= chrono::Utc::now().naive_utc());
+    assert!(result.chunk_count > 0);
+    assert!(!result.chunks.is_empty());
   }
 
-  async fn setup_empty_table() -> (TempDir, Arc<RwLock<Table>>, Arc<dyn EmbeddingProvider>) {
+  async fn setup_empty_tables() -> (
+    TempDir,
+    Arc<RwLock<Table>>,
+    Arc<RwLock<Table>>,
+    Arc<dyn EmbeddingProvider>,
+  ) {
     let temp_dir = TempDir::new().unwrap();
     let db_path = temp_dir.path().join("test.lance");
 
@@ -353,13 +519,17 @@ mod tests {
     let embedding_provider = create_embedding_provider(&config).await.unwrap();
     let embedding_dim = embedding_provider.embedding_dim();
 
-    let table = CodeDocument::ensure_table(&connection, "test_embeddings", embedding_dim)
+    let doc_table = CodeDocument::ensure_table(&connection, "test_embeddings", embedding_dim)
+      .await
+      .unwrap();
+    let chunk_table = CodeChunk::ensure_table(&connection, "code_chunks", embedding_dim)
       .await
       .unwrap();
 
     (
       temp_dir,
-      Arc::new(RwLock::new(table)),
+      Arc::new(RwLock::new(doc_table)),
+      Arc::new(RwLock::new(chunk_table)),
       Arc::from(embedding_provider),
     )
   }
@@ -387,19 +557,26 @@ mod tests {
 
   #[tokio::test]
   async fn test_search_empty_database_no_error() {
-    let (_temp_dir, table, embedding_provider) = setup_empty_table().await;
+    let (_temp_dir, doc_table, chunk_table, embedding_provider) = setup_empty_tables().await;
 
     // Search on empty database should return empty results, not error
-    let results = hybrid_search(table, embedding_provider, "some query", 10)
-      .await
-      .unwrap();
+    let results = hybrid_search(
+      doc_table,
+      chunk_table,
+      embedding_provider,
+      "some query",
+      SearchOptions::default(),
+      None,
+    )
+    .await
+    .unwrap();
 
     assert_eq!(results.len(), 0, "Empty database should return no results");
   }
 
   #[tokio::test]
   async fn test_keyword_search_works() {
-    let (_temp_dir, table, embedding_provider) = setup_empty_table().await;
+    let (_temp_dir, doc_table, chunk_table, embedding_provider) = setup_empty_tables().await;
 
     // Add documents with real embeddings
     let docs = vec![
@@ -423,19 +600,58 @@ mod tests {
       .await,
     ];
 
-    // Insert documents
+    // Insert documents and create chunks
     {
-      let table_write = table.write().await;
-      for doc in docs {
-        let arrow_data = doc.into_arrow().unwrap();
-        table_write.add(arrow_data).execute().await.unwrap();
+      let doc_write = doc_table.write().await;
+      let chunk_write = chunk_table.write().await;
+      for mut doc in docs {
+        doc.languages = vec!["rust".to_string()];
+        doc.primary_language = Some("rust".to_string());
+        doc.chunk_count = 1;
+
+        // Create chunk for document
+        let mut chunk = CodeChunk::builder()
+          .file_id(doc.id)
+          .project_id(doc.project_id)
+          .file_path(doc.file_path.clone())
+          .content(doc.content.clone())
+          .start_byte(0)
+          .end_byte(doc.content.len())
+          .start_line(1)
+          .end_line(1)
+          .build();
+        chunk.update_embedding(doc.content_embedding.clone());
+        chunk.update_metadata(
+          ChunkMetadataUpdate::builder()
+            .node_type("function".to_string())
+            .node_name(None)
+            .language("rust".to_string())
+            .parent_context(None)
+            .scope_path(vec![])
+            .definitions(vec![])
+            .references(vec![])
+            .build(),
+        );
+
+        let doc_arrow = doc.into_arrow().unwrap();
+        doc_write.add(doc_arrow).execute().await.unwrap();
+
+        let chunk_arrow = chunk.into_arrow().unwrap();
+        chunk_write.add(chunk_arrow).execute().await.unwrap();
       }
     }
 
     // Search for "fibonacci" - should find math.rs
-    let results = hybrid_search(table.clone(), embedding_provider.clone(), "fibonacci", 10)
-      .await
-      .unwrap();
+    let results = hybrid_search(
+      doc_table.clone(),
+      chunk_table.clone(),
+      embedding_provider.clone(),
+      "fibonacci",
+      SearchOptions::default(),
+      None,
+    )
+    .await
+    .unwrap();
 
     assert!(!results.is_empty(), "Should find results for 'fibonacci'");
     assert_eq!(
@@ -446,11 +662,15 @@ mod tests {
       results[0].relevance_score > 0.0,
       "Should have non-zero relevance score"
     );
+    assert!(
+      !results[0].chunks.is_empty(),
+      "Documents are created from chunks, so must have chunks"
+    );
   }
 
   #[tokio::test]
   async fn test_vector_search_semantic_similarity() {
-    let (_temp_dir, table, embedding_provider) = setup_empty_table().await;
+    let (_temp_dir, doc_table, chunk_table, embedding_provider) = setup_empty_tables().await;
 
     // Add documents about similar topics with real embeddings
     let docs = vec![
@@ -487,22 +707,56 @@ mod tests {
       .await,
     ];
 
-    // Insert documents
+    // Insert documents and create chunks
     {
-      let table_write = table.write().await;
-      for doc in docs {
-        let arrow_data = doc.into_arrow().unwrap();
-        table_write.add(arrow_data).execute().await.unwrap();
+      let doc_write = doc_table.write().await;
+      let chunk_write = chunk_table.write().await;
+      for mut doc in docs {
+        doc.languages = vec!["rust".to_string()];
+        doc.primary_language = Some("rust".to_string());
+        doc.chunk_count = 1;
+
+        // Create chunk for document
+        let mut chunk = CodeChunk::builder()
+          .file_id(doc.id)
+          .project_id(doc.project_id)
+          .file_path(doc.file_path.clone())
+          .content(doc.content.clone())
+          .start_byte(0)
+          .end_byte(doc.content.len())
+          .start_line(1)
+          .end_line(doc.content.lines().count())
+          .build();
+        chunk.update_embedding(doc.content_embedding.clone());
+        chunk.update_metadata(
+          ChunkMetadataUpdate::builder()
+            .node_type("function".to_string())
+            .node_name(None)
+            .language("rust".to_string())
+            .parent_context(None)
+            .scope_path(vec![])
+            .definitions(vec![])
+            .references(vec![])
+            .build(),
+        );
+
+        let doc_arrow = doc.into_arrow().unwrap();
+        doc_write.add(doc_arrow).execute().await.unwrap();
+
+        let chunk_arrow = chunk.into_arrow().unwrap();
+        chunk_write.add(chunk_arrow).execute().await.unwrap();
       }
     }
 
     // Search for "retrieve user information from database"
     // Should find both user_service.rs and customer_api.rs as they're semantically similar
     let results = hybrid_search(
-      table.clone(),
+      doc_table.clone(),
+      chunk_table.clone(),
       embedding_provider.clone(),
       "retrieve user information from database",
-      10,
+      SearchOptions::default(),
+      None,
     )
     .await
     .unwrap();
@@ -541,7 +795,7 @@ mod tests {
 
   #[tokio::test]
   async fn test_vector_search_ranking_quality() {
-    let (_temp_dir, table, embedding_provider) = setup_empty_table().await;
+    let (_temp_dir, doc_table, chunk_table, embedding_provider) = setup_empty_tables().await;
 
     // Add documents with varying relevance to "error handling"
     let docs = vec![
@@ -591,21 +845,55 @@ mod tests {
       .await,
     ];
 
-    // Insert documents
+    // Insert documents and create chunks
     {
-      let table_write = table.write().await;
-      for doc in docs {
-        let arrow_data = doc.into_arrow().unwrap();
-        table_write.add(arrow_data).execute().await.unwrap();
+      let doc_write = doc_table.write().await;
+      let chunk_write = chunk_table.write().await;
+      for mut doc in docs {
+        doc.languages = vec!["rust".to_string()];
+        doc.primary_language = Some("rust".to_string());
+        doc.chunk_count = 1;
+
+        // Create chunk for document
+        let mut chunk = CodeChunk::builder()
+          .file_id(doc.id)
+          .project_id(doc.project_id)
+          .file_path(doc.file_path.clone())
+          .content(doc.content.clone())
+          .start_byte(0)
+          .end_byte(doc.content.len())
+          .start_line(1)
+          .end_line(doc.content.lines().count())
+          .build();
+        chunk.update_embedding(doc.content_embedding.clone());
+        chunk.update_metadata(
+          ChunkMetadataUpdate::builder()
+            .node_type("function".to_string())
+            .node_name(None)
+            .language("rust".to_string())
+            .parent_context(None)
+            .scope_path(vec![])
+            .definitions(vec![])
+            .references(vec![])
+            .build(),
+        );
+
+        let doc_arrow = doc.into_arrow().unwrap();
+        doc_write.add(doc_arrow).execute().await.unwrap();
+
+        let chunk_arrow = chunk.into_arrow().unwrap();
+        chunk_write.add(chunk_arrow).execute().await.unwrap();
       }
     }
 
     // Search for "error handling"
     let results = hybrid_search(
-      table.clone(),
+      doc_table.clone(),
+      chunk_table.clone(),
       embedding_provider.clone(),
       "error handling and recovery",
-      10,
+      SearchOptions::default(),
+      None,
     )
     .await
     .unwrap();
@@ -634,6 +922,98 @@ mod tests {
       assert!(
         v_rank < p_rank,
         "Validator (with error handling) should rank higher than payment processing"
+      );
+    }
+  }
+
+  #[tokio::test]
+  async fn test_language_filtering() {
+    let (_temp_dir, doc_table, chunk_table) = setup_test_table_with_chunks().await;
+    let embedding_provider = Arc::new(MockEmbeddingProvider::new(384));
+
+    // Test filtering for rust files only
+    let rust_options = SearchOptions {
+      languages: Some(vec!["rust".to_string()]),
+      ..Default::default()
+    };
+
+    let rust_results = hybrid_search(
+      doc_table.clone(),
+      chunk_table.clone(),
+      embedding_provider.clone(),
+      "search",
+      rust_options,
+      None,
+    )
+    .await
+    .unwrap();
+
+    // Should only get rust files, not markdown
+    assert!(!rust_results.is_empty());
+    for result in &rust_results {
+      assert!(
+        result.file_path.ends_with(".rs"),
+        "Expected only .rs files, got {}",
+        result.file_path
+      );
+    }
+
+    // Test filtering for markdown only
+    let md_options = SearchOptions {
+      languages: Some(vec!["markdown".to_string()]),
+      ..Default::default()
+    };
+
+    let md_results = hybrid_search(
+      doc_table.clone(),
+      chunk_table.clone(),
+      embedding_provider.clone(),
+      "search",
+      md_options,
+      None,
+    )
+    .await
+    .unwrap();
+
+    // Should only get markdown files
+    for result in &md_results {
+      assert!(
+        result.file_path.ends_with(".md"),
+        "Expected only .md files, got {}",
+        result.file_path
+      );
+    }
+  }
+
+  #[tokio::test]
+  async fn test_chunks_per_file_limit() {
+    let (_temp_dir, doc_table, chunk_table) = setup_test_table_with_chunks().await;
+    let embedding_provider = Arc::new(MockEmbeddingProvider::new(384));
+
+    // Test with chunks_per_file = 1
+    let options = SearchOptions {
+      chunks_per_file: 1,
+      ..Default::default()
+    };
+
+    let results = hybrid_search(
+      doc_table,
+      chunk_table,
+      embedding_provider,
+      "search",
+      options,
+      None,
+    )
+    .await
+    .unwrap();
+
+    for result in &results {
+      assert_eq!(
+        result.chunks.len(),
+        1,
+        "Expected exactly 1 chunk per file, got {} for {}",
+        result.chunks.len(),
+        result.file_path
       );
     }
   }

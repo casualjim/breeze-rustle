@@ -1,7 +1,7 @@
 # Example configuration for Breeze
 
 # Database configuration
-db_dir = "./embeddings.qwen.db"
+db_dir = "./embeddings.db"
 
 [server]
 
@@ -44,9 +44,9 @@ batch_size = 256 # Number of chunks to collect in a batch betfore sending to the
 
 [embeddings]
 # The selected embedding provider, from the providers defined below
-# provider = "local" | "openai" | "ollama"  | "llamacpp"| "voyage" | "cohere" | "my-provider"
-provider = "qwen3"  # Default embedding provider
-workers = 5 # Number of concurrent embedding requests
+# provider = "local" | "openai" | "ollama"  | "llamacpp"| "voyage" | "cohere" | "my-provider" | ...
+provider = "voyage"
+workers = 5 # Number of concurrent chunk batchers to use for the embedding provider
 
 # [embeddings.local]
 # model = "ibm-granite/granite-embedding-125m-english"  # Local model for embeddings
@@ -113,7 +113,7 @@ max_concurrent_requests = 1
 # --env "HF_HOME=/workspace/hf_home"
 [embeddings.qwen3]
 model = "Qwen/Qwen3-Embedding-0.6B"
-api_base = "https://se9viv4jogmz60-8000.proxy.runpod.net/v1"
+api_base = "https://wfqcjfjn5a7hiv-8000.proxy.runpod.net/v1"
 context_length = 32768
 embedding_dim = 1024
 tokenizer = "hf:Qwen/Qwen3-Embedding-0.6B"

@@ -279,6 +279,11 @@ mod tests {
     let task_table = Arc::new(RwLock::new(task_table));
     let code_table = Arc::new(RwLock::new(code_table));
 
+    let chunk_table = crate::models::CodeChunk::ensure_table(&connection, "test_chunks", 384)
+      .await
+      .unwrap();
+    let chunk_table = Arc::new(RwLock::new(chunk_table));
+
     let failed_batches_table =
       crate::models::FailedEmbeddingBatch::ensure_table(&connection, "test_failed_batches")
         .await
@@ -309,6 +314,7 @@ mod tests {
       Arc::from(embedding_provider),
       384, // BAAI/bge-small-en-v1.5 has 384 dimensions
       code_table.clone(),
+      chunk_table,
     );
 
     let task_manager = Arc::new(TaskManager::new(

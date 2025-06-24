@@ -28,11 +28,22 @@ use crate::sinks::lancedb_sink::LanceDbSink;
 // Type alias for document builder result
 type DocumentBuilderResult = (usize, Option<(std::collections::BTreeSet<String>, String)>);
 
+struct DocumentBuilderParams {
+  project_id: Uuid,
+  embedded_rx: mpsc::Receiver<EmbeddedChunkWithFile>,
+  doc_tx: mpsc::Sender<CodeDocument>,
+  chunk_tx: mpsc::Sender<crate::models::CodeChunk>,
+  embedding_dim: usize,
+  stats: IndexingStats,
+  cancel_token: CancellationToken,
+}
+
 pub struct BulkIndexer {
   config: Arc<Config>,
   embedding_provider: Arc<dyn EmbeddingProvider>,
   embedding_dim: usize,
   table: Arc<RwLock<Table>>,
+  chunk_table: Arc<RwLock<Table>>,
   last_optimize_version: Arc<RwLock<u64>>,
 }
 
@@ -42,6 +53,7 @@ impl BulkIndexer {
     embedding_provider: Arc<dyn EmbeddingProvider>,
     embedding_dim: usize,
     table: Arc<RwLock<Table>>,
+    chunk_table: Arc<RwLock<Table>>,
   ) -> Self {
     // Initialize with version 0 - will be updated on first use
     let last_optimize_version = Arc::new(RwLock::new(0));
@@ -61,6 +73,7 @@ impl BulkIndexer {
       embedding_provider,
       embedding_dim,
       table,
+      chunk_table,
       last_optimize_version,
     }
   }
@@ -391,6 +404,7 @@ impl BulkIndexer {
     let (batch_tx, batch_rx) = mpsc::channel::<ChunkBatch>(10);
     let (embedded_tx, embedded_rx) = mpsc::channel::<EmbeddedChunkWithFile>(100);
     let (doc_tx, doc_rx) = mpsc::channel::<CodeDocument>(50);
+    let (chunk_tx, chunk_rx) = mpsc::channel::<crate::models::CodeChunk>(100);
     let (delete_tx, delete_rx) = mpsc::channel::<(Uuid, PathBuf)>(25);
 
     // Progress tracking and cancellation
@@ -400,15 +414,17 @@ impl BulkIndexer {
     // Start pipeline stages with cancellation support
     // we start this with in the reverse order of execution
     let sink_handle = self.spawn_sink(doc_rx, stats.clone(), embedding_dim);
+    let chunk_sink_handle = self.spawn_chunk_sink(chunk_rx, stats.clone(), embedding_dim);
     let delete_handle = self.spawn_delete_handler(project_id, delete_rx, cancel_token.clone());
-    let doc_handle = self.spawn_document_builder(
+    let doc_handle = self.spawn_document_builder(DocumentBuilderParams {
       project_id,
       embedded_rx,
       doc_tx,
+      chunk_tx,
       embedding_dim,
-      stats.clone(),
-      cancel_token.clone(),
-    );
+      stats: stats.clone(),
+      cancel_token: cancel_token.clone(),
+    });
 
     // Choose between single worker or multi-worker based on provider type
     let embed_handles = if self.embedding_provider.is_remote() {
@@ -444,6 +460,7 @@ impl BulkIndexer {
     let walk_result = walk_handle.await;
     let doc_result = doc_handle.await;
     let sink_result = sink_handle.await;
+    let chunk_sink_result = chunk_sink_handle.await;
     let delete_result = delete_handle.await;
 
     // Wait for all embedding workers
@@ -491,6 +508,10 @@ impl BulkIndexer {
     let documents_written = sink_result
       .map_err(|e| IndexerError::Task(format!("Sink task panicked: {}", e)))?
       .map_err(|e| IndexerError::Task(format!("Sink task failed: {}", e)))?;
+
+    let _chunks_written = chunk_sink_result
+      .map_err(|e| IndexerError::Task(format!("Chunk sink task panicked: {}", e)))?
+      .map_err(|e| IndexerError::Task(format!("Chunk sink task failed: {}", e)))?;
 
     // Report results
     info!(
@@ -599,20 +620,16 @@ impl BulkIndexer {
 
   fn spawn_document_builder(
     &self,
-    project_id: Uuid,
-    embedded_rx: mpsc::Receiver<EmbeddedChunkWithFile>,
-    doc_tx: mpsc::Sender<CodeDocument>,
-    embedding_dim: usize,
-    stats: IndexingStats,
-    cancel_token: CancellationToken,
+    params: DocumentBuilderParams,
   ) -> tokio::task::JoinHandle<DocumentBuilderResult> {
     tokio::spawn(document_builder_task(
-      project_id,
-      embedded_rx,
-      doc_tx,
-      embedding_dim,
-      stats,
-      cancel_token,
+      params.project_id,
+      params.embedded_rx,
+      params.doc_tx,
+      params.chunk_tx,
+      params.embedding_dim,
+      params.stats,
+      params.cancel_token,
     ))
   }
 
@@ -632,6 +649,24 @@ impl BulkIndexer {
       last_optimize_version,
       optimize_threshold,
       stats,
+    ))
+  }
+
+  fn spawn_chunk_sink(
+    &self,
+    chunk_rx: mpsc::Receiver<crate::models::CodeChunk>,
+    _stats: IndexingStats,
+    embedding_dim: usize,
+  ) -> tokio::task::JoinHandle<Result<usize, IndexerError>> {
+    let chunk_table = self.chunk_table.clone();
+    let last_optimize_version = self.last_optimize_version.clone();
+    let optimize_threshold = self.config.optimize_threshold;
+    tokio::spawn(chunk_sink_task(
+      chunk_rx,
+      chunk_table,
+      embedding_dim,
+      last_optimize_version,
+      optimize_threshold,
     ))
   }
 
@@ -1312,6 +1347,7 @@ async fn document_builder_task(
   project_id: Uuid,
   mut embedded_rx: mpsc::Receiver<EmbeddedChunkWithFile>,
   doc_tx: mpsc::Sender<CodeDocument>,
+  chunk_tx: mpsc::Sender<crate::models::CodeChunk>,
   embedding_dim: usize,
   stats: IndexingStats,
   cancel_token: CancellationToken,
@@ -1397,8 +1433,17 @@ async fn document_builder_task(
                           embedding: vec![],
                         });
 
-                        if let Some(doc) = build_document_from_accumulator(project_id, accumulator, embedding_dim).await {
+                        if let Some((doc, chunks)) = build_document_from_accumulator(project_id, accumulator, embedding_dim).await {
                           stats.documents.fetch_add(1, Ordering::Relaxed);
+
+                          // Store chunks to code_chunks table
+                          for chunk in chunks {
+                            if chunk_tx.send(chunk).await.is_err() {
+                              debug!("Chunk receiver dropped");
+                              break;
+                            }
+                          }
+
                           document_batch.push(doc);
 
                           // Send batch when we reach 100 documents
@@ -1509,10 +1554,19 @@ async fn document_builder_task(
               embedding: vec![],
             });
 
-            if let Some(doc) =
+            if let Some((doc, chunks)) =
               build_document_from_accumulator(project_id, accumulator, embedding_dim).await
             {
               stats.documents.fetch_add(1, Ordering::Relaxed);
+
+              // Store chunks to code_chunks table
+              for chunk in chunks {
+                if chunk_tx.send(chunk).await.is_err() {
+                  debug!("Chunk receiver dropped");
+                  break;
+                }
+              }
+
               document_batch.push(doc);
             }
           } else {
@@ -1544,9 +1598,19 @@ async fn document_builder_task(
       continue;
     }
 
-    if let Some(doc) = build_document_from_accumulator(project_id, accumulator, embedding_dim).await
+    if let Some((doc, chunks)) =
+      build_document_from_accumulator(project_id, accumulator, embedding_dim).await
     {
       stats.documents.fetch_add(1, Ordering::Relaxed);
+
+      // Store chunks to code_chunks table
+      for chunk in chunks {
+        if chunk_tx.send(chunk).await.is_err() {
+          debug!("Chunk receiver dropped");
+          break;
+        }
+      }
+
       document_batch.push(doc);
     }
   }
@@ -1604,15 +1668,48 @@ async fn sink_task(
   // Get the final row count from the table, excluding the dummy document
   let table_guard = table.read().await;
   let count = table_guard
-    .count_rows(Some(format!(
-      "id != '{}'",
-      crate::models::DUMMY_DOCUMENT_ID
-    )))
+    .count_rows(Some(format!("id != '{}'", Uuid::nil())))
     .await? as usize;
   debug!(
     row_count = count,
     "Final table row count (excluding dummy document)"
   );
+
+  Ok(count)
+}
+
+async fn chunk_sink_task(
+  chunk_rx: mpsc::Receiver<crate::models::CodeChunk>,
+  table: Arc<RwLock<Table>>,
+  embedding_dim: usize,
+  last_optimize_version: Arc<RwLock<u64>>,
+  optimize_threshold: u64,
+) -> Result<usize, IndexerError> {
+  let _guard = TaskGuard::new("Chunk Sink");
+  let converter = BufferedRecordBatchConverter::<crate::models::CodeChunk>::default()
+    .with_schema(Arc::new(crate::models::CodeChunk::schema(embedding_dim)));
+
+  let sink = crate::sinks::chunk_sink::ChunkSink::new(
+    table.clone(),
+    last_optimize_version,
+    optimize_threshold,
+  );
+
+  let chunk_stream = tokio_stream::wrappers::ReceiverStream::new(chunk_rx);
+  let record_batches = converter.convert(Box::pin(chunk_stream));
+
+  let mut sink_stream = sink.sink(record_batches);
+  let mut batch_count = 0;
+
+  while let Some(()) = sink_stream.next().await {
+    batch_count += 1;
+    debug!(batch_number = batch_count, "Written chunk batch to LanceDB");
+  }
+
+  // Get the final row count from the table
+  let table_guard = table.read().await;
+  let count = table_guard.count_rows(None).await? as usize;
+  debug!(row_count = count, "Final chunk table row count");
 
   Ok(count)
 }
@@ -1840,12 +1937,17 @@ mod tests {
     let table = CodeDocument::ensure_table(&connection, "test", embedding_dim)
       .await
       .unwrap();
+    let chunk_table =
+      crate::models::CodeChunk::ensure_table(&connection, "test_chunks", embedding_dim)
+        .await
+        .unwrap();
 
     let indexer = BulkIndexer::new(
       Arc::new(config),
       embedding_provider,
       embedding_dim,
       Arc::new(RwLock::new(table)),
+      Arc::new(RwLock::new(chunk_table)),
     );
 
     // Create test stream with 2 files
@@ -1877,6 +1979,7 @@ mod tests {
     let embedding_dim = 384;
     let (embedded_tx, embedded_rx) = mpsc::channel(1000);
     let (doc_tx, mut doc_rx) = mpsc::channel(1000);
+    let (chunk_tx, _chunk_rx) = mpsc::channel(1000);
     let stats = IndexingStats::new();
     let cancel_token = CancellationToken::new();
 
@@ -1888,6 +1991,7 @@ mod tests {
         Uuid::now_v7(),
         embedded_rx,
         doc_tx,
+        chunk_tx,
         embedding_dim,
         stats_clone,
         cancel_clone,
@@ -2011,12 +2115,17 @@ mod tests {
     let table = CodeDocument::ensure_table(&connection, "test", embedding_dim)
       .await
       .unwrap();
+    let chunk_table =
+      crate::models::CodeChunk::ensure_table(&connection, "test_chunks", embedding_dim)
+        .await
+        .unwrap();
 
     let indexer = BulkIndexer::new(
       Arc::new(config),
       embedding_provider,
       embedding_dim,
       Arc::new(RwLock::new(table)),
+      Arc::new(RwLock::new(chunk_table)),
     );
 
     // Stream with an error in the middle
@@ -2068,12 +2177,17 @@ mod tests {
       let table = CodeDocument::ensure_table(&connection, "test", embedding_dim)
         .await
         .unwrap();
+      let chunk_table =
+        crate::models::CodeChunk::ensure_table(&connection, "test_chunks", embedding_dim)
+          .await
+          .unwrap();
 
       let indexer = BulkIndexer::new(
         Arc::new(config),
         embedding_provider,
         embedding_dim,
         Arc::new(RwLock::new(table)),
+        Arc::new(RwLock::new(chunk_table)),
       );
       indexer
         .index_stream(Uuid::now_v7(), chunk_stream, 5, None)
@@ -2104,12 +2218,17 @@ mod tests {
     let table = CodeDocument::ensure_table(&connection, "test", embedding_dim)
       .await
       .unwrap();
+    let chunk_table =
+      crate::models::CodeChunk::ensure_table(&connection, "test_chunks", embedding_dim)
+        .await
+        .unwrap();
 
     let indexer = BulkIndexer::new(
       Arc::new(config),
       embedding_provider,
       embedding_dim,
       Arc::new(RwLock::new(table)),
+      Arc::new(RwLock::new(chunk_table)),
     );
 
     // Create many chunks for one file to test batching
@@ -2147,12 +2266,17 @@ mod tests {
     let table = CodeDocument::ensure_table(&connection, "test", embedding_dim)
       .await
       .unwrap();
+    let chunk_table =
+      crate::models::CodeChunk::ensure_table(&connection, "test_chunks", embedding_dim)
+        .await
+        .unwrap();
 
     let indexer = BulkIndexer::new(
       Arc::new(config),
       embedding_provider,
       embedding_dim,
       Arc::new(RwLock::new(table)),
+      Arc::new(RwLock::new(chunk_table)),
     );
 
     let chunk_stream = stream::iter(vec![] as Vec<Result<ProjectChunk, ChunkError>>);
@@ -2179,12 +2303,17 @@ mod tests {
     let table = CodeDocument::ensure_table(&connection, "test", embedding_dim)
       .await
       .unwrap();
+    let chunk_table =
+      crate::models::CodeChunk::ensure_table(&connection, "test_chunks", embedding_dim)
+        .await
+        .unwrap();
 
     let indexer = BulkIndexer::new(
       Arc::new(config),
       embedding_provider,
       embedding_dim,
       Arc::new(RwLock::new(table)),
+      Arc::new(RwLock::new(chunk_table)),
     );
 
     // Files with only EOF markers (empty files)
@@ -2218,12 +2347,17 @@ mod tests {
     let table = CodeDocument::ensure_table(&connection, "test", embedding_dim)
       .await
       .unwrap();
+    let chunk_table =
+      crate::models::CodeChunk::ensure_table(&connection, "test_chunks", embedding_dim)
+        .await
+        .unwrap();
 
     let indexer = BulkIndexer::new(
       Arc::new(config),
       embedding_provider,
       embedding_dim,
       Arc::new(RwLock::new(table)),
+      Arc::new(RwLock::new(chunk_table)),
     );
 
     // Single file with multiple chunks
@@ -2242,6 +2376,50 @@ mod tests {
 
     assert_eq!(count, 1, "Should have indexed 1 document with 3 chunks");
     assert!(failures.is_none(), "Should have no failures");
+
+    // Verify chunks were stored (excluding dummy chunk)
+    let chunk_table = connection
+      .open_table("test_chunks")
+      .execute()
+      .await
+      .unwrap();
+    let mut chunk_stream = chunk_table
+      .query()
+      .only_if(format!("id != '{}'", Uuid::nil()))
+      .execute()
+      .await
+      .unwrap();
+    let mut chunk_results = Vec::new();
+    while let Some(batch) = chunk_stream.next().await {
+      chunk_results.push(batch.unwrap());
+    }
+
+    // Count non-dummy chunks
+    let chunk_count = chunk_table
+      .count_rows(Some(format!("id != '{}'", Uuid::nil())))
+      .await
+      .unwrap();
+    assert_eq!(chunk_count, 3, "Should have stored 3 chunks");
+
+    // Verify chunk content
+    for batch in &chunk_results {
+      if batch.num_rows() > 0 {
+        let file_path_col = batch
+          .column_by_name("file_path")
+          .unwrap()
+          .as_any()
+          .downcast_ref::<arrow::array::StringArray>()
+          .unwrap();
+
+        for i in 0..batch.num_rows() {
+          let file_path = file_path_col.value(i);
+          assert_eq!(
+            file_path, "single.rs",
+            "All chunks should be from single.rs"
+          );
+        }
+      }
+    }
   }
 
   #[tokio::test]
@@ -2262,12 +2440,17 @@ mod tests {
     let table = CodeDocument::ensure_table(&connection, "test", embedding_dim)
       .await
       .unwrap();
+    let chunk_table =
+      crate::models::CodeChunk::ensure_table(&connection, "test_chunks", embedding_dim)
+        .await
+        .unwrap();
 
     let indexer = BulkIndexer::new(
       Arc::new(config),
       embedding_provider,
       embedding_dim,
       Arc::new(RwLock::new(table)),
+      Arc::new(RwLock::new(chunk_table)),
     );
 
     // Create 101 files to test the 100 document batch limit
@@ -2292,6 +2475,18 @@ mod tests {
 
     assert_eq!(count, 101, "Should have indexed 101 documents");
     assert!(failures.is_none(), "Should have no failures");
+
+    // Verify chunks were stored (101 files × 1 chunk each, excluding dummy)
+    let chunk_table = connection
+      .open_table("test_chunks")
+      .execute()
+      .await
+      .unwrap();
+    let chunk_count = chunk_table
+      .count_rows(Some(format!("id != '{}'", Uuid::nil())))
+      .await
+      .unwrap();
+    assert_eq!(chunk_count, 101, "Should have stored 101 chunks");
   }
 
   // Integration test with real embedder (keep existing test)
@@ -2317,12 +2512,17 @@ mod tests {
     let table = CodeDocument::ensure_table(&connection, "test_table", embedding_dim)
       .await
       .unwrap();
+    let chunk_table =
+      crate::models::CodeChunk::ensure_table(&connection, "test_chunks", embedding_dim)
+        .await
+        .unwrap();
 
     let indexer = BulkIndexer::new(
       Arc::new(config),
       embedding_provider,
       embedding_dim,
       Arc::new(RwLock::new(table)),
+      Arc::new(RwLock::new(chunk_table)),
     );
 
     let test_dir = tempdir().unwrap();
@@ -2616,6 +2816,7 @@ def goodbye():
     let embedding_dim = 384;
     let (embedded_tx, embedded_rx) = mpsc::channel(100);
     let (doc_tx, mut doc_rx) = mpsc::channel(100);
+    let (chunk_tx, _chunk_rx) = mpsc::channel(100);
     let stats = IndexingStats::new();
     let cancel_token = CancellationToken::new();
     let project_id = Uuid::now_v7();
@@ -2626,6 +2827,7 @@ def goodbye():
         project_id,
         embedded_rx,
         doc_tx,
+        chunk_tx,
         embedding_dim,
         stats,
         cancel_token,

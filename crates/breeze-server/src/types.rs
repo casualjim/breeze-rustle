@@ -58,31 +58,62 @@ pub struct IndexFileRequest {
 pub struct SearchRequest {
   pub query: String,
   pub limit: Option<usize>,
+  pub chunks_per_file: Option<usize>,
+  pub languages: Option<Vec<String>>,
+  pub granularity: Option<SearchGranularity>,
+
+  // Semantic filters for chunk mode
+  pub node_types: Option<Vec<String>>,
+  pub node_name_pattern: Option<String>,
+  pub parent_context_pattern: Option<String>,
+  pub scope_depth: Option<(usize, usize)>,
+  pub has_definitions: Option<Vec<String>>,
+  pub has_references: Option<Vec<String>>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum SearchGranularity {
+  Document,
+  Chunk,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ChunkResult {
+  pub content: String,
+  pub start_line: usize,
+  pub end_line: usize,
+  pub relevance_score: f32,
+}
+
+impl From<breeze_indexer::ChunkResult> for ChunkResult {
+  fn from(chunk: breeze_indexer::ChunkResult) -> Self {
+    ChunkResult {
+      content: chunk.content,
+      start_line: chunk.start_line,
+      end_line: chunk.end_line,
+      relevance_score: chunk.relevance_score,
+    }
+  }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct SearchResult {
   pub id: String,
   pub file_path: String,
-  pub content: String,
-  pub content_hash: [u8; 32],
   pub relevance_score: f32,
-  pub file_size: u64,
-  pub last_modified: chrono::NaiveDateTime,
-  pub indexed_at: chrono::NaiveDateTime,
+  pub chunk_count: u32,
+  pub chunks: Vec<ChunkResult>,
 }
 
 impl From<breeze_indexer::SearchResult> for SearchResult {
   fn from(result: breeze_indexer::SearchResult) -> Self {
     SearchResult {
-      id: result.id.to_string(),
+      id: result.id,
       file_path: result.file_path,
-      content: result.content,
-      content_hash: result.content_hash,
       relevance_score: result.relevance_score,
-      file_size: result.file_size,
-      last_modified: result.last_modified,
-      indexed_at: result.indexed_at,
+      chunk_count: result.chunk_count,
+      chunks: result.chunks.into_iter().map(ChunkResult::from).collect(),
     }
   }
 }

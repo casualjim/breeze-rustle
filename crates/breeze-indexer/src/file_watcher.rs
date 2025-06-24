@@ -214,6 +214,11 @@ mod tests {
       .unwrap();
     let code_table = Arc::new(RwLock::new(code_table));
 
+    let chunk_table = crate::models::CodeChunk::ensure_table(&connection, "test_chunks", 384)
+      .await
+      .unwrap();
+    let chunk_table = Arc::new(RwLock::new(chunk_table));
+
     let failed_batches_table =
       crate::models::FailedEmbeddingBatch::ensure_table(&connection, "test_failed_batches")
         .await
@@ -228,6 +233,7 @@ mod tests {
       Arc::from(embedding_provider),
       384,
       code_table.clone(),
+      chunk_table,
     );
 
     let task_manager = Arc::new(TaskManager::new(

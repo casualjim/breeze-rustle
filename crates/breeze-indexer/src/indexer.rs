@@ -10,7 +10,7 @@ use tracing::{error, info};
 use uuid::Uuid;
 
 use crate::{
-  Config, SearchResult,
+  Config, SearchOptions, SearchResult,
   bulk_indexer::BulkIndexer,
   embeddings::{EmbeddingError, EmbeddingProvider, factory::create_embedding_provider},
   file_watcher::ProjectWatcher,
@@ -77,6 +77,7 @@ pub struct Indexer {
   config: Arc<Config>,
   embedding_provider: Arc<dyn EmbeddingProvider>,
   table: Arc<RwLock<Table>>,
+  chunk_table: Arc<RwLock<Table>>,
   task_manager: Arc<TaskManager>,
   project_manager: Arc<ProjectManager>,
   active_watchers: DashMap<Uuid, Arc<ProjectWatcher>>,
@@ -107,6 +108,8 @@ impl Indexer {
 
     // Ensure tables exist
     let table = CodeDocument::ensure_table(&connection, "code_embeddings", embedding_dim).await?;
+    let chunk_table =
+      crate::models::CodeChunk::ensure_table(&connection, "code_chunks", embedding_dim).await?;
 
     let task_table = crate::models::IndexTask::ensure_table(&connection, "index_tasks").await?;
 
@@ -122,6 +125,7 @@ impl Indexer {
     let task_table = Arc::new(RwLock::new(task_table));
     let failed_batches_table = Arc::new(RwLock::new(failed_batches_table));
     let table = Arc::new(RwLock::new(table));
+    let chunk_table = Arc::new(RwLock::new(chunk_table));
     let config = Arc::new(config);
     let embedding_provider: Arc<dyn EmbeddingProvider> = Arc::from(embedding_provider);
 
@@ -134,6 +138,7 @@ impl Indexer {
         embedding_provider.clone(),
         embedding_dim,
         table.clone(),
+        chunk_table.clone(),
       ),
     ));
 
@@ -144,6 +149,7 @@ impl Indexer {
       config,
       embedding_provider,
       table,
+      chunk_table,
       task_manager,
       project_manager,
       active_watchers: DashMap::new(),
@@ -311,12 +317,18 @@ impl Indexer {
   }
 
   /// Search the indexed code
-  pub async fn search(&self, query: &str, limit: usize) -> Result<Vec<SearchResult>, IndexerError> {
+  pub async fn search(
+    &self,
+    query: &str,
+    options: SearchOptions,
+  ) -> Result<Vec<SearchResult>, IndexerError> {
     hybrid_search(
       self.table.clone(),
+      self.chunk_table.clone(),
       self.embedding_provider.clone(),
       query,
-      limit,
+      options,
+      None, // No project filter in this method
     )
     .await
     .map_err(|e| IndexerError::Search(e.to_string()))

@@ -1,15 +1,17 @@
+use std::collections::HashMap;
 use tracing::{debug, error};
 use uuid::Uuid;
 
-use crate::models::CodeDocument;
+use crate::models::{ChunkMetadataUpdate, CodeChunk, CodeDocument};
 use crate::pipeline::{FileAccumulator, PipelineChunk};
 
 /// Build a document from accumulated file chunks using weighted average
+/// Returns both the document and the individual chunks for storage
 pub(crate) async fn build_document_from_accumulator(
   project_id: Uuid,
   accumulator: FileAccumulator,
   embedding_dim: usize,
-) -> Option<CodeDocument> {
+) -> Option<(CodeDocument, Vec<CodeChunk>)> {
   if accumulator.embedded_chunks.is_empty() {
     return None;
   }
@@ -88,10 +90,69 @@ pub(crate) async fn build_document_from_accumulator(
   };
 
   // Create document with content from EOF chunk
-  let mut doc = CodeDocument::new(project_id, file_path, content);
+  let mut doc = CodeDocument::new(project_id, file_path.clone(), content);
+
+  // Extract languages and create chunks
+  let mut language_counts: HashMap<String, usize> = HashMap::new();
+  let mut code_chunks = Vec::new();
+  let doc_id = doc.id;
+
+  for embedded_chunk in &embedded_chunks {
+    match &embedded_chunk.chunk {
+      PipelineChunk::Semantic(sc) | PipelineChunk::Text(sc) => {
+        // Count language occurrences
+        *language_counts
+          .entry(sc.metadata.language.clone())
+          .or_insert(0) += sc
+          .tokens
+          .as_ref()
+          .map(|t| t.len())
+          .unwrap_or(sc.text.len() / 4);
+
+        // Create CodeChunk
+        let mut chunk = CodeChunk::builder()
+          .file_id(doc_id)
+          .project_id(project_id)
+          .file_path(file_path.clone())
+          .content(sc.text.clone())
+          .start_byte(sc.start_byte)
+          .end_byte(sc.end_byte)
+          .start_line(sc.start_line)
+          .end_line(sc.end_line)
+          .build();
+
+        // Update chunk with embedding and metadata
+        chunk.update_embedding(embedded_chunk.embedding.clone());
+        chunk.update_metadata(
+          ChunkMetadataUpdate::builder()
+            .node_type(sc.metadata.node_type.clone())
+            .node_name(sc.metadata.node_name.clone())
+            .language(sc.metadata.language.clone())
+            .parent_context(sc.metadata.parent_context.clone())
+            .scope_path(sc.metadata.scope_path.clone())
+            .definitions(sc.metadata.definitions.clone())
+            .references(sc.metadata.references.clone())
+            .build(),
+        );
+
+        code_chunks.push(chunk);
+      }
+      PipelineChunk::EndOfFile { .. } => continue,
+    }
+  }
+
+  // Set document languages and primary language
+  let mut languages: Vec<(String, usize)> = language_counts.into_iter().collect();
+  languages.sort_by(|a, b| b.1.cmp(&a.1)); // Sort by count descending
+
+  doc.languages = languages.iter().map(|(lang, _)| lang.clone()).collect();
+  doc.primary_language = languages.first().map(|(lang, _)| lang.clone());
+  doc.chunk_count = code_chunks.len() as u32;
+
   doc.update_embedding(aggregated_embedding);
   doc.update_content_hash(content_hash);
-  Some(doc)
+
+  Some((doc, code_chunks))
 }
 
 #[cfg(test)]
@@ -158,7 +219,7 @@ mod tests {
     });
 
     let project_id = uuid::Uuid::now_v7();
-    let doc = build_document_from_accumulator(project_id, accumulator, 3)
+    let (doc, chunks) = build_document_from_accumulator(project_id, accumulator, 3)
       .await
       .unwrap();
 
@@ -166,6 +227,12 @@ mod tests {
     assert_eq!(doc.file_path, file_path);
     assert_eq!(doc.content, content);
     assert_eq!(doc.content_embedding.len(), 3);
+    assert_eq!(doc.chunk_count, 3);
+    assert_eq!(doc.languages, vec!["text"]);
+    assert_eq!(doc.primary_language, Some("text".to_string()));
+
+    // Verify chunks
+    assert_eq!(chunks.len(), 3);
 
     // The weighted average should favor the longer chunk
     assert!(doc.content_embedding[0] < 0.2); // Should be small

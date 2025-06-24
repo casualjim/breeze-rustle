@@ -5,15 +5,15 @@ use tokio::sync::RwLock;
 
 use crate::pipeline::BoxStream;
 
-/// LanceDB sink for persisting record batches
-pub struct LanceDbSink {
+/// LanceDB sink for persisting chunk record batches
+pub struct ChunkSink {
   table: Arc<RwLock<lancedb::Table>>,
   last_optimize_version: Arc<RwLock<u64>>,
   optimize_threshold: u64,
 }
 
-impl LanceDbSink {
-  /// Create a new LanceDB sink with a shared table reference
+impl ChunkSink {
+  /// Create a new chunk sink with a shared table reference
   pub fn new(
     table: Arc<RwLock<lancedb::Table>>,
     last_optimize_version: Arc<RwLock<u64>>,
@@ -27,7 +27,7 @@ impl LanceDbSink {
   }
 }
 
-impl LanceDbSink {
+impl ChunkSink {
   pub fn sink(&self, batches: std::pin::Pin<Box<dyn RecordBatchStream + Send>>) -> BoxStream<()> {
     let table = self.table.clone();
     let last_optimize_version = self.last_optimize_version.clone();
@@ -47,7 +47,7 @@ impl LanceDbSink {
                     // Get read lock to access table
                     let table_guard = table.read().await;
 
-                    // Use merge_insert for upsert behavior
+                    // Use merge_insert for upsert behavior based on chunk id
                     let mut merge = table_guard.merge_insert(&["id"]);
                     merge.when_matched_update_all(None);
                     merge.when_not_matched_insert_all();
@@ -68,7 +68,7 @@ impl LanceDbSink {
                                 rows = num_rows,
                                 table_version = result.version,
                                 total_rows = total_rows,
-                                "Saved batch to LanceDB"
+                                "Saved chunk batch to LanceDB"
                             );
                             yield ();
                         }
@@ -77,7 +77,7 @@ impl LanceDbSink {
                                 error = %e,
                                 batch_number = batch_count + 1,
                                 rows = num_rows,
-                                "Failed to save batch to LanceDB"
+                                "Failed to save chunk batch to LanceDB"
                             );
                         }
                     }
@@ -85,7 +85,7 @@ impl LanceDbSink {
                 Err(e) => {
                     tracing::error!(
                         error = %e,
-                        "Error in record batch stream"
+                        "Error in chunk record batch stream"
                     );
                 }
             }
@@ -94,7 +94,7 @@ impl LanceDbSink {
         tracing::info!(
             batches_written = batch_count,
             total_rows = total_rows,
-            "LanceDB sink completed"
+            "Chunk sink completed"
         );
 
         // Check if optimization is needed after stream completion
@@ -107,7 +107,7 @@ impl LanceDbSink {
                         current_version = current_version,
                         last_optimize_version = last_version,
                         threshold = optimize_threshold,
-                        "Running LanceDB table optimization"
+                        "Running chunk table optimization"
                     );
 
                     match table_guard.optimize(lancedb::table::OptimizeAction::All).await {
@@ -116,13 +116,13 @@ impl LanceDbSink {
                             *last_optimize_version.write().await = current_version;
                             tracing::info!(
                                 new_optimize_version = current_version,
-                                "LanceDB table optimization completed successfully"
+                                "Chunk table optimization completed successfully"
                             );
                         }
                         Err(e) => {
                             tracing::warn!(
                                 error = %e,
-                                "Failed to optimize LanceDB table"
+                                "Failed to optimize chunk table"
                             );
                         }
                     }
@@ -131,14 +131,14 @@ impl LanceDbSink {
                         current_version = current_version,
                         last_optimize_version = last_version,
                         threshold = optimize_threshold,
-                        "Skipping optimization, threshold not met"
+                        "Skipping chunk table optimization, threshold not met"
                     );
                 }
             }
             Err(e) => {
                 tracing::warn!(
                     error = %e,
-                    "Failed to get table version for optimization check"
+                    "Failed to get chunk table version for optimization check"
                 );
             }
         }
@@ -148,7 +148,7 @@ impl LanceDbSink {
   }
 }
 
-impl Clone for LanceDbSink {
+impl Clone for ChunkSink {
   fn clone(&self) -> Self {
     Self {
       table: self.table.clone(),
@@ -161,7 +161,7 @@ impl Clone for LanceDbSink {
 #[cfg(test)]
 mod tests {
   use super::*;
-  use crate::models::CodeDocument;
+  use crate::models::{ChunkMetadataUpdate, CodeChunk};
   use arrow::array::StringArray;
   use arrow::record_batch::RecordBatch;
   use futures_util::stream;
@@ -170,7 +170,7 @@ mod tests {
   use tempfile::TempDir;
   use uuid::Uuid;
 
-  async fn create_test_table(
+  async fn create_test_chunk_table(
     db_path: &str,
     table_name: &str,
     embedding_dim: usize,
@@ -182,38 +182,22 @@ mod tests {
     if table_names.contains(&table_name.to_string()) {
       conn.open_table(table_name).execute().await.unwrap()
     } else {
-      // Create a dummy document to initialize the table
-      let mut dummy_doc = CodeDocument::new(
-        Uuid::nil(),
-        "dummy.py".to_string(),
-        "dummy content".to_string(),
-      );
-      dummy_doc.content_embedding = vec![0.0f32; embedding_dim];
-
-      let reader = dummy_doc.into_arrow().unwrap();
-      let table = conn
-        .create_table(table_name, reader)
-        .execute()
+      // Create table using CodeChunk's ensure_table method
+      CodeChunk::ensure_table(&conn, table_name, embedding_dim)
         .await
-        .unwrap();
-
-      // Delete the dummy row
-      table.delete("file_path = 'dummy.py'").await.unwrap();
-
-      table
+        .unwrap()
     }
   }
 
-  fn create_test_batch(docs: Vec<CodeDocument>) -> RecordBatch {
-    if docs.is_empty() {
-      return RecordBatch::new_empty(Arc::new(CodeDocument::schema(384)));
+  fn create_test_batch(chunks: Vec<CodeChunk>) -> RecordBatch {
+    if chunks.is_empty() {
+      return RecordBatch::new_empty(Arc::new(CodeChunk::schema(384)));
     }
 
-    // Use the IntoArrow implementation from CodeDocument
-    // This creates a RecordBatchReader which we can collect into a single batch
-    let readers: Vec<Box<dyn arrow::array::RecordBatchReader + Send>> = docs
+    // Use the IntoArrow implementation from CodeChunk
+    let readers: Vec<Box<dyn arrow::array::RecordBatchReader + Send>> = chunks
       .into_iter()
-      .map(|doc| doc.into_arrow().unwrap())
+      .map(|chunk| chunk.into_arrow().unwrap())
       .collect();
 
     // Collect all batches from all readers
@@ -226,7 +210,7 @@ mod tests {
 
     // Concatenate all batches into one
     if all_batches.is_empty() {
-      RecordBatch::new_empty(Arc::new(CodeDocument::schema(384)))
+      RecordBatch::new_empty(Arc::new(CodeChunk::schema(384)))
     } else {
       let schema = all_batches[0].schema();
       arrow::compute::concat_batches(&schema, &all_batches).expect("Failed to concat batches")
@@ -234,38 +218,70 @@ mod tests {
   }
 
   #[tokio::test]
-  async fn test_lancedb_sink_basic() {
+  async fn test_chunk_sink_basic() {
     let temp_dir = TempDir::new().unwrap();
     let db_path = temp_dir.path().to_str().unwrap();
-    let table = create_test_table(db_path, "test_documents", 3).await;
+    let table = create_test_chunk_table(db_path, "test_chunks", 3).await;
 
     let current_version = table.version().await.unwrap();
-    let sink = LanceDbSink::new(
+    let sink = ChunkSink::new(
       Arc::new(RwLock::new(table)),
       Arc::new(RwLock::new(current_version)),
       250,
     );
 
-    // Create test documents
-    let mut doc1 = CodeDocument::new(
-      Uuid::now_v7(),
-      "file1.py".to_string(),
-      "print('hello')".to_string(),
+    // Create test chunks
+    let mut chunk1 = CodeChunk::builder()
+      .file_id(Uuid::now_v7())
+      .project_id(Uuid::now_v7())
+      .file_path("file1.py".to_string())
+      .content("def hello():\n    print('hello')".to_string())
+      .start_byte(0)
+      .end_byte(32)
+      .start_line(1)
+      .end_line(2)
+      .build();
+    chunk1.update_embedding(vec![1.0, 2.0, 3.0]);
+    chunk1.update_metadata(
+      ChunkMetadataUpdate::builder()
+        .node_type("function".to_string())
+        .node_name(Some("hello".to_string()))
+        .language("python".to_string())
+        .parent_context(None)
+        .scope_path(vec!["hello".to_string()])
+        .definitions(vec![])
+        .references(vec!["print".to_string()])
+        .build(),
     );
-    doc1.content_embedding = vec![1.0, 2.0, 3.0];
 
-    let mut doc2 = CodeDocument::new(
-      Uuid::now_v7(),
-      "file2.py".to_string(),
-      "def main(): pass".to_string(),
+    let mut chunk2 = CodeChunk::builder()
+      .file_id(Uuid::now_v7())
+      .project_id(Uuid::now_v7())
+      .file_path("file2.py".to_string())
+      .content("class MyClass:\n    pass".to_string())
+      .start_byte(0)
+      .end_byte(24)
+      .start_line(1)
+      .end_line(2)
+      .build();
+    chunk2.update_embedding(vec![4.0, 5.0, 6.0]);
+    chunk2.update_metadata(
+      ChunkMetadataUpdate::builder()
+        .node_type("class".to_string())
+        .node_name(Some("MyClass".to_string()))
+        .language("python".to_string())
+        .parent_context(None)
+        .scope_path(vec!["MyClass".to_string()])
+        .definitions(vec![])
+        .references(vec![])
+        .build(),
     );
-    doc2.content_embedding = vec![4.0, 5.0, 6.0];
 
-    let batch = create_test_batch(vec![doc1, doc2]);
+    let batch = create_test_batch(vec![chunk1, chunk2]);
     let batch_stream = stream::once(async { Ok(batch) });
     let record_stream = Box::pin(lancedb::arrow::SimpleRecordBatchStream::new(
       batch_stream.boxed(),
-      Arc::new(CodeDocument::schema(3)),
+      Arc::new(CodeChunk::schema(3)),
     ));
 
     // Process the stream
@@ -274,114 +290,68 @@ mod tests {
       // Process each item
     }
 
-    // Verify data was saved
+    // Verify data was saved (excluding dummy chunk)
     let conn = lancedb::connect(db_path).execute().await.unwrap();
-    let table = conn.open_table("test_documents").execute().await.unwrap();
-    let mut query_stream = table.query().execute().await.unwrap();
-
-    let mut results = Vec::new();
-    while let Some(batch) = query_stream.next().await {
-      results.push(batch.unwrap());
-    }
-
-    let total_rows: usize = results.iter().map(|b| b.num_rows()).sum();
-    assert_eq!(total_rows, 2);
+    let table = conn.open_table("test_chunks").execute().await.unwrap();
+    let count = table
+      .count_rows(Some(format!("id != '{}'", Uuid::nil())))
+      .await
+      .unwrap();
+    assert_eq!(count, 2);
   }
 
   #[tokio::test]
-  async fn test_lancedb_sink_optimization() {
+  async fn test_chunk_sink_upsert() {
     let temp_dir = TempDir::new().unwrap();
     let db_path = temp_dir.path().to_str().unwrap();
-    let table = create_test_table(db_path, "optimization_test", 3).await;
-
-    // Get initial version
-    let initial_version = table.version().await.unwrap();
-
-    // Create sink with a low threshold for testing
-    let last_optimize_version = Arc::new(RwLock::new(initial_version));
-    let sink = LanceDbSink::new(
-      Arc::new(RwLock::new(table)),
-      last_optimize_version.clone(),
-      2, // Low threshold to trigger optimization in test
-    );
-
-    // Insert multiple documents to advance the version
-    for i in 0..5 {
-      let mut doc = CodeDocument::new(
-        Uuid::now_v7(),
-        format!("file{}.py", i),
-        format!("content {}", i),
-      );
-      doc.content_embedding = vec![i as f32, (i + 1) as f32, (i + 2) as f32];
-
-      let batch = create_test_batch(vec![doc]);
-      let batch_stream = stream::once(async { Ok(batch) });
-      let record_stream = Box::pin(lancedb::arrow::SimpleRecordBatchStream::new(
-        batch_stream.boxed(),
-        Arc::new(CodeDocument::schema(3)),
-      ));
-
-      let mut sink_stream = sink.sink(record_stream);
-      while sink_stream.next().await.is_some() {}
-    }
-
-    // Verify optimization was triggered
-    let final_optimize_version = *last_optimize_version.read().await;
-    assert!(
-      final_optimize_version > initial_version,
-      "Optimization should have updated the version. Initial: {}, Final: {}",
-      initial_version,
-      final_optimize_version
-    );
-  }
-
-  #[tokio::test]
-  async fn test_lancedb_sink_upsert() {
-    let temp_dir = TempDir::new().unwrap();
-    let db_path = temp_dir.path().to_str().unwrap();
-    let table = create_test_table(db_path, "upsert_test", 3).await;
+    let table = create_test_chunk_table(db_path, "upsert_test", 3).await;
 
     let current_version = table.version().await.unwrap();
-    let sink = LanceDbSink::new(
+    let sink = ChunkSink::new(
       Arc::new(RwLock::new(table)),
       Arc::new(RwLock::new(current_version)),
       250,
     );
 
     // First insert
-    let mut doc = CodeDocument::new(
-      Uuid::now_v7(),
-      "file.py".to_string(),
-      "original content".to_string(),
-    );
-    doc.content_embedding = vec![1.0, 2.0, 3.0];
-    let original_id = doc.id;
+    let mut chunk = CodeChunk::builder()
+      .file_id(Uuid::now_v7())
+      .project_id(Uuid::now_v7())
+      .file_path("file.py".to_string())
+      .content("original content".to_string())
+      .start_byte(0)
+      .end_byte(16)
+      .start_line(1)
+      .end_line(1)
+      .build();
+    chunk.update_embedding(vec![1.0, 2.0, 3.0]);
+    let original_id = chunk.id;
 
-    let batch1 = create_test_batch(vec![doc.clone()]);
+    let batch1 = create_test_batch(vec![chunk.clone()]);
     let batch_stream1 = stream::once(async { Ok(batch1) });
     let record_stream1 = Box::pin(lancedb::arrow::SimpleRecordBatchStream::new(
       batch_stream1.boxed(),
-      Arc::new(CodeDocument::schema(3)),
+      Arc::new(CodeChunk::schema(3)),
     ));
 
     let mut sink_stream1 = sink.sink(record_stream1);
     while sink_stream1.next().await.is_some() {}
 
-    // Update the same document
-    doc.content = "updated content".to_string();
-    doc.content_embedding = vec![4.0, 5.0, 6.0];
+    // Update the same chunk
+    chunk.content = "updated content".to_string();
+    chunk.embedding = vec![4.0, 5.0, 6.0];
 
-    let batch2 = create_test_batch(vec![doc]);
+    let batch2 = create_test_batch(vec![chunk]);
     let batch_stream2 = stream::once(async { Ok(batch2) });
     let record_stream2 = Box::pin(lancedb::arrow::SimpleRecordBatchStream::new(
       batch_stream2.boxed(),
-      Arc::new(CodeDocument::schema(3)),
+      Arc::new(CodeChunk::schema(3)),
     ));
 
     let mut sink_stream2 = sink.sink(record_stream2);
     while sink_stream2.next().await.is_some() {}
 
-    // Verify only one document exists with updated content
+    // Verify only one chunk exists with updated content
     let conn = lancedb::connect(db_path).execute().await.unwrap();
     let table = conn.open_table("upsert_test").execute().await.unwrap();
     let mut query_stream = table

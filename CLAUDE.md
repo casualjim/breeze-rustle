@@ -38,44 +38,21 @@ breeze-rustle is a high-performance Rust library with Python bindings that provi
 - Use Uuid::now_v7 not v4
 - Do NOT `#[ignore]` tests because they may download a model, it's totally allowed to access the internet. We have to install packages to run the build anyway, they come from the internet
 - Use rustfmt, do NOT run `cargo fmt`
+- Put imports at the top of the file for code and the top of the tests module for tests
 
 ## Development Commands
 
 ### Building
 
 ```bash
-# Build and install Python package locally (for development)
-maturin develop --release
-
-# Build Python wheel for distribution
-maturin build --release
-
-# Build breeze-grammars crate separately (for testing)
-cd crates/breeze-grammars && cargo build
+just build
 ```
 
 ### Testing
 
 ```bash
 # Run Rust tests
-cargo test
-
-# Run Python tests
-pytest tests/
-
-# Run benchmarks
-cargo bench
-```
-
-### Maintenance
-
-```bash
-# Update nvim-treesitter queries
-python tools/fetch-queries
-
-# Check Rust code
-cargo check
-cargo clippy
+just test
 ```
 
 ## Architecture

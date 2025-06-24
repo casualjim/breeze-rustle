@@ -6,13 +6,9 @@ use std::path::{Path, PathBuf};
 use tracing::debug;
 use uuid::Uuid;
 
-/// Reserved ID for the dummy document used to initialize LanceDB tables
-/// This document must never be deleted to preserve indices
-pub const DUMMY_DOCUMENT_ID: &str = "00000000-0000-0000-0000-000000000000";
-
 #[derive(Debug, Clone, PartialEq)]
 pub struct CodeDocument {
-  pub id: String,
+  pub id: Uuid,
   pub project_id: Uuid,
   pub file_path: String,
   pub content: String,
@@ -21,11 +17,15 @@ pub struct CodeDocument {
   pub file_size: u64,
   pub last_modified: chrono::NaiveDateTime,
   pub indexed_at: chrono::NaiveDateTime,
+  // New fields for advanced search
+  pub languages: Vec<String>,           // All languages found in file
+  pub primary_language: Option<String>, // Most prevalent language by token count
+  pub chunk_count: u32,                 // Number of chunks in this file
 }
 
 impl CodeDocument {
   pub fn new(project_id: Uuid, file_path: String, content: String) -> Self {
-    let id = Uuid::now_v7().to_string();
+    let id = Uuid::now_v7();
     let content_hash = Self::compute_hash(content.as_str());
     let file_size = content.len() as u64;
     let last_modified = chrono::Utc::now().naive_utc();
@@ -41,6 +41,9 @@ impl CodeDocument {
       file_size,
       last_modified,
       indexed_at,
+      languages: Vec::new(),
+      primary_language: None,
+      chunk_count: 0,
     }
   }
 
@@ -73,6 +76,18 @@ impl CodeDocument {
         DataType::Timestamp(TimeUnit::Microsecond, None),
         false,
       ),
+      // New fields
+      Field::new(
+        "languages",
+        DataType::List(std::sync::Arc::new(Field::new(
+          "item",
+          DataType::Utf8,
+          true,
+        ))),
+        false,
+      ),
+      Field::new("primary_language", DataType::Utf8, true),
+      Field::new("chunk_count", DataType::UInt32, false),
     ];
 
     Schema::new(fields)
@@ -92,7 +107,7 @@ impl CodeDocument {
     let schema = std::sync::Arc::new(Self::schema(embedding_dim));
 
     // Create dummy data - LanceDB requires at least one batch
-    let id_array = StringArray::from(vec![DUMMY_DOCUMENT_ID]);
+    let id_array = StringArray::from(vec![Uuid::nil().to_string()]);
     let project_id_array = StringArray::from(vec![Uuid::nil().to_string()]); // Use nil UUID for dummy
     let file_path_array = StringArray::from(vec!["__lancedb_dummy__.txt"]);
     let content_array = StringArray::from(vec![
@@ -118,6 +133,13 @@ impl CodeDocument {
     let last_modified_array = arrow::array::TimestampMicrosecondArray::from(vec![0i64]);
     let indexed_at_array = arrow::array::TimestampMicrosecondArray::from(vec![0i64]);
 
+    // New fields for dummy document
+    let mut languages_builder = ListBuilder::new(StringBuilder::new());
+    languages_builder.append(true); // Append one empty list
+    let languages_array = languages_builder.finish();
+    let primary_language_array = StringArray::from(vec![None as Option<&str>]);
+    let chunk_count_array = UInt32Array::from(vec![0u32]);
+
     let batch = RecordBatch::try_new(
       schema.clone(),
       vec![
@@ -130,6 +152,9 @@ impl CodeDocument {
         std::sync::Arc::new(file_size_array),
         std::sync::Arc::new(last_modified_array),
         std::sync::Arc::new(indexed_at_array),
+        std::sync::Arc::new(languages_array),
+        std::sync::Arc::new(primary_language_array),
+        std::sync::Arc::new(chunk_count_array),
       ],
     )
     .map_err(|e| lancedb::Error::Arrow { source: e })?;
@@ -214,6 +239,12 @@ impl CodeDocument {
       .await?;
     debug!("Created index on content_hash field");
 
+    table
+      .create_index(&["primary_language"], Index::Auto)
+      .execute()
+      .await?;
+    debug!("Created index on primary_language field");
+
     Ok(())
   }
 
@@ -234,14 +265,17 @@ impl CodeDocument {
       });
     }
 
-    let id = batch
+    let id_str = batch
       .column_by_name("id")
       .and_then(|col| col.as_any().downcast_ref::<StringArray>())
       .ok_or_else(|| lancedb::Error::Runtime {
         message: "Missing or invalid id column".to_string(),
       })?
-      .value(row)
-      .to_string();
+      .value(row);
+
+    let id = Uuid::parse_str(id_str).map_err(|e| lancedb::Error::Runtime {
+      message: format!("Invalid UUID in id column: {}", e),
+    })?;
 
     let project_id_str = batch
       .column_by_name("project_id")
@@ -335,6 +369,54 @@ impl CodeDocument {
       })?
       .value(row);
 
+    // Extract languages array
+    let languages_list = batch
+      .column_by_name("languages")
+      .and_then(|col| col.as_any().downcast_ref::<ListArray>())
+      .ok_or_else(|| lancedb::Error::Runtime {
+        message: "Missing or invalid languages column".to_string(),
+      })?;
+
+    let languages: Vec<String> = if languages_list.is_null(row) {
+      Vec::new()
+    } else {
+      let languages_value = languages_list.value(row);
+      let languages_strings = languages_value
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .ok_or_else(|| lancedb::Error::Runtime {
+          message: "Invalid languages array type".to_string(),
+        })?;
+
+      (0..languages_strings.len())
+        .filter(|i| !languages_strings.is_null(*i))
+        .map(|i| languages_strings.value(i).to_string())
+        .collect()
+    };
+
+    // Extract primary_language
+    let primary_language = batch
+      .column_by_name("primary_language")
+      .and_then(|col| col.as_any().downcast_ref::<StringArray>())
+      .ok_or_else(|| lancedb::Error::Runtime {
+        message: "Missing or invalid primary_language column".to_string(),
+      })?;
+
+    let primary_language = if primary_language.is_null(row) {
+      None
+    } else {
+      Some(primary_language.value(row).to_string())
+    };
+
+    // Extract chunk_count
+    let chunk_count = batch
+      .column_by_name("chunk_count")
+      .and_then(|col| col.as_any().downcast_ref::<UInt32Array>())
+      .ok_or_else(|| lancedb::Error::Runtime {
+        message: "Missing or invalid chunk_count column".to_string(),
+      })?
+      .value(row);
+
     Ok(Self {
       id,
       project_id,
@@ -349,6 +431,9 @@ impl CodeDocument {
       indexed_at: chrono::DateTime::from_timestamp_micros(indexed_at)
         .unwrap_or_default()
         .naive_utc(),
+      languages,
+      primary_language,
+      chunk_count,
     })
   }
 
@@ -393,7 +478,7 @@ impl CodeDocument {
     // Read file and compute hash in one pass
     let (content, hash) = Self::read_and_hash(&path).await?;
 
-    let id = Uuid::now_v7().to_string();
+    let id = Uuid::now_v7();
     let indexed_at = chrono::Utc::now().naive_utc();
 
     Ok(Self {
@@ -406,6 +491,9 @@ impl CodeDocument {
       file_size,
       last_modified,
       indexed_at,
+      languages: Vec::new(),
+      primary_language: None,
+      chunk_count: 0,
     })
   }
 
@@ -450,7 +538,7 @@ impl lancedb::arrow::IntoArrow for CodeDocument {
     let schema = Arc::new(CodeDocument::schema(embedding_dim));
 
     // Build arrays for single document
-    let id_array = StringArray::from(vec![self.id.as_str()]);
+    let id_array = StringArray::from(vec![self.id.to_string()]);
     let project_id_array = StringArray::from(vec![self.project_id.to_string()]);
     let file_path_array = StringArray::from(vec![self.file_path.as_str()]);
     let content_array = StringArray::from(vec![self.content.as_str()]);
@@ -483,6 +571,20 @@ impl lancedb::arrow::IntoArrow for CodeDocument {
     let last_modified_array = arrow::array::TimestampMicrosecondArray::from(vec![last_modified_us]);
     let indexed_at_array = arrow::array::TimestampMicrosecondArray::from(vec![indexed_at_us]);
 
+    // Create languages array
+    let mut languages_builder = ListBuilder::new(StringBuilder::new());
+    for lang in &self.languages {
+      languages_builder.values().append_value(lang);
+    }
+    languages_builder.append(true);
+    let languages_array = languages_builder.finish();
+
+    // Create primary_language array
+    let primary_language_array = StringArray::from(vec![self.primary_language.as_deref()]);
+
+    // Create chunk_count array
+    let chunk_count_array = UInt32Array::from(vec![self.chunk_count]);
+
     // Create the record batch
     let batch = RecordBatch::try_new(
       schema.clone(),
@@ -496,6 +598,9 @@ impl lancedb::arrow::IntoArrow for CodeDocument {
         Arc::new(file_size_array),
         Arc::new(last_modified_array),
         Arc::new(indexed_at_array),
+        Arc::new(languages_array),
+        Arc::new(primary_language_array),
+        Arc::new(chunk_count_array),
       ],
     )
     .map_err(|e| lancedb::Error::Arrow { source: e })?;
@@ -546,7 +651,7 @@ mod tests {
     assert_eq!(doc.file_size, content.len() as u64);
     assert_eq!(doc.content_hash, CodeDocument::compute_hash(content));
     assert!(doc.content_embedding.is_empty());
-    assert!(!doc.id.is_empty());
+    assert_ne!(doc.id, Uuid::nil());
   }
 
   #[tokio::test]
@@ -640,9 +745,6 @@ mod tests {
     assert_eq!(doc.file_size, content.len() as u64);
     assert_eq!(doc.content_hash, CodeDocument::compute_hash(&content));
     assert!(doc.content_embedding.is_empty());
-    assert!(!doc.id.is_empty());
-
-    // Verify it's a valid UUID
-    assert!(uuid::Uuid::parse_str(&doc.id).is_ok());
+    assert_ne!(doc.id, Uuid::nil());
   }
 }

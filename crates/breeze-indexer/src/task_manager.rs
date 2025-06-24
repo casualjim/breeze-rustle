@@ -712,6 +712,11 @@ mod tests {
       .unwrap();
     let code_table = Arc::new(RwLock::new(code_table));
 
+    let chunk_table = crate::models::CodeChunk::ensure_table(&connection, "test_chunks", 384)
+      .await
+      .unwrap();
+    let chunk_table = Arc::new(RwLock::new(chunk_table));
+
     // Use the test config which sets up local embeddings if available
     let (_temp_dir_config, config) = Config::test();
 
@@ -722,6 +727,7 @@ mod tests {
       Arc::from(embedding_provider),
       384,
       code_table.clone(),
+      chunk_table,
     );
 
     let task_manager = TaskManager::new(task_table, failed_batches_table, bulk_indexer);
@@ -1514,7 +1520,7 @@ mod tests {
     let table = code_table.read().await;
     let mut query = table
       .query()
-      .only_if(format!("id != '{}'", crate::models::DUMMY_DOCUMENT_ID))
+      .only_if(format!("id != '{}'", Uuid::nil()))
       .execute()
       .await
       .expect("Failed to query table");

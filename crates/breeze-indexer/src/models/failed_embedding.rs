@@ -3,7 +3,7 @@ use std::collections::BTreeSet;
 use uuid::Uuid;
 
 /// A record of an embedding failure that needs to be retried
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct RetryError {
   pub timestamp: chrono::NaiveDateTime,
   pub error: String,
@@ -388,5 +388,303 @@ impl lancedb::arrow::IntoArrow for FailedEmbeddingBatch {
       vec![Ok(batch)].into_iter(),
       schema,
     )))
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use arrow::array::{Array, Int32Array, ListArray, StringArray};
+  use futures::stream::TryStreamExt;
+  use lancedb::arrow::IntoArrow;
+  use lancedb::query::ExecutableQuery;
+
+  #[test]
+  fn test_failed_embedding_batch_new() {
+    let task_id = Uuid::now_v7();
+    let project_id = Uuid::now_v7();
+    let project_path = "/path/to/project".to_string();
+    let mut failed_files = BTreeSet::new();
+    failed_files.insert("file1.rs".to_string());
+    failed_files.insert("file2.rs".to_string());
+    let error = "Failed to connect to embedding service".to_string();
+
+    let batch = FailedEmbeddingBatch::new(
+      task_id,
+      project_id,
+      project_path.clone(),
+      failed_files.clone(),
+      error.clone(),
+    );
+
+    assert_eq!(batch.task_id, task_id);
+    assert_eq!(batch.project_id, project_id);
+    assert_eq!(batch.project_path, project_path);
+    assert_eq!(batch.failed_files, failed_files);
+    assert_eq!(batch.retry_count, 0);
+    assert_eq!(batch.errors.len(), 1);
+    assert_eq!(batch.errors[0].error, error);
+    assert!(batch.retry_after > batch.created_at);
+  }
+
+  #[test]
+  fn test_calculate_next_retry_after() {
+    let base_time = chrono::Utc::now().naive_utc();
+
+    // Test retry intervals
+    let intervals = vec![
+      (0, 1),   // First retry after 1 minute
+      (1, 5),   // Second retry after 5 minutes
+      (2, 10),  // Third retry after 10 minutes
+      (3, 20),  // Fourth retry after 20 minutes
+      (4, 40),  // Fifth retry after 40 minutes
+      (5, 60),  // Every hour thereafter
+      (10, 60), // Still every hour
+    ];
+
+    for (retry_count, expected_minutes) in intervals {
+      let retry_time = FailedEmbeddingBatch::calculate_next_retry_after(retry_count);
+      let diff = retry_time - base_time;
+      let diff_minutes = diff.num_minutes();
+
+      // Allow 1 minute tolerance due to timing
+      assert!(
+        diff_minutes >= expected_minutes - 1 && diff_minutes <= expected_minutes + 1,
+        "Retry count {} should wait {} minutes, got {} minutes",
+        retry_count,
+        expected_minutes,
+        diff_minutes
+      );
+    }
+  }
+
+  #[test]
+  fn test_update_for_retry() {
+    let task_id = Uuid::now_v7();
+    let project_id = Uuid::now_v7();
+    let mut failed_files = BTreeSet::new();
+    failed_files.insert("file1.rs".to_string());
+
+    let mut batch = FailedEmbeddingBatch::new(
+      task_id,
+      project_id,
+      "/project".to_string(),
+      failed_files,
+      "Initial error".to_string(),
+    );
+
+    let initial_retry_after = batch.retry_after;
+    let initial_error_count = batch.errors.len();
+
+    // Update for retry
+    batch.update_for_retry("Second error".to_string());
+
+    assert_eq!(batch.retry_count, 1);
+    assert_eq!(batch.errors.len(), initial_error_count + 1);
+    assert_eq!(batch.errors[1].error, "Second error");
+    assert!(batch.retry_after > initial_retry_after);
+
+    // Update again
+    batch.update_for_retry("Third error".to_string());
+
+    assert_eq!(batch.retry_count, 2);
+    assert_eq!(batch.errors.len(), initial_error_count + 2);
+    assert_eq!(batch.errors[2].error, "Third error");
+  }
+
+  #[tokio::test]
+  async fn test_schema() {
+    let schema = FailedEmbeddingBatch::schema();
+    assert_eq!(schema.fields().len(), 9);
+
+    // Check field names and types
+    assert_eq!(schema.field(0).name(), "id");
+    assert_eq!(schema.field(1).name(), "task_id");
+    assert_eq!(schema.field(2).name(), "project_id");
+    assert_eq!(schema.field(3).name(), "project_path");
+    assert_eq!(schema.field(4).name(), "failed_files");
+    assert_eq!(schema.field(5).name(), "errors");
+    assert_eq!(schema.field(6).name(), "retry_count");
+    assert_eq!(schema.field(7).name(), "retry_after");
+    assert_eq!(schema.field(8).name(), "created_at");
+  }
+
+  #[tokio::test]
+  async fn test_create_table() {
+    let temp_dir = tempfile::TempDir::new().unwrap();
+    let db_path = temp_dir.path().to_str().unwrap();
+    let conn = lancedb::connect(db_path).execute().await.unwrap();
+
+    let table = FailedEmbeddingBatch::create_table(&conn, "test_failed_embeddings")
+      .await
+      .unwrap();
+
+    // Verify table was created
+    let table_names = conn.table_names().execute().await.unwrap();
+    assert!(table_names.contains(&"test_failed_embeddings".to_string()));
+
+    // Verify we can query the table (should have dummy row)
+    let count = table.count_rows(None).await.unwrap();
+    assert_eq!(count, 1, "Should have dummy row");
+
+    // Verify dummy row has expected values
+    let stream = table.query().execute().await.unwrap();
+    let batches: Vec<_> = stream.try_collect().await.unwrap();
+    assert_eq!(batches.len(), 1);
+    assert_eq!(batches[0].num_rows(), 1);
+
+    // Check dummy row id
+    let id_col = batches[0]
+      .column_by_name("id")
+      .unwrap()
+      .as_any()
+      .downcast_ref::<StringArray>()
+      .unwrap();
+    assert_eq!(id_col.value(0), "00000000-0000-0000-0000-000000000000");
+  }
+
+  #[tokio::test]
+  async fn test_ensure_table() {
+    let temp_dir = tempfile::TempDir::new().unwrap();
+    let db_path = temp_dir.path().to_str().unwrap();
+    let conn = lancedb::connect(db_path).execute().await.unwrap();
+
+    // First call creates table
+    let table1 = FailedEmbeddingBatch::ensure_table(&conn, "test_failed_embeddings")
+      .await
+      .unwrap();
+    let count1 = table1.count_rows(None).await.unwrap();
+    assert_eq!(count1, 1, "Should have dummy row");
+
+    // Second call opens existing table
+    let table2 = FailedEmbeddingBatch::ensure_table(&conn, "test_failed_embeddings")
+      .await
+      .unwrap();
+    let count2 = table2.count_rows(None).await.unwrap();
+    assert_eq!(count2, 1, "Should still have only dummy row");
+  }
+
+  #[test]
+  fn test_into_arrow() {
+    let task_id = Uuid::now_v7();
+    let project_id = Uuid::now_v7();
+    let mut failed_files = BTreeSet::new();
+    failed_files.insert("file1.rs".to_string());
+    failed_files.insert("file2.rs".to_string());
+
+    let mut batch = FailedEmbeddingBatch::new(
+      task_id,
+      project_id,
+      "/project".to_string(),
+      failed_files,
+      "Test error".to_string(),
+    );
+
+    // Add another error
+    batch.update_for_retry("Retry error".to_string());
+
+    let reader = batch.into_arrow().unwrap();
+    let schema = reader.schema();
+    assert_eq!(schema.fields().len(), 9);
+
+    // Collect batches
+    let batches: Vec<_> = reader.collect();
+    assert_eq!(batches.len(), 1);
+
+    let record_batch = batches[0].as_ref().unwrap();
+    assert_eq!(record_batch.num_rows(), 1);
+    assert_eq!(record_batch.num_columns(), 9);
+
+    // Verify project_path
+    let project_path_array = record_batch
+      .column(3)
+      .as_any()
+      .downcast_ref::<StringArray>()
+      .unwrap();
+    assert_eq!(project_path_array.value(0), "/project");
+
+    // Verify failed_files list
+    let failed_files_array = record_batch
+      .column(4)
+      .as_any()
+      .downcast_ref::<ListArray>()
+      .unwrap();
+    assert!(!failed_files_array.is_null(0));
+
+    // Verify retry_count
+    let retry_count_array = record_batch
+      .column(6)
+      .as_any()
+      .downcast_ref::<Int32Array>()
+      .unwrap();
+    assert_eq!(retry_count_array.value(0), 1);
+  }
+
+  #[tokio::test]
+  async fn test_from_record_batch() {
+    let task_id = Uuid::now_v7();
+    let project_id = Uuid::now_v7();
+    let mut failed_files = BTreeSet::new();
+    failed_files.insert("test1.rs".to_string());
+    failed_files.insert("test2.rs".to_string());
+
+    let original = FailedEmbeddingBatch::new(
+      task_id,
+      project_id,
+      "/test/path".to_string(),
+      failed_files.clone(),
+      "Original error".to_string(),
+    );
+
+    // Convert to Arrow and back
+    let reader = original.clone().into_arrow().unwrap();
+    let batches: Vec<_> = reader.collect();
+    let record_batch = batches[0].as_ref().unwrap();
+
+    let reconstructed = FailedEmbeddingBatch::from_record_batch(record_batch, 0).unwrap();
+
+    assert_eq!(reconstructed.id, original.id);
+    assert_eq!(reconstructed.task_id, original.task_id);
+    assert_eq!(reconstructed.project_id, original.project_id);
+    assert_eq!(reconstructed.project_path, original.project_path);
+    assert_eq!(reconstructed.failed_files, original.failed_files);
+    assert_eq!(reconstructed.retry_count, original.retry_count);
+    assert_eq!(reconstructed.errors.len(), original.errors.len());
+    assert_eq!(reconstructed.errors[0].error, original.errors[0].error);
+  }
+
+  #[tokio::test]
+  async fn test_from_record_batch_out_of_bounds() {
+    let batch = FailedEmbeddingBatch::new(
+      Uuid::now_v7(),
+      Uuid::now_v7(),
+      "/test".to_string(),
+      BTreeSet::new(),
+      "Error".to_string(),
+    );
+
+    let reader = batch.into_arrow().unwrap();
+    let batches: Vec<_> = reader.collect();
+    let record_batch = batches[0].as_ref().unwrap();
+
+    // Try to access out of bounds row
+    let result = FailedEmbeddingBatch::from_record_batch(record_batch, 1);
+    assert!(result.is_err());
+  }
+
+  #[test]
+  fn test_retry_error_serialization() {
+    let error = RetryError {
+      timestamp: chrono::Utc::now().naive_utc(),
+      error: "Test error message".to_string(),
+    };
+
+    // Test serialization
+    let json = serde_json::to_string(&error).unwrap();
+    assert!(json.contains("Test error message"));
+
+    // Test deserialization
+    let deserialized: RetryError = serde_json::from_str(&json).unwrap();
+    assert_eq!(deserialized.error, error.error);
   }
 }

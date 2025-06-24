@@ -238,7 +238,7 @@ mod tests {
 
   fn create_test_document(file_path: &str) -> CodeDocument {
     CodeDocument {
-      id: Uuid::now_v7().to_string(),
+      id: Uuid::now_v7(),
       project_id: Uuid::now_v7(),
       file_path: file_path.to_string(),
       content: format!("Content of {}", file_path),
@@ -247,6 +247,9 @@ mod tests {
       file_size: 100,
       last_modified: chrono::Utc::now().naive_utc(),
       indexed_at: chrono::Utc::now().naive_utc(),
+      languages: vec!["rust".to_string()],
+      primary_language: Some("rust".to_string()),
+      chunk_count: 1,
     }
   }
 
