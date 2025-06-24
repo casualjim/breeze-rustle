@@ -13,11 +13,12 @@ use uuid::Uuid;
 
 use crate::IndexerError;
 use crate::bulk_indexer::BulkIndexer;
-use crate::models::{FailedEmbeddingBatch, IndexTask, TaskStatus};
+use crate::models::{FailedEmbeddingBatch, IndexTask, Project, ProjectStatus, TaskStatus};
 
 pub struct TaskManager {
   task_table: Arc<RwLock<Table>>,
   failed_batches_table: Arc<RwLock<Table>>,
+  project_table: Arc<RwLock<Table>>,
   indexer: BulkIndexer,
 }
 
@@ -25,11 +26,13 @@ impl TaskManager {
   pub fn new(
     task_table: Arc<RwLock<Table>>,
     failed_batches_table: Arc<RwLock<Table>>,
+    project_table: Arc<RwLock<Table>>,
     indexer: BulkIndexer,
   ) -> Self {
     Self {
       task_table,
       failed_batches_table,
+      project_table,
       indexer,
     }
   }
@@ -41,6 +44,30 @@ impl TaskManager {
     path: &Path,
     task_type: crate::models::TaskType,
   ) -> Result<Uuid, IndexerError> {
+    // Check project status first
+    let project_table = self.project_table.read().await;
+    let mut project_stream = project_table
+      .query()
+      .only_if(format!("id = '{}'", project_id).as_str())
+      .limit(1)
+      .execute()
+      .await?;
+
+    let project = if let Some(batch) = project_stream.try_next().await? {
+      Project::from_record_batch(&batch, 0)?
+    } else {
+      return Err(IndexerError::ProjectNotFound(project_id));
+    };
+    drop(project_table);
+
+    // Don't accept tasks for deleted or pending deletion projects
+    if project.status != ProjectStatus::Active {
+      return Err(IndexerError::Task(format!(
+        "Cannot submit task for project {} with status {:?}",
+        project_id, project.status
+      )));
+    }
+
     let table = self.task_table.write().await;
 
     // Check for existing pending tasks for this project
@@ -730,10 +757,35 @@ mod tests {
       chunk_table,
     );
 
-    let task_manager = TaskManager::new(task_table, failed_batches_table, bulk_indexer);
+    let project_table = crate::models::Project::ensure_table(&connection, "test_projects")
+      .await
+      .unwrap();
+    let project_table = Arc::new(RwLock::new(project_table));
 
-    // Create a test project ID
-    let test_project_id = Uuid::now_v7();
+    let task_manager = TaskManager::new(
+      task_table,
+      failed_batches_table,
+      project_table.clone(),
+      bulk_indexer,
+    );
+
+    // Create a test project in the database
+    let test_project_dir = temp_dir.path().join("test_project");
+    std::fs::create_dir(&test_project_dir).unwrap();
+
+    let project = crate::models::Project::new(
+      "Test Project".to_string(),
+      test_project_dir.to_str().unwrap().to_string(),
+      None,
+    )
+    .unwrap();
+    let test_project_id = project.id;
+
+    // Insert the project into the table
+    let arrow_data = project.into_arrow().unwrap();
+    let table = project_table.write().await;
+    table.add(arrow_data).execute().await.unwrap();
+    drop(table);
 
     (task_manager, code_table, temp_dir, test_project_id)
   }
@@ -772,6 +824,57 @@ mod tests {
 
     let tasks = task_manager.list_tasks(10).await.unwrap();
     assert!(tasks.is_empty());
+  }
+
+  #[tokio::test]
+  async fn test_submit_task_inactive_project() {
+    let (task_manager, _code_table, _temp_dir, project_id) = create_test_task_manager().await;
+
+    // Mark the project as pending deletion
+    let project_table = task_manager.project_table.write().await;
+    let now_micros = chrono::Utc::now().naive_utc().and_utc().timestamp_micros();
+
+    project_table
+      .update()
+      .only_if(format!("id = '{}'", project_id).as_str())
+      .column("status", "'PendingDeletion'")
+      .column("deletion_requested_at", format!("{}", now_micros))
+      .column("updated_at", format!("{}", now_micros))
+      .execute()
+      .await
+      .unwrap();
+    drop(project_table);
+
+    // Try to submit a task - should fail
+    let test_path = std::path::Path::new("/test/path");
+    let result = task_manager
+      .submit_task(project_id, test_path, crate::models::TaskType::FullIndex)
+      .await;
+
+    assert!(result.is_err());
+    let error_msg = result.unwrap_err().to_string();
+    assert!(error_msg.contains("Cannot submit task"));
+    assert!(error_msg.contains("PendingDeletion"));
+  }
+
+  #[tokio::test]
+  async fn test_submit_task_nonexistent_project() {
+    let (task_manager, _code_table, _temp_dir, _project_id) = create_test_task_manager().await;
+    let test_path = std::path::Path::new("/test/path");
+
+    let result = task_manager
+      .submit_task(
+        Uuid::now_v7(),
+        test_path,
+        crate::models::TaskType::FullIndex,
+      )
+      .await;
+
+    assert!(result.is_err());
+    match result.unwrap_err() {
+      IndexerError::ProjectNotFound(_) => {}
+      _ => panic!("Expected ProjectNotFound error"),
+    }
   }
 
   #[tokio::test]
@@ -832,9 +935,8 @@ mod tests {
   async fn test_reindex_removes_deleted_files() {
     let (task_manager, code_table, temp_dir, project_id) = create_test_task_manager().await;
 
-    // Create test directory structure
+    // Use the existing test_project directory created by create_test_task_manager
     let project_dir = temp_dir.path().join("test_project");
-    std::fs::create_dir(&project_dir).unwrap();
 
     // Create initial files
     let file1 = project_dir.join("file1.rs");
@@ -1055,14 +1157,32 @@ mod tests {
 
   #[tokio::test]
   async fn test_concurrent_task_claiming() {
-    let (task_manager, _code_table, _temp_dir, _project_id) = create_test_task_manager().await;
+    let (task_manager, _code_table, temp_dir, _existing_project_id) =
+      create_test_task_manager().await;
     let task_manager = Arc::new(task_manager);
 
     // Submit multiple tasks with different project IDs to avoid merging
     let num_tasks = 5;
     for i in 0..num_tasks {
+      // Create a new project for each task
+      let project_table = task_manager.project_table.write().await;
+      let dir = temp_dir.path().join(format!("project_{}", i));
+      std::fs::create_dir(&dir).unwrap();
+      let project = crate::models::Project::new(
+        format!("Project {}", i),
+        dir.to_str().unwrap().to_string(),
+        None,
+      )
+      .unwrap();
+      let project_id = project.id;
+      project_table
+        .add(project.into_arrow().unwrap())
+        .execute()
+        .await
+        .unwrap();
+      drop(project_table);
+
       let path = format!("/test/claim/{}", i);
-      let project_id = Uuid::now_v7(); // Different project ID for each task
       task_manager
         .submit_task(
           project_id,
@@ -1163,9 +1283,8 @@ mod tests {
     let (task_manager, _code_table, temp_dir, project_id) = create_test_task_manager().await;
     let task_manager = Arc::new(task_manager);
 
-    // Create a real directory to index
+    // Use the existing test_project directory created by create_test_task_manager
     let test_dir = temp_dir.path().join("test_project");
-    tokio::fs::create_dir(&test_dir).await.unwrap();
     tokio::fs::write(test_dir.join("test.txt"), "test content")
       .await
       .unwrap();
@@ -1226,14 +1345,33 @@ mod tests {
 
   #[tokio::test]
   async fn test_oldest_pending_task_processed_first() {
-    let (task_manager, _code_table, _temp_dir, _project_id) = create_test_task_manager().await;
+    let (task_manager, _code_table, temp_dir, _project_id) = create_test_task_manager().await;
+
+    // Create projects in the database for each task
+    let project_table = task_manager.project_table.write().await;
+
+    // Create project 1
+    let dir1 = temp_dir.path().join("project1");
+    std::fs::create_dir(&dir1).unwrap();
+    let project1 = crate::models::Project::new(
+      "Project 1".to_string(),
+      dir1.to_str().unwrap().to_string(),
+      None,
+    )
+    .unwrap();
+    let project1_id = project1.id;
+    project_table
+      .add(project1.into_arrow().unwrap())
+      .execute()
+      .await
+      .unwrap();
+
+    drop(project_table);
 
     // Submit tasks with small delays to ensure different timestamps
-    // Use different project IDs to avoid merging
-    let project1 = Uuid::now_v7();
     let task1_id = task_manager
       .submit_task(
-        project1,
+        project1_id,
         std::path::Path::new("/test/first"),
         crate::models::TaskType::FullIndex,
       )
@@ -1242,10 +1380,27 @@ mod tests {
 
     tokio::time::sleep(Duration::from_millis(10)).await;
 
-    let project2 = Uuid::now_v7();
+    // Create project 2
+    let project_table = task_manager.project_table.write().await;
+    let dir2 = temp_dir.path().join("project2");
+    std::fs::create_dir(&dir2).unwrap();
+    let project2 = crate::models::Project::new(
+      "Project 2".to_string(),
+      dir2.to_str().unwrap().to_string(),
+      None,
+    )
+    .unwrap();
+    let project2_id = project2.id;
+    project_table
+      .add(project2.into_arrow().unwrap())
+      .execute()
+      .await
+      .unwrap();
+    drop(project_table);
+
     let task2_id = task_manager
       .submit_task(
-        project2,
+        project2_id,
         std::path::Path::new("/test/second"),
         crate::models::TaskType::FullIndex,
       )
@@ -1254,10 +1409,27 @@ mod tests {
 
     tokio::time::sleep(Duration::from_millis(10)).await;
 
-    let project3 = Uuid::now_v7();
+    // Create project 3
+    let project_table = task_manager.project_table.write().await;
+    let dir3 = temp_dir.path().join("project3");
+    std::fs::create_dir(&dir3).unwrap();
+    let project3 = crate::models::Project::new(
+      "Project 3".to_string(),
+      dir3.to_str().unwrap().to_string(),
+      None,
+    )
+    .unwrap();
+    let project3_id = project3.id;
+    project_table
+      .add(project3.into_arrow().unwrap())
+      .execute()
+      .await
+      .unwrap();
+    drop(project_table);
+
     let task3_id = task_manager
       .submit_task(
-        project3,
+        project3_id,
         std::path::Path::new("/test/third"),
         crate::models::TaskType::FullIndex,
       )
@@ -1339,9 +1511,8 @@ mod tests {
   async fn test_execute_partial_update() {
     let (task_manager, code_table, temp_dir, project_id) = create_test_task_manager().await;
 
-    // Create a test project directory
+    // Use the existing test_project directory created by create_test_task_manager
     let project_dir = temp_dir.path().join("test_project");
-    tokio::fs::create_dir(&project_dir).await.unwrap();
 
     // Create some test files
     let file1 = project_dir.join("file1.rs");
@@ -1585,9 +1756,8 @@ mod tests {
   async fn test_directory_deletion_removes_all_files() {
     let (task_manager, code_table, temp_dir, project_id) = create_test_task_manager().await;
 
-    // Create a test project directory structure
+    // Use the existing test_project directory created by create_test_task_manager
     let project_dir = temp_dir.path().join("test_project");
-    tokio::fs::create_dir(&project_dir).await.unwrap();
 
     // Create subdirectory with files
     let sub_dir = project_dir.join("src");

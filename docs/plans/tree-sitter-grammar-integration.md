@@ -10,7 +10,8 @@ This plan outlined the integration of a tree-sitter grammar download and compila
 
 We've exceeded our original goals and created one of the most comprehensive language support systems available:
 
-### Major Achievements:
+### Major Achievements
+
 - ✅ Support for **163 languages** (originally targeted 165+, final count 163)
 - ✅ Sophisticated precompilation system reducing build time from 10+ minutes to ~5 seconds
 - ✅ Cross-platform compilation using Zig for all major platforms
@@ -18,7 +19,7 @@ We've exceeded our original goals and created one of the most comprehensive lang
 - ✅ All languages tested and verified working at runtime
 - ✅ Zero grammar compilation failures
 
-### Implementation Highlights:
+### Implementation Highlights
 
 1. **Build System Architecture**:
    - `tools/build-grammars`: Python tool for fetching and compiling grammars
@@ -34,6 +35,7 @@ We've exceeded our original goals and created one of the most comprehensive lang
    - Parallel compilation with configurable job count
 
 3. **Developer Experience**:
+
    ```bash
    # One-time setup
    ./tools/build-grammars --all-platforms
@@ -62,12 +64,14 @@ See `docs/notes/grammar-integration-implementation.md` for implementation detail
 ### 1. Grammar Definition System
 
 Create a `grammar_definitions.json` file containing:
+
 - Repository URLs for each grammar
 - Specific commit hashes for stability
 - Build configuration flags
 - Special handling instructions
 
 Example structure:
+
 ```json
 {
   "python": {
@@ -122,8 +126,10 @@ pub fn supported_languages() -> Vec<&'static str> {
 ### 4. Dependency Management
 
 Update `Cargo.toml`:
+
 - Remove all `tree-sitter-*` language crates
 - Add build dependencies:
+
   ```toml
   [build-dependencies]
   cc = "1.0"
@@ -135,6 +141,7 @@ Update `Cargo.toml`:
 ### 5. Compilation Infrastructure
 
 Create a modular build system:
+
 - `build/grammar_downloader.rs`: Handle repository cloning
 - `build/grammar_compiler.rs`: Compile C/C++ sources using cc crate
 - `build/binding_generator.rs`: Generate Rust extern declarations
@@ -143,6 +150,7 @@ Create a modular build system:
 ### 6. Feature Flags (Optional)
 
 Add Cargo features for selective compilation:
+
 ```toml
 [features]
 default = ["common-languages"]

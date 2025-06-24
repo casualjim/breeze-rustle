@@ -133,6 +133,7 @@ impl Indexer {
     let task_manager = Arc::new(TaskManager::new(
       task_table,
       failed_batches_table,
+      project_table.clone(),
       BulkIndexer::new(
         config.clone(),
         embedding_provider.clone(),

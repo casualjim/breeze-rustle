@@ -1,6 +1,23 @@
 use serde::{Deserialize, Serialize};
 use std::path::Path;
+use strum::{Display, EnumString};
 use uuid::Uuid;
+
+#[derive(
+  Debug,
+  Clone,
+  Copy,
+  PartialEq,
+  Serialize,
+  Deserialize,
+  Display,
+  EnumString
+)]
+pub enum ProjectStatus {
+  Active,
+  PendingDeletion,
+  Deleted,
+}
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Project {
@@ -8,6 +25,8 @@ pub struct Project {
   pub name: String,
   pub directory: String,
   pub description: Option<String>,
+  pub status: ProjectStatus,
+  pub deletion_requested_at: Option<chrono::NaiveDateTime>,
   pub created_at: chrono::NaiveDateTime,
   pub updated_at: chrono::NaiveDateTime,
 }
@@ -29,6 +48,8 @@ impl Project {
       name,
       directory,
       description,
+      status: ProjectStatus::Active,
+      deletion_requested_at: None,
       created_at: now,
       updated_at: now,
     })
@@ -43,6 +64,12 @@ impl Project {
       Field::new("name", DataType::Utf8, false),
       Field::new("directory", DataType::Utf8, false),
       Field::new("description", DataType::Utf8, true),
+      Field::new("status", DataType::Utf8, false), // ProjectStatus as string
+      Field::new(
+        "deletion_requested_at",
+        DataType::Timestamp(TimeUnit::Microsecond, None),
+        true,
+      ),
       Field::new(
         "created_at",
         DataType::Timestamp(TimeUnit::Microsecond, None),
@@ -74,6 +101,9 @@ impl Project {
     let name_array = StringArray::from(vec!["__dummy__"]);
     let directory_array = StringArray::from(vec!["/__dummy__"]);
     let description_array = StringArray::from(vec![None as Option<&str>]);
+    let status_array = StringArray::from(vec!["Active"]);
+    let deletion_requested_at_array =
+      arrow::array::TimestampMicrosecondArray::from(vec![None as Option<i64>]);
     let created_at_array = arrow::array::TimestampMicrosecondArray::from(vec![0i64]);
     let updated_at_array = arrow::array::TimestampMicrosecondArray::from(vec![0i64]);
 
@@ -84,6 +114,8 @@ impl Project {
         std::sync::Arc::new(name_array),
         std::sync::Arc::new(directory_array),
         std::sync::Arc::new(description_array),
+        std::sync::Arc::new(status_array),
+        std::sync::Arc::new(deletion_requested_at_array),
         std::sync::Arc::new(created_at_array),
         std::sync::Arc::new(updated_at_array),
       ],
@@ -185,6 +217,38 @@ impl Project {
       Some(description_array.value(row).to_string())
     };
 
+    let status_str = batch
+      .column_by_name("status")
+      .and_then(|col| col.as_any().downcast_ref::<StringArray>())
+      .ok_or_else(|| lancedb::Error::Runtime {
+        message: "Missing or invalid status column".to_string(),
+      })?
+      .value(row);
+
+    let status = status_str
+      .parse::<ProjectStatus>()
+      .map_err(|_| lancedb::Error::Runtime {
+        message: format!("Invalid project status: {}", status_str),
+      })?;
+
+    let deletion_requested_at_array = batch
+      .column_by_name("deletion_requested_at")
+      .and_then(|col| {
+        col
+          .as_any()
+          .downcast_ref::<arrow::array::TimestampMicrosecondArray>()
+      })
+      .ok_or_else(|| lancedb::Error::Runtime {
+        message: "Missing or invalid deletion_requested_at column".to_string(),
+      })?;
+
+    let deletion_requested_at = if deletion_requested_at_array.is_null(row) {
+      None
+    } else {
+      chrono::DateTime::from_timestamp_micros(deletion_requested_at_array.value(row))
+        .map(|dt| dt.naive_utc())
+    };
+
     let created_at = batch
       .column_by_name("created_at")
       .and_then(|col| {
@@ -214,6 +278,8 @@ impl Project {
       name,
       directory,
       description,
+      status,
+      deletion_requested_at,
       created_at: chrono::DateTime::from_timestamp_micros(created_at)
         .unwrap_or_default()
         .naive_utc(),
@@ -239,6 +305,13 @@ impl lancedb::arrow::IntoArrow for Project {
     let name_array = StringArray::from(vec![self.name.as_str()]);
     let directory_array = StringArray::from(vec![self.directory.as_str()]);
     let description_array = StringArray::from(vec![self.description.as_deref()]);
+    let status_array = StringArray::from(vec![self.status.to_string()]);
+
+    let deletion_requested_at_array = if let Some(dt) = self.deletion_requested_at {
+      arrow::array::TimestampMicrosecondArray::from(vec![Some(dt.and_utc().timestamp_micros())])
+    } else {
+      arrow::array::TimestampMicrosecondArray::from(vec![None as Option<i64>])
+    };
 
     // Convert timestamps to microseconds
     let created_at_us = self.created_at.and_utc().timestamp_micros();
@@ -254,6 +327,8 @@ impl lancedb::arrow::IntoArrow for Project {
         Arc::new(name_array),
         Arc::new(directory_array),
         Arc::new(description_array),
+        Arc::new(status_array),
+        Arc::new(deletion_requested_at_array),
         Arc::new(created_at_array),
         Arc::new(updated_at_array),
       ],
@@ -325,7 +400,7 @@ mod tests {
   fn test_project_schema() {
     let schema = Project::schema();
 
-    assert_eq!(schema.fields().len(), 6);
+    assert_eq!(schema.fields().len(), 8);
 
     let field_names: Vec<&str> = schema.fields().iter().map(|f| f.name().as_str()).collect();
     assert_eq!(
@@ -335,6 +410,8 @@ mod tests {
         "name",
         "directory",
         "description",
+        "status",
+        "deletion_requested_at",
         "created_at",
         "updated_at"
       ]
@@ -344,7 +421,9 @@ mod tests {
     assert!(!schema.field(1).is_nullable()); // name
     assert!(!schema.field(2).is_nullable()); // directory
     assert!(schema.field(3).is_nullable()); // description
-    assert!(!schema.field(4).is_nullable()); // created_at
-    assert!(!schema.field(5).is_nullable()); // updated_at
+    assert!(!schema.field(4).is_nullable()); // status
+    assert!(schema.field(5).is_nullable()); // deletion_requested_at
+    assert!(!schema.field(6).is_nullable()); // created_at
+    assert!(!schema.field(7).is_nullable()); // updated_at
   }
 }

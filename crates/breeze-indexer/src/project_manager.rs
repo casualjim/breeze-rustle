@@ -9,7 +9,11 @@ use lancedb::query::{ExecutableQuery, QueryBase};
 use tokio::sync::RwLock;
 use tracing::{debug, info};
 
-use crate::{IndexerError, models::Project, task_manager::TaskManager};
+use crate::{
+  IndexerError,
+  models::{Project, ProjectStatus},
+  task_manager::TaskManager,
+};
 
 pub struct ProjectManager {
   project_table: Arc<RwLock<Table>>,
@@ -98,6 +102,7 @@ impl ProjectManager {
 
     let table = self.project_table.write().await;
     table.add(arrow_data).execute().await?;
+    drop(table); // Release the lock before calling task_manager
 
     info!(project_id = %project.id, "Created new project");
 
@@ -199,6 +204,45 @@ impl ProjectManager {
     update = update.column("updated_at", format!("{}", now_micros));
 
     update.execute().await?;
+
+    // Return the updated project
+    drop(table);
+    self.get_project(id).await
+  }
+
+  /// Mark a project for deletion - atomically sets status to PendingDeletion
+  pub async fn mark_for_deletion(&self, id: Uuid) -> Result<Option<Project>, IndexerError> {
+    // First check if project exists and is not already deleted
+    let existing = self.get_project(id).await?;
+    let existing = match existing {
+      Some(p) => p,
+      None => return Ok(None),
+    };
+
+    // Don't mark if already deleted or pending deletion
+    if existing.status == ProjectStatus::Deleted
+      || existing.status == ProjectStatus::PendingDeletion
+    {
+      info!(project_id = %id, status = ?existing.status, "Project already marked for deletion");
+      return Ok(Some(existing));
+    }
+
+    let table = self.project_table.write().await;
+
+    // Update status to PendingDeletion and set deletion_requested_at
+    let now = chrono::Utc::now().naive_utc();
+    let now_micros = now.and_utc().timestamp_micros();
+
+    table
+      .update()
+      .only_if(format!("id = '{}' AND status = 'Active'", id).as_str())
+      .column("status", "'PendingDeletion'")
+      .column("deletion_requested_at", format!("{}", now_micros))
+      .column("updated_at", format!("{}", now_micros))
+      .execute()
+      .await?;
+
+    info!(project_id = %id, "Marked project for deletion");
 
     // Return the updated project
     drop(table);
@@ -320,6 +364,7 @@ mod tests {
     let task_manager = Arc::new(TaskManager::new(
       task_table,
       failed_batches_table,
+      project_table.clone(),
       bulk_indexer,
     ));
     let project_manager = ProjectManager::new(project_table, task_manager);
@@ -535,6 +580,59 @@ mod tests {
     // Try non-existent directory
     let not_found = project_manager.find_by_path("/non/existent").await.unwrap();
     assert!(not_found.is_none());
+  }
+
+  #[tokio::test]
+  async fn test_mark_for_deletion() {
+    let (project_manager, temp_dir) = create_test_project_manager().await;
+
+    // Create a project
+    let test_dir = temp_dir.path().join("test_project");
+    std::fs::create_dir(&test_dir).unwrap();
+
+    let project = project_manager
+      .create_project(
+        "Test Project".to_string(),
+        test_dir.to_str().unwrap().to_string(),
+        None,
+      )
+      .await
+      .unwrap();
+
+    // Mark it for deletion
+    let marked_project = project_manager
+      .mark_for_deletion(project.id)
+      .await
+      .unwrap()
+      .unwrap();
+
+    assert_eq!(marked_project.status, ProjectStatus::PendingDeletion);
+    assert!(marked_project.deletion_requested_at.is_some());
+    assert!(marked_project.updated_at > project.updated_at);
+
+    // Try to mark again - should return the same status
+    let marked_again = project_manager
+      .mark_for_deletion(project.id)
+      .await
+      .unwrap()
+      .unwrap();
+
+    assert_eq!(marked_again.status, ProjectStatus::PendingDeletion);
+    assert_eq!(
+      marked_again.deletion_requested_at,
+      marked_project.deletion_requested_at
+    );
+  }
+
+  #[tokio::test]
+  async fn test_mark_for_deletion_nonexistent() {
+    let (project_manager, _temp_dir) = create_test_project_manager().await;
+
+    let result = project_manager
+      .mark_for_deletion(Uuid::now_v7())
+      .await
+      .unwrap();
+    assert!(result.is_none());
   }
 
   #[tokio::test]

@@ -27,13 +27,13 @@ pub struct CodeChunk {
     pub content: String,               // The actual chunk text
     pub chunk_hash: [u8; 32],          // Blake3 hash of content
     pub embedding: Vec<f32>,           // Chunk embedding vector
-    
+
     // Position information
     pub start_byte: usize,
     pub end_byte: usize,
     pub start_line: usize,
     pub end_line: usize,
-    
+
     // Complete semantic metadata from ChunkMetadata
     pub node_type: String,             // "function", "class", "method", etc.
     pub node_name: Option<String>,     // "parse_document", "MyClass", etc.
@@ -42,7 +42,7 @@ pub struct CodeChunk {
     pub scope_path: Vec<String>,       // ["module", "MyClass", "parse_document"]
     pub definitions: Vec<String>,      // Variable/function names defined
     pub references: Vec<String>,       // Variable/function names referenced
-    
+
     pub indexed_at: NaiveDateTime,
 }
 ```
@@ -61,7 +61,7 @@ pub struct CodeDocument {
     pub file_size: u64,
     pub last_modified: NaiveDateTime,
     pub indexed_at: NaiveDateTime,
-    
+
     // New fields
     pub languages: Vec<String>,         // All languages found in file
     pub primary_language: Option<String>, // Most prevalent language by token count
@@ -86,7 +86,7 @@ pub struct SearchOptions {
     pub file_limit: usize,                  // Number of files to return (default: 5)
     pub chunks_per_file: usize,             // Number of chunks per file (default: 3)
     pub granularity: SearchGranularity,     // Search mode: Document or Chunk
-    
+
     // Semantic filters (mainly for Chunk mode)
     pub node_types: Option<Vec<String>>,       // ["function", "class"]
     pub node_name_pattern: Option<String>,     // Exact match (not regex yet)

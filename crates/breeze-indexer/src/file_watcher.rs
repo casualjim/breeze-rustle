@@ -236,9 +236,15 @@ mod tests {
       chunk_table,
     );
 
+    let project_table = crate::models::Project::ensure_table(&connection, "test_projects")
+      .await
+      .unwrap();
+    let project_table = Arc::new(RwLock::new(project_table));
+
     let task_manager = Arc::new(TaskManager::new(
       task_table,
       failed_batches_table,
+      project_table,
       bulk_indexer,
     ));
 
