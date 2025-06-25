@@ -1,5 +1,10 @@
 name: 'Setup Build Environment'
 description: 'Sets up the complete build environment for breeze-rustle'
+inputs:
+  python-version:
+    description: 'Python version to use'
+    required: false
+    default: '3.12'
 
 runs:
   using: 'composite'
@@ -7,14 +12,14 @@ runs:
     - name: Install mise
       uses: jdx/mise-action@v2
       with:
-        version: latest
-        install: true
+        experimental: true
+        install: false
 
     - name: Install tools with mise
       run: mise install
       shell: bash
       env:
-        MISE_PYTHON_UV_VENV_CREATE_ARGS: "--python python${{ matrix.python-version }}"
+        MISE_PYTHON_UV_VENV_CREATE_ARGS: "--python python${{ inputs.python-version }}"
 
     - name: Install npm dependencies
       run: npm install
