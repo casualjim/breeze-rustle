@@ -21,6 +21,13 @@ runs:
       env:
         MISE_PYTHON_UV_VENV_CREATE_ARGS: "--python python${{ inputs.python-version }}"
 
+    - name: Install mold linker and C++ libraries on Linux
+      if: runner.os == 'Linux'
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y mold libc++-dev libc++abi-dev
+      shell: bash
+
     - name: Install npm dependencies
       run: npm install
       shell: bash
