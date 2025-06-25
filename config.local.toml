@@ -45,15 +45,15 @@ batch_size = 256 # Number of chunks to collect in a batch betfore sending to the
 [embeddings]
 # The selected embedding provider, from the providers defined below
 # provider = "local" | "openai" | "ollama"  | "llamacpp"| "voyage" | "cohere" | "my-provider" | ...
-provider = "voyage"
+provider = "ollama"
 workers = 5 # Number of concurrent chunk batchers to use for the embedding provider
 
-# [embeddings.local]
-# model = "ibm-granite/granite-embedding-125m-english"  # Local model for embeddings
-# tokenizer = "characters"
+[embeddings.local]
+model = "BAAI/bge-small-en-v1.5"  # Local model for embeddings
+tokenizer = "hf:BAAI/bge-small-en-v1.5" # Hugging Face tokenizer for BGE model
 # Optional: Override if auto-detection fails
-# context_length = 512
-# embedding_dim = 384
+context_length = 512
+embedding_dim = 384
 
 
 # [embeddings.openai]
@@ -71,19 +71,34 @@ workers = 5 # Number of concurrent chunk batchers to use for the embedding provi
 # tokens_per_minute = 1000000
 # max_concurrent_requests = 50
 
+# [embeddings.ollama]
+# model = "hf.co/Qwen/Qwen3-Embedding-0.6B-GGUF:q8_0"  # Ollama model for embeddings
+# api_base = "http://localhost:11434/v1"  # Ollama API base URL
+# # Optional: Override if auto-detection fails
+# context_length = 32768
+# embedding_dim = 1024
+# max_batch_size = 64  # Local servers might need smaller batches
+# tokenizer = "hf:Qwen/Qwen3-Embedding-0.6B"  # huggingface tokenizer for Ollama model
+
+# # Rate limiting for the provider
+# requests_per_minute = 3000
+# tokens_per_minute = 1_000_000
+# max_concurrent_requests = 5
+
 [embeddings.ollama]
-model = "hf.co/Qwen/Qwen3-Embedding-0.6B-GGUF:q8_0"  # Ollama model for embeddings
+model = "nomic-embed-text"  # Ollama model for embeddings
 api_base = "http://localhost:11434/v1"  # Ollama API base URL
 # Optional: Override if auto-detection fails
-context_length = 32768
-embedding_dim = 1024
-max_batch_size = 64  # Local servers might need smaller batches
-tokenizer = "hf:Qwen/Qwen3-Embedding-0.6B"  # huggingface tokenizer for Ollama model
+context_length = 8192
+embedding_dim = 768
+max_batch_size = 64
+tokenizer = "hf:nomic-ai/nomic-embed-text-v1.5" # huggingface tokenizer for Ollama model
 
 # Rate limiting for the provider
-requests_per_minute = 3000
+requests_per_minute = 50
 tokens_per_minute = 1_000_000
-max_concurrent_requests = 5
+max_concurrent_requests = 10
+max_tokens_per_request = 64_000
 
 [embeddings.llamacpp]
 model = "qwen3-embed"  # llama.cpp model for embeddings
@@ -97,6 +112,7 @@ tokenizer = "hf:Qwen/Qwen3-Embedding-0.6B"  # huggingface tokenizer for llama.cp
 # Rate limiting for the provider
 requests_per_minute = 3000
 tokens_per_minute = 1_000_000
+
 max_concurrent_requests = 1
 
 # runpodctl create pod \
