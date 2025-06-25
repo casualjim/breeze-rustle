@@ -7,8 +7,6 @@ default:
 
 # Install all development dependencies
 install:
-    cargo install --locked cargo-binstall
-    cargo binstall cargo-nextest
     cargo binstall flamegraph
     cargo binstall cargo-zigbuild
     cargo binstall cargo-bloat
@@ -73,7 +71,7 @@ check:
 
 # Format code
 fmt:
-    cargo fmt --all
+    rustfmt
 
 # Fix common issues
 fix:

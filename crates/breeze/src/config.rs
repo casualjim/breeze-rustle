@@ -423,7 +423,7 @@ impl Config {
         .local
         .as_ref()
         .map(|l| l.model.clone())
-        .unwrap_or_else(|| "sentence-transformers/all-MiniLM-L6-v2".to_string()),
+        .unwrap_or_else(|| "BAAI/bge-small-en-v1.5".to_string()),
       _ => "".to_string(), // Not used for non-local providers
     };
 

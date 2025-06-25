@@ -125,7 +125,7 @@ impl Default for Config {
     Self {
       database_path: default_database_path(),
       embedding_provider: EmbeddingProvider::Local,
-      model: "sentence-transformers/all-MiniLM-L6-v2".to_string(),
+      model: "BAAI/bge-small-en-v1.5".to_string(),
       voyage: None,
       openai_providers: std::collections::HashMap::new(),
       max_chunk_size: 512,

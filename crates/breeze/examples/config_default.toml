@@ -1,0 +1,138 @@
+# Example configuration for Breeze
+
+# Database configuration
+db_dir = "~/.local/var/breeze/embeddings.db"
+
+[server]
+
+[server.ports]
+http = 8080  # HTTP port
+https = 8443  # HTTPS port
+
+[server.tls]
+disabled = true
+
+# use keypair files, this does not support automatic cert rotation atm
+[server.tls.keypair]
+tls_cert = "cert.pem"  # Path to the TLS certificate
+tls_key = "key.pem"  # Path to the TLS private key
+
+# Or use letsencrypt over http-01 challenge
+# [server.letsencrypt]
+# domains = ["example.com", "www.example.com"]  # List of domains for TLS
+# emails = ["someone@example.com"]  # List of contacts for TLS
+# production = true  # Use production Let's Encrypt servers
+# cert_dir = "./certs"  # Directory to store certificates
+
+
+
+[indexer]
+# Optional: Number of overlapping tokens between chunks (helps preserve context)
+chunk_overlap = 0.1
+
+[indexer.limits]
+file_size = "5M"  # 5M - files larger than this are skipped
+# Optional: Override the automatic chunk size calculation
+# max_chunk_size = 512  # Maximum tokens per chunk
+max_chunk_size = 4096  # Maximum tokens per chunk
+
+[indexer.workers]
+small_file = 8   # Number of files to process concurrently
+large_file = 4  # Number of large files to process concurrently
+batch_size = 256 # Number of chunks to collect in a batch betfore sending to the embeddings workers
+
+[embeddings]
+# The selected embedding provider, from the providers defined below
+# provider = "local" | "openai" | "ollama"  | "llamacpp"| "voyage" | "cohere" | "my-provider" | ...
+provider = "voyage"
+workers = 5 # Number of concurrent chunk batchers to use for the embedding provider
+
+# [embeddings.local]
+# model = "BAAI/bge-small-en-v1.5"  # Local model for embeddings
+# tokenizer = "characters"
+# Optional: Override if auto-detection fails
+# context_length = 512
+# embedding_dim = 384
+
+
+# [embeddings.openai]
+# model = "text-embedding-ada-002"
+# Optional: API key can also be set via OPENAI_API_KEY env var
+# api_key = "sk-..."
+# Optional: Override defaults
+# api_base = "https://api.openai.com/v1"  # For API-compatible providers
+# context_length = 8191
+# embedding_dim = 1536
+# max_batch_size = 2048  # OpenAI allows large batches
+
+# Rate limiting for the provider
+# requests_per_minute = 3000
+# tokens_per_minute = 1000000
+# max_concurrent_requests = 50
+
+[embeddings.ollama]
+model = "hf.co/Qwen/Qwen3-Embedding-0.6B-GGUF:q8_0"  # Ollama model for embeddings
+api_base = "http://localhost:11434/v1"  # Ollama API base URL
+# Optional: Override if auto-detection fails
+context_length = 32768
+embedding_dim = 1024
+max_batch_size = 64  # Local servers might need smaller batches
+tokenizer = "hf:Qwen/Qwen3-Embedding-0.6B"  # huggingface tokenizer for Ollama model
+
+# Rate limiting for the provider
+requests_per_minute = 3000
+tokens_per_minute = 1_000_000
+max_concurrent_requests = 5
+
+# runpodctl create pod \
+#  --gpuType 'NVIDIA GeForce RTX 3090' \
+#  --imageName vllm/vllm-openai:latest \
+#  --volumeSize 30 \
+#  --containerDiskSize 10 \
+#  --name qwen3-embed \
+#  --secureCloud \
+#  --args '--host 0.0.0.0 --port 8000 --model Qwen/Qwen3-Embedding-0.6B --enforce-eager --trust-remote-code --max-model-len 32768 --max-num-seqs 200 --max-num-batched-tokens 192000 --gpu-memory-utilization 0.95 --disable-log-stats --api-key sk-moFgaeiq8K76FXkCNx2ydwtnxWutYotT' \
+# --ports '8000/http' \
+# --ports '22/tcp' \
+# --volumePath /workspace \
+# --env "HF_HOME=/workspace/hf_home"
+[embeddings.qwen3]
+model = "Qwen/Qwen3-Embedding-0.6B"
+api_base = "https://wfqcjfjn5a7hiv-8000.proxy.runpod.net/v1"
+context_length = 32768
+embedding_dim = 1024
+tokenizer = "hf:Qwen/Qwen3-Embedding-0.6B"
+
+requests_per_minute = 10
+tokens_per_minute = 1_000_000
+max_concurrent_requests = 5
+max_tokens_per_request = 128_000
+max_batch_size = 150
+
+[embeddings.voyage]
+# api_key = "${VOYAGE_API_KEY}"  # Set your Voyage API key in the environment
+tier = "tier-1"  # "free" | "tier-1" | "tier-2" | "tier-3" - affects rate limits
+model = "voyage-code-3" # Best for code embeddings
+
+# Optional overrides (Voyage has good auto-detection)
+# context_length = 32768
+# embedding_dim = 1024
+
+# Voyage automatically adjusts batch sizes based on tier:
+# - free: conservative batching
+# - tier1-3: progressively larger batches
+# max_batch_size = 128  # Override only if needed
+max_concurrent_requests = 5
+
+# [embeddings.my-provider]
+# api_base = "https://api.myprovider.com/v1"
+# model = "my-embedding-model"
+# Optional: API key can also be set via MY_PROVIDER_API_KEY env var
+# api_key = "..."
+# context_length = 512
+# embedding_dim = 1024
+
+# Rate limiting for the provider
+# requests_per_minute = 3000
+# tokens_per_minute = 1000000
+# max_concurrent_requests = 50

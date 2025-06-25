@@ -45,6 +45,24 @@ repos:
       # Run the formatter.
       - id: ruff-format
 
+  - repo: https://github.com/koalaman/shellcheck-precommit
+    rev: v0.10.0
+    hooks:
+      - id: shellcheck
+        name: ShellCheck
+        description: Lint shell scripts using ShellCheck
+        files: \.(sh|bash|zsh|fish)$
+
+  - repo: https://github.com/rhysd/actionlint
+    rev: v1.7.7
+    hooks:
+      - id: actionlint-system
+        name: Lint GitHub Actions workflow files
+        description: Runs system-installed actionlint to lint GitHub Actions workflow files
+        language: system
+        types: ["yaml"]
+        files: ^\.github/workflows/
+        entry: actionlint
 
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v5.0.0
