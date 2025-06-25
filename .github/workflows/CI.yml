@@ -39,15 +39,15 @@ jobs:
       - name: Build and install package
         run: |
           if [ "${{ matrix.os }}" = "windows-latest" ]; then
-            uv pip install --active maturin
+            uv pip install --python .venv maturin
           else
-            uv pip install --active maturin[patchelf]
+            uv pip install --python .venv maturin[patchelf]
           fi
           cd crates/breeze-py && uv run --active maturin develop
         shell: bash
       - name: Install test dependencies
         run: |
-          uv pip install --active pytest pytest-asyncio breeze-langdetect
+          uv pip install --python .venv pytest pytest-asyncio breeze-langdetect
       - name: Install cargo-nextest
         uses: taiki-e/install-action@v2
         with:
