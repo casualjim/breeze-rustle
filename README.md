@@ -21,7 +21,6 @@ The easiest way to get the required tools is to use: [mise](https://mise.jdx.dev
 
 - Rust 1.84 or above
 - Working LLVM installation (tree-sitter parsers are in C or C++)
-- Node 20 (we use [volta](https://volta.sh/))
 
 ```bash
 git clone https://github.com/casualjim/breeze-rustle 

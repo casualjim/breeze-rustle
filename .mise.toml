@@ -1,12 +1,17 @@
+[settings]
+experimental = true
+python.uv_venv_auto = true
+
 [tools]
 rust = { version = "latest", profile = "default" }
 just = "1"
 "aqua:cargo-bins/cargo-binstall" = "latest"
 mkcert = "latest"
-"aqua:volta-cli/volta" = "latest"
 uv = "latest"
 "aqua:rust-cross/cargo-zigbuild" = "latest"
 "aqua:nextest-rs/nextest/cargo-nextest" = "latest"
 "ubi:j178/prefligit" = "latest"
 zig = "latest"
 "aqua:rhysd/actionlint" = "latest"
+"aqua:protocolbuffers/protobuf/protoc" = "latest"
+node = "20"

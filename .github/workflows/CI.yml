@@ -33,21 +33,6 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
 
-      - name: Create virtual environment with specific Python version
-        run: uv venv --python python${{ matrix.python-version }}
-      - name: Build and install package
-        run: |
-          if [ "${{ matrix.os }}" = "windows-latest" ]; then
-            uv pip install --python .venv maturin
-          else
-            uv pip install --python .venv maturin[patchelf]
-          fi
-          cd crates/breeze-py && uv run --active maturin develop
-        shell: bash
-
-      - name: Install test dependencies
-        run: |
-          uv pip install --python .venv pytest pytest-asyncio breeze-langdetect
       - name: Run Rust tests
         run: |
           cargo nextest run --features local-embeddings --no-fail-fast
@@ -304,7 +289,7 @@ jobs:
     name: Build Node.js ${{ matrix.settings.target }}
     steps:
       - uses: actions/checkout@v4
-      
+
       - name: Setup build environment
         uses: ./.github/actions/setup-env
 
