@@ -22,8 +22,9 @@ jobs:
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
-        python-version: ["3.10", "3.11", "3.12"]
+        os: [ubuntu-latest, macos-latest] # windows-latest
+        # python-version: ["3.10", "3.11", "3.12"]
+        python-version: ["3.12"]
     steps:
       - uses: actions/checkout@v4
 
@@ -38,15 +39,15 @@ jobs:
       - name: Build and install package
         run: |
           if [ "${{ matrix.os }}" = "windows-latest" ]; then
-            uv pip install --python .venv maturin
+            uv pip install --active maturin
           else
-            uv pip install --python .venv maturin[patchelf]
+            uv pip install --active maturin[patchelf]
           fi
-          cd crates/breeze-py && uv run --python ../../.venv maturin develop
+          cd crates/breeze-py && uv run --active maturin develop
         shell: bash
       - name: Install test dependencies
         run: |
-          uv pip install --python .venv pytest pytest-asyncio breeze-langdetect
+          uv pip install --active pytest pytest-asyncio breeze-langdetect
       - name: Install cargo-nextest
         uses: taiki-e/install-action@v2
         with:
@@ -66,7 +67,7 @@ jobs:
           cargo nextest run --features local-embeddings --no-fail-fast
       - name: Run Python tests
         run: |
-          cd crates/breeze-py && uv run --python ../../.venv pytest -v
+          cd crates/breeze-py && uv run --active pytest -v
       - name: Install Node.js dependencies
         run: |
           cd crates/breeze-napi && npm install
@@ -99,6 +100,19 @@ jobs:
         uses: arduino/setup-protoc@v3
         with:
           version: "25.x"
+      - name: Install cargo-zigbuild
+        run: cargo install cargo-zigbuild
+      - name: Build breeze binary
+        run: |
+          if [ "${{ matrix.platform.target }}" = "x86_64" ]; then
+            cargo zigbuild --workspace --exclude breeze-py --exclude breeze-napi --release --target x86_64-unknown-linux-gnu
+            cd target/x86_64-unknown-linux-gnu/release
+            tar cJf ../../../breeze-x86_64-unknown-linux-gnu.tar.xz breeze
+          else
+            cargo zigbuild --workspace --exclude breeze-py --exclude breeze-napi --release --target aarch64-unknown-linux-gnu
+            cd target/aarch64-unknown-linux-gnu/release
+            tar cJf ../../../breeze-aarch64-unknown-linux-gnu.tar.xz breeze
+          fi
       - name: Build wheels
         uses: PyO3/maturin-action@v1
         with:
@@ -108,15 +122,18 @@ jobs:
           manylinux: auto
           working-directory: crates/breeze-py
           before-script-linux: |
-            # Install protoc
-            curl -LO https://github.com/protocolbuffers/protobuf/releases/download/v25.1/protoc-25.1-linux-x86_64.zip
-            unzip protoc-25.1-linux-x86_64.zip -d /usr/local
-            rm protoc-25.1-linux-x86_64.zip
+            apk add --no-cache protobuf-dev
+
       - name: Upload wheels
         uses: actions/upload-artifact@v4
         with:
           name: wheels-linux-${{ matrix.platform.target }}
           path: crates/breeze-py/dist
+      - name: Upload breeze binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: breeze-binary-linux-${{ matrix.platform.target }}
+          path: target/*.tar.xz
 
   musllinux:
     runs-on: ${{ matrix.platform.runner }}
@@ -143,6 +160,19 @@ jobs:
         uses: arduino/setup-protoc@v3
         with:
           version: "25.x"
+      - name: Install cargo-zigbuild
+        run: cargo install cargo-zigbuild
+      - name: Build breeze binary
+        run: |
+          if [ "${{ matrix.platform.target }}" = "x86_64" ]; then
+            cargo zigbuild --workspace --exclude breeze-py --exclude breeze-napi --release --target x86_64-unknown-linux-musl
+            cd target/x86_64-unknown-linux-musl/release
+            tar cJf ../../../breeze-x86_64-unknown-linux-musl.tar.xz breeze
+          else
+            cargo zigbuild --workspace --exclude breeze-py --exclude breeze-napi --release --target aarch64-unknown-linux-musl
+            cd target/aarch64-unknown-linux-musl/release
+            tar cJf ../../../breeze-aarch64-unknown-linux-musl.tar.xz breeze
+          fi
       - name: Build wheels
         uses: PyO3/maturin-action@v1
         with:
@@ -159,56 +189,61 @@ jobs:
         with:
           name: wheels-musllinux-${{ matrix.platform.target }}
           path: crates/breeze-py/dist
-
-  windows:
-    runs-on: ${{ matrix.platform.runner }}
-    needs: test
-    strategy:
-      matrix:
-        platform:
-          - runner: windows-latest
-            target: x64
-          - runner: windows-latest
-            target: x86
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: 3.x
-          architecture: ${{ matrix.platform.target }}
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 20
-      - name: Install npm dependencies
-        run: npm install
-      - name: Install all platform parsers for cross-compilation
-        run: |
-          npm install --no-save \
-            @kumos/tree-sitter-parsers-darwin-arm64 \
-            @kumos/tree-sitter-parsers-darwin-x64 \
-            @kumos/tree-sitter-parsers-linux-arm64 \
-            @kumos/tree-sitter-parsers-linux-arm64-musl \
-            @kumos/tree-sitter-parsers-linux-x64 \
-            @kumos/tree-sitter-parsers-linux-x64-musl \
-            @kumos/tree-sitter-parsers-win32-arm64 \
-            @kumos/tree-sitter-parsers-win32-x64
-      - name: Install protoc
-        uses: arduino/setup-protoc@v3
-        with:
-          version: "25.x"
-      - name: Build wheels
-        uses: PyO3/maturin-action@v1
-        with:
-          target: ${{ matrix.platform.target }}
-          args: --release --out dist
-          sccache: ${{ !startsWith(github.ref, 'refs/tags/') }}
-          working-directory: crates/breeze-py
-      - name: Upload wheels
+      - name: Upload breeze binary
         uses: actions/upload-artifact@v4
         with:
-          name: wheels-windows-${{ matrix.platform.target }}
-          path: crates/breeze-py/dist
+          name: breeze-binary-musllinux-${{ matrix.platform.target }}
+          path: target/*.tar.xz
+
+  # windows:
+  #   runs-on: ${{ matrix.platform.runner }}
+  #   needs: test
+  #   strategy:
+  #     matrix:
+  #       platform:
+  #         - runner: windows-latest
+  #           target: x64
+  #         - runner: windows-latest
+  #           target: x86
+  #   steps:
+  #     - uses: actions/checkout@v4
+  #     - uses: actions/setup-python@v5
+  #       with:
+  #         python-version: 3.x
+  #         architecture: ${{ matrix.platform.target }}
+  #     - name: Setup Node.js
+  #       uses: actions/setup-node@v4
+  #       with:
+  #         node-version: 20
+  #     - name: Install npm dependencies
+  #       run: npm install
+  #     - name: Install all platform parsers for cross-compilation
+  #       run: |
+  #         npm install --no-save \
+  #           @kumos/tree-sitter-parsers-darwin-arm64 \
+  #           @kumos/tree-sitter-parsers-darwin-x64 \
+  #           @kumos/tree-sitter-parsers-linux-arm64 \
+  #           @kumos/tree-sitter-parsers-linux-arm64-musl \
+  #           @kumos/tree-sitter-parsers-linux-x64 \
+  #           @kumos/tree-sitter-parsers-linux-x64-musl \
+  #           @kumos/tree-sitter-parsers-win32-arm64 \
+  #           @kumos/tree-sitter-parsers-win32-x64
+  #     - name: Install protoc
+  #       uses: arduino/setup-protoc@v3
+  #       with:
+  #         version: "25.x"
+  #     - name: Build wheels
+  #       uses: PyO3/maturin-action@v1
+  #       with:
+  #         target: ${{ matrix.platform.target }}
+  #         args: --release --out dist
+  #         sccache: ${{ !startsWith(github.ref, 'refs/tags/') }}
+  #         working-directory: crates/breeze-py
+  #     - name: Upload wheels
+  #       uses: actions/upload-artifact@v4
+  #       with:
+  #         name: wheels-windows-${{ matrix.platform.target }}
+  #         path: crates/breeze-py/dist
 
   macos:
     runs-on: ${{ matrix.platform.runner }}
@@ -235,6 +270,19 @@ jobs:
         uses: arduino/setup-protoc@v3
         with:
           version: "25.x"
+      - name: Install cargo-zigbuild
+        run: cargo install cargo-zigbuild
+      - name: Build breeze binary
+        run: |
+          if [ "${{ matrix.platform.target }}" = "x86_64" ]; then
+            cargo zigbuild --workspace --exclude breeze-py --exclude breeze-napi --release --target x86_64-apple-darwin
+            cd target/x86_64-apple-darwin/release
+            tar cJf ../../../breeze-x86_64-apple-darwin.tar.xz breeze
+          else
+            cargo zigbuild --workspace --exclude breeze-py --exclude breeze-napi --release --target aarch64-apple-darwin
+            cd target/aarch64-apple-darwin/release
+            tar cJf ../../../breeze-aarch64-apple-darwin.tar.xz breeze
+          fi
       - name: Build wheels
         uses: PyO3/maturin-action@v1
         with:
@@ -247,6 +295,11 @@ jobs:
         with:
           name: wheels-macos-${{ matrix.platform.target }}
           path: crates/breeze-py/dist
+      - name: Upload breeze binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: breeze-binary-macos-${{ matrix.platform.target }}
+          path: target/*.tar.xz
 
   sdist:
     runs-on: ubuntu-latest
@@ -288,9 +341,9 @@ jobs:
             build: |
               npm run build
               strip -x *.node
-          - host: windows-latest
-            build: npm run build
-            target: x86_64-pc-windows-msvc
+          # - host: windows-latest
+          #   build: npm run build
+          #   target: x86_64-pc-windows-msvc
           - host: ubuntu-22.04
             target: x86_64-unknown-linux-gnu
             build: |
@@ -374,7 +427,7 @@ jobs:
     name: Release
     runs-on: ubuntu-latest
     if: ${{ startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch' }}
-    needs: [linux, musllinux, windows, macos, sdist]
+    needs: [linux, musllinux, macos, sdist] # windows
     permissions:
       # Use to sign the release artifacts
       id-token: write
@@ -396,3 +449,12 @@ jobs:
         with:
           command: upload
           args: --non-interactive --skip-existing wheels-*/*
+      - name: Create GitHub Release
+        if: ${{ startsWith(github.ref, 'refs/tags/') }}
+        uses: softprops/action-gh-release@v1
+        with:
+          files: |
+            breeze-binary-*/*.tar.xz
+          draft: false
+          prerelease: false
+          generate_release_notes: true
