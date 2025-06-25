@@ -87,8 +87,8 @@ clean:
     rm -rf crates/breeze-py/target
     rm -rf crates/breeze-napi/target
     rm -rf crates/breeze-napi/*.node
-    rm -rf crates/breeze-napi/index.js
-    rm -rf crates/breeze-napi/index.d.ts
+    rm -rf crates/breeze-napi/index.native.js
+    rm -rf crates/breeze-napi/index.native.d.ts
     find . -type d -name "__pycache__" -exec rm -rf {} +
     find . -type d -name ".pytest_cache" -exec rm -rf {} +
 
