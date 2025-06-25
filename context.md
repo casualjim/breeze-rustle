@@ -3,6 +3,7 @@
 ## Problem: EOF Chunks Lost on Embedding Failure
 
 ### Root Cause
+
 When embedding fails (timeout, rate limit, etc.), the entire batch fails including EOF chunks. Since EOF chunks don't need embedding but were being sent with the batch, they were lost when the batch failed. This caused "No EOF chunk found" errors in the document builder.
 
 ### Key Architecture Insights
@@ -73,6 +74,7 @@ pub enum EmbeddedChunkWithFile {
 ## Test Coverage
 
 Added comprehensive tests including:
+
 - `test_eof_chunk_loss_on_embedding_failure`: Verifies EOF chunks aren't lost
 - `test_document_builder_handles_batch_failures`: Verifies correct handling of mixed batches
 

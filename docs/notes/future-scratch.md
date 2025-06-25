@@ -2,13 +2,9 @@
 
 Keeping some bullet points so I don't forget
 
-* ensure a project gets deleted if the directory is removed
 * create a tree sitter based snippet extractor: /Users/ivan/github/casualjim/breeze/breeze/core/snippets.py
 * implement a runpod serverless dialect
 * Implement reranking models
-* Add extra information about the semantic content of a chunk
-* Track failed files/batches and broadcast
-* Implement streaming writes to lancedb
 
 ## building
 

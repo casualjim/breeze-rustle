@@ -248,7 +248,7 @@ impl ServerHandler for BreezeService {
                 name: "breeze-mcp".to_string(),
                 version: env!("CARGO_PKG_VERSION").to_string(),
             },
-            instructions: Some("Breeze MCP server provides semantic code search and indexing capabilities. Use 'search_code' to search through indexed code and 'index_directory' to index new directories.".to_string()),
+            instructions: Some("Breeze MCP server provides semantic code search and indexing capabilities. Use 'search_code' to search through indexed code and 'create_project' to index new directories.".to_string()),
         }
   }
 

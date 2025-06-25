@@ -26,25 +26,25 @@ pub enum IndexerError {
   #[error("Configuration error: {0}")]
   Config(String),
 
-  #[error("Storage error")]
+  #[error("Storage error: {0}")]
   Storage(#[from] lancedb::Error),
 
   #[error("Database error: {0}")]
   Database(String),
 
-  #[error("Embedding provider error")]
+  #[error("Embedding provider error: {0}")]
   Embedding(#[from] EmbeddingError),
 
   #[error("IO error")]
   Io(#[from] std::io::Error),
 
-  #[error("Chunker error")]
+  #[error("Chunker error: {0}")]
   Chunker(#[from] breeze_chunkers::ChunkError),
 
   #[error("Project not found: {0}")]
   ProjectNotFound(Uuid),
 
-  #[error("File outside project directory")]
+  #[error("File {file} outside project directory {project_dir}")]
   FileOutsideProject { file: String, project_dir: String },
 
   #[error("Search error: {0}")]
@@ -59,16 +59,16 @@ pub enum IndexerError {
     existing_id: Uuid,
   },
 
-  #[error("Arrow conversion error")]
+  #[error("Arrow conversion error: {0}")]
   Arrow(#[from] arrow::error::ArrowError),
 
   #[error("Task execution error: {0}")]
   Task(String),
 
-  #[error("Serialization error")]
+  #[error("Serialization error: {0}")]
   Serialization(#[from] serde_json::Error),
 
-  #[error("File watcher error")]
+  #[error("File watcher error: {0}")]
   FileWatcher(#[from] notify::Error),
 }
 
