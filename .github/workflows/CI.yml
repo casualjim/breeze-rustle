@@ -21,6 +21,7 @@ jobs:
   test:
     runs-on: ${{ matrix.os }}
     strategy:
+      fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest] # windows-latest
         # python-version: ["3.10", "3.11", "3.12"]
@@ -39,9 +40,6 @@ jobs:
       - name: Run Python tests
         run: |
           cd crates/breeze-py && uv run --active pytest -v
-      - name: Install Node.js dependencies
-        run: |
-          cd crates/breeze-napi && npm install
       - name: Run Node.js tests
         run: |
           cd crates/breeze-napi && npm run test:all
@@ -50,6 +48,7 @@ jobs:
     runs-on: ${{ matrix.platform.runner }}
     needs: test
     strategy:
+      fail-fast: false
       matrix:
         platform:
           - runner: ubuntu-22.04
@@ -98,6 +97,7 @@ jobs:
     runs-on: ${{ matrix.platform.runner }}
     needs: test
     strategy:
+      fail-fast: false
       matrix:
         platform:
           - runner: ubuntu-22.04
@@ -196,6 +196,7 @@ jobs:
     runs-on: ${{ matrix.platform.runner }}
     needs: test
     strategy:
+      fail-fast: false
       matrix:
         platform:
           - runner: macos-13

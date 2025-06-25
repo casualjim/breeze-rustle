@@ -8,4 +8,4 @@ pub use config::Config;
 pub use logging::init as init_logging;
 
 // Re-export from breeze-indexer
-pub use breeze_indexer::{ensure_ort_initialized};
+pub use breeze_indexer::ensure_ort_initialized;

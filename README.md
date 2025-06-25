@@ -23,7 +23,7 @@ The easiest way to get the required tools is to use: [mise](https://mise.jdx.dev
 - Working LLVM installation (tree-sitter parsers are in C or C++)
 
 ```bash
-git clone https://github.com/casualjim/breeze-rustle 
+git clone https://github.com/casualjim/breeze-rustle
 cd breeze-rustle
 
 # Install dependencies and build
@@ -36,7 +36,7 @@ just build
 # CPU based local embeddings
 cargo install --path crates/breeze
 # Cuda based local embeddings
-cargo install --path crates/breeze --features cuda 
+cargo install --path crates/breeze --features cuda
 ```
 
 Note: This will take a long time because we have many tree-sitter parsers to link.
