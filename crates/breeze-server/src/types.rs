@@ -164,7 +164,7 @@ pub struct IndexResponse {
   pub files_indexed: usize,
 }
 
-#[derive(Debug, Serialize, JsonSchema)]
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
 pub struct TaskSubmittedResponse {
   pub task_id: Uuid,
   pub status: TaskStatus,
@@ -264,6 +264,19 @@ impl From<breeze_indexer::TaskStatus> for TaskStatus {
       breeze_indexer::TaskStatus::Failed => TaskStatus::Failed,
       breeze_indexer::TaskStatus::Merged => TaskStatus::Merged,
       breeze_indexer::TaskStatus::PartiallyCompleted => TaskStatus::PartiallyCompleted,
+    }
+  }
+}
+
+impl std::fmt::Display for TaskStatus {
+  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    match self {
+      TaskStatus::Pending => write!(f, "Pending"),
+      TaskStatus::Running => write!(f, "Running"),
+      TaskStatus::Completed => write!(f, "Completed"),
+      TaskStatus::Failed => write!(f, "Failed"),
+      TaskStatus::Merged => write!(f, "Merged"),
+      TaskStatus::PartiallyCompleted => write!(f, "Partially Completed"),
     }
   }
 }

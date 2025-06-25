@@ -302,7 +302,38 @@ impl Config {
         .ignore_empty(true),
     );
 
-    let config: Self = builder.build()?.try_deserialize()?;
+    let mut config: Self = builder.build()?.try_deserialize()?;
+
+    // 4. Apply env var expansion to db_dir
+    let xpanda = xpanda::Xpanda::builder().with_env_vars().build();
+    let expanded = xpanda
+      .expand(&config.db_dir.to_string_lossy())
+      .map_err(|e| anyhow::anyhow!("Failed to expand env vars in db_dir: {:?}", e))?;
+
+    // 5. Apply tilde expansion to db_dir
+    let expanded = shellexpand::tilde(&expanded);
+    config.db_dir = PathBuf::from(expanded.as_ref());
+
+    // 6. Apply env var expansion to API keys
+    if let Some(voyage) = &mut config.embeddings.voyage {
+      if let Some(api_key) = &voyage.api_key {
+        let expanded = xpanda
+          .expand(api_key)
+          .map_err(|e| anyhow::anyhow!("Failed to expand env vars in voyage api_key: {:?}", e))?;
+        voyage.api_key = Some(expanded);
+      }
+    }
+
+    // Apply to other provider API keys
+    for (name, provider) in &mut config.embeddings.providers {
+      if let Some(api_key) = &provider.api_key {
+        let expanded = xpanda
+          .expand(api_key)
+          .map_err(|e| anyhow::anyhow!("Failed to expand env vars in {} api_key: {:?}", name, e))?;
+        provider.api_key = Some(expanded);
+      }
+    }
+
     Ok(config)
   }
 
@@ -712,5 +743,74 @@ mod tests {
       Some(1024 * 1024)
     );
     assert_eq!(loaded.indexer.workers.batch_size, 512);
+  }
+
+  #[test]
+  fn test_env_var_expansion() {
+    use std::env;
+
+    let dir = tempdir().unwrap();
+    let config_path = dir.path().join("test_env_config.toml");
+
+    // Set test env vars
+    unsafe {
+      env::set_var("TEST_BREEZE_DIR", "/test/path");
+      env::set_var("TEST_API_KEY", "sk-test-key");
+    }
+
+    // Create config with env vars
+    let config_content = r#"
+db_dir = "${TEST_BREEZE_DIR}/db"
+
+[embeddings]
+provider = "voyage"
+
+[embeddings.voyage]
+api_key = "${TEST_API_KEY}"
+tier = "tier-1"
+model = "voyage-code-3"
+"#;
+
+    std::fs::write(&config_path, config_content).unwrap();
+
+    // Load and verify expansion
+    let loaded = Config::load(Some(config_path)).unwrap();
+    println!("Loaded db_dir: {:?}", loaded.db_dir);
+    println!("Expected: /test/path/db");
+    assert_eq!(loaded.db_dir, PathBuf::from("/test/path/db"));
+    assert_eq!(
+      loaded
+        .embeddings
+        .voyage
+        .as_ref()
+        .unwrap()
+        .api_key
+        .as_ref()
+        .unwrap(),
+      "sk-test-key"
+    );
+
+    // Clean up
+    unsafe {
+      env::remove_var("TEST_BREEZE_DIR");
+      env::remove_var("TEST_API_KEY");
+    }
+  }
+
+  #[test]
+  fn test_tilde_expansion() {
+    let dir = tempdir().unwrap();
+    let config_path = dir.path().join("test_tilde_config.toml");
+
+    // Create config with tilde
+    let config_content = r#"db_dir = "~/breeze/db""#;
+    std::fs::write(&config_path, config_content).unwrap();
+
+    // Load and verify expansion
+    let loaded = Config::load(Some(config_path)).unwrap();
+
+    // Should expand to user's home directory
+    let home = dirs::home_dir().expect("Could not get home directory");
+    assert_eq!(loaded.db_dir, home.join("breeze/db"));
   }
 }

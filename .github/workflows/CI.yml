@@ -28,12 +28,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - name: Setup build environment
+        uses: ./.github/actions/setup-env
         with:
           python-version: ${{ matrix.python-version }}
-      - name: Install uv
-        uses: astral-sh/setup-uv@v5
+
       - name: Create virtual environment with specific Python version
         run: uv venv --python python${{ matrix.python-version }}
       - name: Build and install package
@@ -45,23 +44,10 @@ jobs:
           fi
           cd crates/breeze-py && uv run --active maturin develop
         shell: bash
+
       - name: Install test dependencies
         run: |
           uv pip install --python .venv pytest pytest-asyncio breeze-langdetect
-      - name: Install cargo-nextest
-        uses: taiki-e/install-action@v2
-        with:
-          tool: nextest
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 20
-      - name: Install npm dependencies
-        run: npm install
-      - name: Install protoc
-        uses: arduino/setup-protoc@v3
-        with:
-          version: "25.x"
       - name: Run Rust tests
         run: |
           cargo nextest run --features local-embeddings --no-fail-fast
@@ -83,25 +69,13 @@ jobs:
         platform:
           - runner: ubuntu-22.04
             target: x86_64
-          - runner: ubuntu-22.04
+          - runner: ubuntu-22.04-arm
             target: aarch64
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: 3.x
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 20
-      - name: Install npm dependencies
-        run: npm install
-      - name: Install protoc
-        uses: arduino/setup-protoc@v3
-        with:
-          version: "25.x"
-      - name: Install cargo-zigbuild
-        run: cargo install cargo-zigbuild
+
+      - name: Setup build environment
+        uses: ./.github/actions/setup-env
       - name: Build breeze binary
         run: |
           if [ "${{ matrix.platform.target }}" = "x86_64" ]; then
@@ -143,25 +117,13 @@ jobs:
         platform:
           - runner: ubuntu-22.04
             target: x86_64
-          - runner: ubuntu-22.04
+          - runner: ubuntu-22.04-arm
             target: aarch64
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: 3.x
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 20
-      - name: Install npm dependencies
-        run: npm install
-      - name: Install protoc
-        uses: arduino/setup-protoc@v3
-        with:
-          version: "25.x"
-      - name: Install cargo-zigbuild
-        run: cargo install cargo-zigbuild
+
+      - name: Setup build environment
+        uses: ./.github/actions/setup-env
       - name: Build breeze binary
         run: |
           if [ "${{ matrix.platform.target }}" = "x86_64" ]; then
@@ -257,21 +219,9 @@ jobs:
             target: aarch64
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: 3.x
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 20
-      - name: Install npm dependencies
-        run: npm install
-      - name: Install protoc
-        uses: arduino/setup-protoc@v3
-        with:
-          version: "25.x"
-      - name: Install cargo-zigbuild
-        run: cargo install cargo-zigbuild
+
+      - name: Setup build environment
+        uses: ./.github/actions/setup-env
       - name: Build breeze binary
         run: |
           if [ "${{ matrix.platform.target }}" = "x86_64" ]; then
@@ -306,12 +256,9 @@ jobs:
     needs: test
     steps:
       - uses: actions/checkout@v4
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 20
-      - name: Install npm dependencies
-        run: npm install
+
+      - name: Setup build environment
+        uses: ./.github/actions/setup-env
       - name: Build sdist
         uses: PyO3/maturin-action@v1
         with:
@@ -349,40 +296,17 @@ jobs:
             build: |
               npm run build
               strip *.node
-          - host: ubuntu-22.04
+          - host: ubuntu-22.04-arm
             target: aarch64-unknown-linux-gnu
             build: |
               npm run build
-              aarch64-linux-gnu-strip *.node
+              strip *.node
     name: Build Node.js ${{ matrix.settings.target }}
     steps:
       - uses: actions/checkout@v4
-
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 20
-
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: stable
-          targets: ${{ matrix.settings.target }}
-
-      - name: Setup cross compilation (Linux ARM64)
-        if: matrix.settings.target == 'aarch64-unknown-linux-gnu'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y gcc-aarch64-linux-gnu
-
-      - name: Install root npm dependencies
-        run: npm install
-
-      - name: Install protoc
-        uses: arduino/setup-protoc@v3
-        with:
-          version: "25.x"
+      
+      - name: Setup build environment
+        uses: ./.github/actions/setup-env
 
       - name: Install dependencies
         run: cd crates/breeze-napi && npm install

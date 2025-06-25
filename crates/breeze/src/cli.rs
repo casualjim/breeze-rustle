@@ -16,11 +16,13 @@ pub struct Cli {
 
 #[derive(Subcommand)]
 pub enum Commands {
-  /// Index a codebase for semantic search
-  Index {
-    /// Path to the codebase to index
-    path: PathBuf,
-  },
+  /// Manage projects
+  #[command(subcommand)]
+  Project(ProjectCommands),
+
+  /// Manage tasks
+  #[command(subcommand)]
+  Task(TaskCommands),
 
   /// Search indexed codebase
   Search {
@@ -28,12 +30,44 @@ pub enum Commands {
     query: String,
 
     /// Number of results to return
-    #[arg(short = 'n', long, default_value = "10")]
-    limit: usize,
+    #[arg(short = 'n', long, default_value = "5")]
+    limit: Option<usize>,
 
-    /// Show full file content in results
-    #[arg(short, long)]
-    full: bool,
+    /// Number of chunks per file
+    #[arg(long, default_value = "3")]
+    chunks_per_file: Option<usize>,
+
+    /// Filter by languages (comma-separated)
+    #[arg(long, value_delimiter = ',')]
+    languages: Option<Vec<String>>,
+
+    /// Search granularity (document or chunk)
+    #[arg(long, value_enum)]
+    granularity: Option<SearchGranularity>,
+
+    /// Filter by node types (comma-separated, chunk mode only)
+    #[arg(long, value_delimiter = ',')]
+    node_types: Option<Vec<String>>,
+
+    /// Filter by node name pattern (chunk mode only)
+    #[arg(long)]
+    node_name_pattern: Option<String>,
+
+    /// Filter by parent context pattern (chunk mode only)
+    #[arg(long)]
+    parent_context_pattern: Option<String>,
+
+    /// Filter by scope depth range (format: min,max)
+    #[arg(long, value_parser = parse_scope_depth)]
+    scope_depth: Option<(usize, usize)>,
+
+    /// Filter by definitions (comma-separated, chunk mode only)
+    #[arg(long, value_delimiter = ',')]
+    has_definitions: Option<Vec<String>>,
+
+    /// Filter by references (comma-separated, chunk mode only)
+    #[arg(long, value_delimiter = ',')]
+    has_references: Option<Vec<String>>,
   },
 
   /// Initialize configuration file
@@ -59,6 +93,79 @@ pub enum Commands {
 
   /// Run the API server (uses config file for all settings)
   Serve,
+}
+
+#[derive(Subcommand)]
+pub enum ProjectCommands {
+  /// Create a new project
+  Create {
+    /// Project name
+    name: String,
+    /// Project directory
+    directory: PathBuf,
+    /// Project description
+    #[arg(short, long)]
+    description: Option<String>,
+  },
+  /// List all projects
+  List,
+  /// Show project details
+  Show {
+    /// Project ID
+    id: String,
+  },
+  /// Update project
+  Update {
+    /// Project ID
+    id: String,
+    /// New name
+    #[arg(short, long)]
+    name: Option<String>,
+    /// New description
+    #[arg(short, long)]
+    description: Option<String>,
+  },
+  /// Delete project
+  Delete {
+    /// Project ID
+    id: String,
+  },
+  /// Index project
+  Index {
+    /// Project ID
+    id: String,
+  },
+}
+
+#[derive(Subcommand)]
+pub enum TaskCommands {
+  /// Show task details
+  Show {
+    /// Task ID
+    id: String,
+  },
+  /// List recent tasks
+  List {
+    /// Maximum number of tasks to show
+    #[arg(short, long, default_value = "20")]
+    limit: Option<usize>,
+  },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+pub enum SearchGranularity {
+  Document,
+  Chunk,
+}
+
+fn parse_scope_depth(s: &str) -> Result<(usize, usize), String> {
+  let parts: Vec<&str> = s.split(',').collect();
+  if parts.len() != 2 {
+    return Err("Scope depth must be in format: min,max".to_string());
+  }
+  let min = parts[0].parse().map_err(|_| "Invalid min value")?;
+  let max = parts[1].parse().map_err(|_| "Invalid max value")?;
+  Ok((min, max))
 }
 
 #[cfg(feature = "perfprofiling")]
@@ -91,63 +198,4 @@ impl Cli {
   pub fn parse() -> Self {
     <Self as Parser>::parse()
   }
-}
-
-/// Format search results for display
-pub fn format_results(results: &[breeze_indexer::SearchResult], show_full_content: bool) -> String {
-  let mut output = String::new();
-
-  for (idx, result) in results.iter().enumerate() {
-    output.push_str(&format!("\n[{}] {}\n", idx + 1, result.file_path));
-
-    // Show relevance score and chunk count
-    output.push_str(&format!(
-      "   Score: {:.4} | Chunks: {}\n",
-      result.relevance_score, result.chunk_count
-    ));
-
-    // Show chunk previews
-    if !result.chunks.is_empty() {
-      output.push_str(&format!(
-        "   Found {} relevant chunks:\n",
-        result.chunks.len()
-      ));
-
-      for (chunk_idx, chunk) in result.chunks.iter().enumerate() {
-        output.push_str(&format!(
-          "\n   Chunk {} (lines {}-{}, score: {:.4}):\n",
-          chunk_idx + 1,
-          chunk.start_line,
-          chunk.end_line,
-          chunk.relevance_score
-        ));
-
-        if show_full_content {
-          // Show full chunk content
-          for line in chunk.content.lines() {
-            output.push_str("      ");
-            output.push_str(line);
-            output.push('\n');
-          }
-        } else {
-          // Show first 5 lines of chunk as preview
-          let preview_lines: Vec<&str> = chunk.content.lines().take(5).collect();
-          for line in preview_lines {
-            output.push_str("      ");
-            output.push_str(line);
-            output.push('\n');
-          }
-
-          let total_lines = chunk.content.lines().count();
-          if total_lines > 5 {
-            output.push_str(&format!("      ... ({} more lines)\n", total_lines - 5));
-          }
-        }
-      }
-    }
-
-    output.push_str(&format!("{}\n", "-".repeat(80)));
-  }
-
-  output
 }

@@ -1,6 +1,7 @@
 #[cfg(feature = "perfprofiling")]
 use breeze::cli::DebugCommands;
-use breeze::cli::{Cli, Commands};
+use breeze::cli::{Cli, Commands, ProjectCommands, TaskCommands, SearchGranularity};
+use breeze::app::{SearchRequest};
 use std::path::PathBuf;
 use tokio::signal;
 use tokio_util::sync::CancellationToken;
@@ -86,27 +87,107 @@ async fn async_main() {
   };
 
   match cli.command {
-    Commands::Index { path } => {
-      info!("Starting indexing of: {}", path.display());
-      info!("Using configuration: {:?}", config);
-
+    Commands::Project(cmd) => {
       match breeze::App::new(config, shutdown_token.clone()).await {
         Ok(app) => {
-          tokio::select! {
-            result = app.index(&path) => {
-              match result {
-                Ok(task_id) => {
-                  info!("Indexing task submitted successfully! Task ID: {}", task_id);
+          match cmd {
+            ProjectCommands::Create { name, directory, description } => {
+              match app.create_project(name, directory.to_string_lossy().to_string(), description).await {
+                Ok(project) => {
+                  println!("Project created successfully!");
+                  println!("ID: {}", project.id);
+                  println!("Name: {}", project.name);
+                  println!("Directory: {}", project.directory);
+                  if let Some(desc) = &project.description {
+                    println!("Description: {}", desc);
+                  }
                 }
                 Err(e) => {
-                  error!("Indexing failed: {}", e);
+                  error!("Failed to create project: {}", e);
                   std::process::exit(1);
                 }
               }
             }
-            _ = shutdown_token.cancelled() => {
-              info!("Indexing cancelled by user");
-              std::process::exit(0);
+            ProjectCommands::List => {
+              match app.list_projects().await {
+                Ok(projects) => {
+                  if projects.is_empty() {
+                    println!("No projects found.");
+                  } else {
+                    println!("Projects:");
+                    for project in projects {
+                      println!("\n  ID: {}", project.id);
+                      println!("  Name: {}", project.name);
+                      println!("  Directory: {}", project.directory);
+                      if let Some(desc) = &project.description {
+                        println!("  Description: {}", desc);
+                      }
+                    }
+                  }
+                }
+                Err(e) => {
+                  error!("Failed to list projects: {}", e);
+                  std::process::exit(1);
+                }
+              }
+            }
+            ProjectCommands::Show { id } => {
+              match app.get_project(&id).await {
+                Ok(project) => {
+                  println!("ID: {}", project.id);
+                  println!("Name: {}", project.name);
+                  println!("Directory: {}", project.directory);
+                  if let Some(desc) = &project.description {
+                    println!("Description: {}", desc);
+                  }
+                  println!("Created: {}", project.created_at);
+                  println!("Updated: {}", project.updated_at);
+                }
+                Err(e) => {
+                  error!("Failed to get project: {}", e);
+                  std::process::exit(1);
+                }
+              }
+            }
+            ProjectCommands::Update { id, name, description } => {
+              match app.update_project(&id, name, description).await {
+                Ok(project) => {
+                  println!("Project updated successfully!");
+                  println!("ID: {}", project.id);
+                  println!("Name: {}", project.name);
+                  if let Some(desc) = &project.description {
+                    println!("Description: {}", desc);
+                  }
+                }
+                Err(e) => {
+                  error!("Failed to update project: {}", e);
+                  std::process::exit(1);
+                }
+              }
+            }
+            ProjectCommands::Delete { id } => {
+              match app.delete_project(&id).await {
+                Ok(_) => {
+                  println!("Project deleted successfully!");
+                }
+                Err(e) => {
+                  error!("Failed to delete project: {}", e);
+                  std::process::exit(1);
+                }
+              }
+            }
+            ProjectCommands::Index { id } => {
+              match app.index_project(&id).await {
+                Ok(resp) => {
+                  println!("Indexing task submitted successfully!");
+                  println!("Task ID: {}", resp.task_id);
+                  println!("Status: {}", resp.status);
+                }
+                Err(e) => {
+                  error!("Failed to index project: {}", e);
+                  std::process::exit(1);
+                }
+              }
             }
           }
         }
@@ -117,25 +198,128 @@ async fn async_main() {
       }
     }
 
-    Commands::Search { query, limit, full } => {
-      info!("Starting search for: \"{}\"", query);
-      info!("Using configuration: {:?}", config);
-
+    Commands::Task(cmd) => {
       match breeze::App::new(config, shutdown_token.clone()).await {
-        Ok(app) => match app.search(&query, limit).await {
-          Ok(results) => {
-            if results.is_empty() {
-              println!("No results found for query: \"{}\"", query);
-            } else {
-              println!("\nFound {} results for query: \"{}\"", results.len(), query);
-              println!("{}", breeze::cli::format_results(&results, full));
+        Ok(app) => {
+          match cmd {
+            TaskCommands::Show { id } => {
+              match app.get_task(&id).await {
+                Ok(task) => {
+                  println!("Task ID: {}", task.id);
+                  println!("Project ID: {}", task.project_id);
+                  println!("Path: {}", task.path);
+                  println!("Status: {}", task.status);
+                  println!("Created: {}", task.created_at);
+                  if let Some(started) = task.started_at {
+                    println!("Started: {}", started);
+                  }
+                  if let Some(completed) = task.completed_at {
+                    println!("Completed: {}", completed);
+                  }
+                  if let Some(error) = &task.error {
+                    println!("Error: {}", error);
+                  }
+                  if let Some(files) = task.files_indexed {
+                    println!("Files indexed: {}", files);
+                  }
+                }
+                Err(e) => {
+                  error!("Failed to get task: {}", e);
+                  std::process::exit(1);
+                }
+              }
+            }
+            TaskCommands::List { limit } => {
+              match app.list_tasks(limit).await {
+                Ok(tasks) => {
+                  if tasks.is_empty() {
+                    println!("No tasks found.");
+                  } else {
+                    println!("Tasks:");
+                    for task in tasks {
+                      println!("\n  ID: {}", task.id);
+                      println!("  Project: {}", task.project_id);
+                      println!("  Status: {}", task.status);
+                      println!("  Created: {}", task.created_at);
+                      if let Some(files) = task.files_indexed {
+                        println!("  Files indexed: {}", files);
+                      }
+                    }
+                  }
+                }
+                Err(e) => {
+                  error!("Failed to list tasks: {}", e);
+                  std::process::exit(1);
+                }
+              }
             }
           }
-          Err(e) => {
-            error!("Search failed: {}", e);
-            std::process::exit(1);
+        }
+        Err(e) => {
+          error!("Failed to initialize app: {}", e);
+          std::process::exit(1);
+        }
+      }
+    }
+
+    Commands::Search { 
+      query, limit, chunks_per_file, languages, granularity,
+      node_types, node_name_pattern, parent_context_pattern,
+      scope_depth, has_definitions, has_references 
+    } => {
+      info!("Starting search for: \"{}\"", query);
+
+      match breeze::App::new(config, shutdown_token.clone()).await {
+        Ok(app) => {
+          let req = SearchRequest {
+            query,
+            limit,
+            chunks_per_file,
+            languages,
+            granularity: granularity.map(|g| match g {
+              SearchGranularity::Document => breeze_server::types::SearchGranularity::Document,
+              SearchGranularity::Chunk => breeze_server::types::SearchGranularity::Chunk,
+            }),
+            node_types,
+            node_name_pattern,
+            parent_context_pattern,
+            scope_depth,
+            has_definitions,
+            has_references,
+          };
+          
+          match app.search(req).await {
+            Ok(results) => {
+              if results.is_empty() {
+                println!("No results found.");
+              } else {
+                println!("\nFound {} results:", results.len());
+                for (idx, result) in results.iter().enumerate() {
+                  println!("\n[{}] {}", idx + 1, result.file_path);
+                  println!("   Score: {:.4} | Chunks: {}", result.relevance_score, result.chunk_count);
+                  
+                  if !result.chunks.is_empty() {
+                    println!("   Found {} relevant chunks:", result.chunks.len());
+                    for (chunk_idx, chunk) in result.chunks.iter().enumerate() {
+                      println!("\n   Chunk {} (lines {}-{}, score: {:.4}):",
+                        chunk_idx + 1, chunk.start_line, chunk.end_line, chunk.relevance_score);
+                      
+                      // Show full chunk content
+                      for line in chunk.content.lines() {
+                        println!("      {}", line);
+                      }
+                    }
+                  }
+                  println!("{}", "-".repeat(80));
+                }
+              }
+            }
+            Err(e) => {
+              error!("Search failed: {}", e);
+              std::process::exit(1);
+            }
           }
-        },
+        }
         Err(e) => {
           error!("Failed to initialize app: {}", e);
           std::process::exit(1);
@@ -176,7 +360,9 @@ async fn async_main() {
           );
           println!("\nYou can now:");
           println!("  1. Edit the config file to customize settings");
-          println!("  2. Run 'breeze index /path/to/code' to start indexing");
+          println!("  2. Run 'breeze serve' to start the API server");
+          println!("  3. Create a project with 'breeze project create <name> <path>'");
+          println!("  4. Index it with 'breeze project index <project-id>'");
           println!("\nThe config file is heavily commented to help you get started!");
         }
         Err(e) => {
