@@ -179,7 +179,7 @@ impl BulkIndexer {
 
     let elapsed = start_time.elapsed();
     info!(
-      elapsed_seconds = elapsed.as_secs_f64(),
+      elapsed = %humantime::format_duration(elapsed),
       documents_written = result.0,
       "Indexing completed"
     );
@@ -410,6 +410,9 @@ impl BulkIndexer {
     // Progress tracking and cancellation
     let stats = IndexingStats::new();
     let cancel_token = external_cancel_token.unwrap_or_default();
+    
+    // Start progress reporter
+    let progress_handle = self.spawn_progress_reporter(stats.clone(), cancel_token.clone());
 
     // Start pipeline stages with cancellation support
     // we start this with in the reverse order of execution
@@ -513,10 +516,16 @@ impl BulkIndexer {
       .map_err(|e| IndexerError::Task(format!("Chunk sink task panicked: {}", e)))?
       .map_err(|e| IndexerError::Task(format!("Chunk sink task failed: {}", e)))?;
 
-    // Report results
+    // Cancel progress reporter
+    cancel_token.cancel();
+    let _ = progress_handle.await;
+
+    // Report final results
     info!(
-      files = stats.files.load(Ordering::Relaxed),
-      chunks = stats.chunks.load(Ordering::Relaxed),
+      files_chunked = format!("{}/{}", stats.files_chunked.load(Ordering::Relaxed), stats.files.load(Ordering::Relaxed)),
+      files_embedded = format!("{}/{}", stats.files_embedded.load(Ordering::Relaxed), stats.files.load(Ordering::Relaxed)),
+      files_stored = format!("{}/{}", stats.files_stored.load(Ordering::Relaxed), stats.files.load(Ordering::Relaxed)),
+      chunks = format!("{}/{}", stats.chunks_processed.load(Ordering::Relaxed), stats.chunks.load(Ordering::Relaxed)),
       batches = stats.batches.load(Ordering::Relaxed),
       documents = stats.documents.load(Ordering::Relaxed),
       documents_written,
@@ -525,6 +534,42 @@ impl BulkIndexer {
 
     // Return the count and any failures from document builder
     Ok((documents_written, doc_result.1))
+  }
+
+  fn spawn_progress_reporter(
+    &self,
+    stats: IndexingStats,
+    cancel_token: CancellationToken,
+  ) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+      let start = Instant::now();
+      let mut interval = tokio::time::interval(std::time::Duration::from_secs(10));
+      interval.tick().await; // Skip the immediate tick
+      
+      loop {
+        tokio::select! {
+          _ = cancel_token.cancelled() => break,
+          _ = interval.tick() => {
+            let elapsed = start.elapsed();
+            let files = stats.files.load(Ordering::Relaxed);
+            let chunks = stats.chunks.load(Ordering::Relaxed);
+            let chunks_processed = stats.chunks_processed.load(Ordering::Relaxed);
+            let files_chunked = stats.files_chunked.load(Ordering::Relaxed);
+            let files_embedded = stats.files_embedded.load(Ordering::Relaxed);
+            let files_stored = stats.files_stored.load(Ordering::Relaxed);
+            
+            info!(
+              elapsed = %humantime::format_duration(elapsed),
+              files_chunked = format!("{}/{}", files_chunked, files),
+              files_embedded = format!("{}/{}", files_embedded, files),
+              files_stored = format!("{}/{}", files_stored, files),
+              chunks = format!("{}/{}", chunks_processed, chunks),
+              "Indexing progress"
+            );
+          }
+        }
+      }
+    })
   }
 
   fn spawn_stream_processor(
@@ -688,10 +733,14 @@ impl BulkIndexer {
 
 #[derive(Clone)]
 struct IndexingStats {
-  files: Arc<AtomicUsize>,
-  chunks: Arc<AtomicUsize>,
-  batches: Arc<AtomicUsize>,
-  documents: Arc<AtomicUsize>,
+  files: Arc<AtomicUsize>,  // Total files discovered
+  chunks: Arc<AtomicUsize>,  // Total chunks created
+  batches: Arc<AtomicUsize>, // Total batches processed
+  documents: Arc<AtomicUsize>, // Documents created
+  chunks_processed: Arc<AtomicUsize>, // Chunks embedded
+  files_chunked: Arc<AtomicUsize>,    // Files that completed chunking
+  files_embedded: Arc<AtomicUsize>,   // Files that completed embedding
+  files_stored: Arc<AtomicUsize>,     // Files stored to database
 }
 
 impl IndexingStats {
@@ -701,6 +750,10 @@ impl IndexingStats {
       chunks: Arc::new(AtomicUsize::new(0)),
       batches: Arc::new(AtomicUsize::new(0)),
       documents: Arc::new(AtomicUsize::new(0)),
+      chunks_processed: Arc::new(AtomicUsize::new(0)),
+      files_chunked: Arc::new(AtomicUsize::new(0)),
+      files_embedded: Arc::new(AtomicUsize::new(0)),
+      files_stored: Arc::new(AtomicUsize::new(0)),
     }
   }
 }
@@ -795,6 +848,7 @@ async fn stream_processor_task(
 
               if is_eof {
                 params.stats.files.fetch_add(1, Ordering::Relaxed);
+                params.stats.files_chunked.fetch_add(1, Ordering::Relaxed);
               } else {
                 params.stats.chunks.fetch_add(1, Ordering::Relaxed);
                 regular_chunk_count += 1;
@@ -854,9 +908,6 @@ async fn remote_embedder_worker_task(
   let mut pending_batches: std::collections::BTreeMap<usize, PendingBatch> =
     std::collections::BTreeMap::new();
 
-  // Running totals for logging
-  let mut total_chunks_processed = 0usize;
-  let mut total_files_processed = 0usize;
 
   loop {
     // Check for cancellation
@@ -923,7 +974,6 @@ async fn remote_embedder_worker_task(
             .await;
 
           for embedding_batch in embedding_batches {
-            total_chunks_processed += embedding_batch.chunks.len();
             debug!(
               "Worker {} processing batch {} with {} chunks",
               worker_id,
@@ -937,8 +987,6 @@ async fn remote_embedder_worker_task(
               embedding_batch.batch_id,
               &embedded_tx,
               &stats,
-              total_chunks_processed,
-              total_files_processed,
             )
             .await;
 
@@ -950,7 +998,7 @@ async fn remote_embedder_worker_task(
                 content_hash,
               } = eof_chunk.chunk
               {
-                total_files_processed += 1;
+                stats.files_embedded.fetch_add(1, Ordering::Relaxed);
                 let eof = EmbeddedChunkWithFile::EndOfFile {
                   batch_id: embedding_batch.batch_id,
                   file_path,
@@ -992,15 +1040,12 @@ async fn remote_embedder_worker_task(
               .await;
 
             for embedding_batch in embedding_batches {
-              total_chunks_processed += embedding_batch.chunks.len();
               process_embedding_batch(
                 embedding_provider.as_ref(),
                 embedding_batch.chunks,
                 embedding_batch.batch_id,
                 &embedded_tx,
                 &stats,
-                total_chunks_processed,
-                total_files_processed,
               )
               .await;
 
@@ -1012,8 +1057,7 @@ async fn remote_embedder_worker_task(
                   content_hash,
                 } = eof_chunk.chunk
                 {
-                  total_files_processed += 1;
-                  let eof = EmbeddedChunkWithFile::EndOfFile {
+                    let eof = EmbeddedChunkWithFile::EndOfFile {
                     batch_id: embedding_batch.batch_id,
                     file_path,
                     content,
@@ -1036,7 +1080,7 @@ async fn remote_embedder_worker_task(
                 content_hash,
               } = eof_chunk.chunk
               {
-                total_files_processed += 1;
+                stats.files_embedded.fetch_add(1, Ordering::Relaxed);
                 let eof = EmbeddedChunkWithFile::EndOfFile {
                   batch_id: bid,
                   file_path,
@@ -1056,11 +1100,7 @@ async fn remote_embedder_worker_task(
     }
   }
 
-  info!(
-    "Remote embedder worker {} completed - chunks: {}, files: {}",
-    worker_id, total_chunks_processed, total_files_processed
-  );
-  debug!("Remote Embedder Worker {} finished", worker_id);
+  debug!("Remote embedder worker {} completed", worker_id);
 }
 
 async fn embedder_task(
@@ -1083,9 +1123,6 @@ async fn embedder_task(
   let mut pending_batches: std::collections::BTreeMap<usize, PendingBatch> =
     std::collections::BTreeMap::new();
 
-  // Running totals for logging
-  let mut total_chunks_processed = 0usize;
-  let mut total_files_processed = 0usize;
 
   loop {
     tokio::select! {
@@ -1137,7 +1174,6 @@ async fn embedder_task(
               let embedding_batches = batching_strategy.prepare_batches(chunks_with_batch_id).await;
 
               for embedding_batch in embedding_batches {
-                total_chunks_processed += embedding_batch.chunks.len();
                 debug!(
                   "Processing batch {} with {} chunks",
                   embedding_batch.batch_id,
@@ -1150,15 +1186,13 @@ async fn embedder_task(
                   embedding_batch.batch_id,
                   &embedded_tx,
                   &stats,
-                  total_chunks_processed,
-                  total_files_processed,
                 )
                 .await;
 
                 // Send EOF chunks if this batch is complete
                 for eof_chunk in embedding_batch.eof_chunks {
                   if let PipelineChunk::EndOfFile { file_path, content, content_hash } = eof_chunk.chunk {
-                    total_files_processed += 1;
+                    stats.files_embedded.fetch_add(1, Ordering::Relaxed);
                     let eof = EmbeddedChunkWithFile::EndOfFile {
                       batch_id: embedding_batch.batch_id,
                       file_path,
@@ -1193,22 +1227,18 @@ async fn embedder_task(
                 let embedding_batches = batching_strategy.prepare_batches(chunks_with_batch_id).await;
 
                 for embedding_batch in embedding_batches {
-                  total_chunks_processed += embedding_batch.chunks.len();
                   process_embedding_batch(
                     embedding_provider.as_ref(),
                     embedding_batch.chunks,
                     embedding_batch.batch_id,
                     &embedded_tx,
                     &stats,
-                    total_chunks_processed,
-                    total_files_processed
                   ).await;
 
                   // Send EOF chunks
                   for eof_chunk in embedding_batch.eof_chunks {
                     if let PipelineChunk::EndOfFile { file_path, content, content_hash } = eof_chunk.chunk {
-                      total_files_processed += 1;
-                      let eof = EmbeddedChunkWithFile::EndOfFile {
+                            let eof = EmbeddedChunkWithFile::EndOfFile {
                         batch_id: embedding_batch.batch_id,
                         file_path,
                         content,
@@ -1226,7 +1256,7 @@ async fn embedder_task(
               for (bid, pending_batch) in pending_batches {
                 for eof_chunk in pending_batch.eof_chunks {
                   if let PipelineChunk::EndOfFile { file_path, content, content_hash } = eof_chunk.chunk {
-                    total_files_processed += 1;
+                    stats.files_embedded.fetch_add(1, Ordering::Relaxed);
                     let eof = EmbeddedChunkWithFile::EndOfFile {
                       batch_id: bid,
                       file_path,
@@ -1260,18 +1290,14 @@ async fn process_embedding_batch(
   batch_id: usize,
   embedded_tx: &mpsc::Sender<EmbeddedChunkWithFile>,
   stats: &IndexingStats,
-  total_chunks_processed: usize,
-  total_files_processed: usize,
 ) {
   if batch.is_empty() {
     return;
   }
 
   debug!(
-    "Processing embedding batch of {} chunks (total chunks: {}, files: {})",
-    batch.len(),
-    total_chunks_processed,
-    total_files_processed
+    "Processing embedding batch of {} chunks",
+    batch.len()
   );
 
   // Collect files in this batch for failure tracking
@@ -1304,6 +1330,7 @@ async fn process_embedding_batch(
     Ok(embeddings) => {
       debug!("Successfully embedded {} chunks", embeddings.len());
       stats.batches.fetch_add(1, Ordering::Relaxed);
+      stats.chunks_processed.fetch_add(embeddings.len(), Ordering::Relaxed);
 
       let mut embedding_iter = embeddings.into_iter();
       let mut chunk_idx_iter = chunks_to_embed.into_iter();
@@ -1435,6 +1462,7 @@ async fn document_builder_task(
 
                         if let Some((doc, chunks)) = build_document_from_accumulator(project_id, accumulator, embedding_dim).await {
                           stats.documents.fetch_add(1, Ordering::Relaxed);
+                          stats.files_stored.fetch_add(1, Ordering::Relaxed);
 
                           // Store chunks to code_chunks table
                           for chunk in chunks {

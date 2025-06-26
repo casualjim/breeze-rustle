@@ -58,6 +58,7 @@ hex = "0.4"
 # Additional dependencies for embeddings
 hf-hub = { version = "0.4.2", features = ["rustls-tls", "tokio", "ureq"], default-features = false }
 http = "1.2"
+humantime = "2.1"
 intel-mkl-src = { version = "0.8.1", optional = true }
 lancedb.workspace = true
 ndarray = "0.16.1"
