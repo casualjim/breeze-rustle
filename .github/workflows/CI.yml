@@ -68,15 +68,10 @@ jobs:
           rust-target: ${{ matrix.platform.target }}-unknown-linux-gnu
       - name: Build breeze binary
         run: |
-          if [ "${{ matrix.platform.target }}" = "x86_64" ]; then
-            cargo zigbuild --workspace --exclude breeze-py --exclude breeze-napi --release --target x86_64-unknown-linux-gnu
-            cd target/x86_64-unknown-linux-gnu/release
-            tar cJf ../../../breeze-x86_64-unknown-linux-gnu.tar.xz breeze
-          else
-            cargo zigbuild --workspace --exclude breeze-py --exclude breeze-napi --release --target aarch64-unknown-linux-gnu
-            cd target/aarch64-unknown-linux-gnu/release
-            tar cJf ../../../breeze-aarch64-unknown-linux-gnu.tar.xz breeze
-          fi
+          cargo build --workspace --exclude breeze-py --exclude breeze-napi --release --target ${{ matrix.platform.target }}-unknown-linux-gnu
+          cd target/${{ matrix.platform.target }}-unknown-linux-gnu/release
+          tar cJf ../../../breeze-${{ matrix.platform.target }}-unknown-linux-gnu.tar.xz breeze
+
       - name: Build wheels
         uses: PyO3/maturin-action@v1
         with:
@@ -118,15 +113,10 @@ jobs:
           rust-target: ${{ matrix.platform.target }}-unknown-linux-musl
       - name: Build breeze binary
         run: |
-          if [ "${{ matrix.platform.target }}" = "x86_64" ]; then
-            cargo zigbuild --workspace --exclude breeze-py --exclude breeze-napi --release --target x86_64-unknown-linux-musl
-            cd target/x86_64-unknown-linux-musl/release
-            tar cJf ../../../breeze-x86_64-unknown-linux-musl.tar.xz breeze
-          else
-            cargo zigbuild --workspace --exclude breeze-py --exclude breeze-napi --release --target aarch64-unknown-linux-musl
-            cd target/aarch64-unknown-linux-musl/release
-            tar cJf ../../../breeze-aarch64-unknown-linux-musl.tar.xz breeze
-          fi
+          cargo build --workspace --exclude breeze-py --exclude breeze-napi --release --target ${{ matrix.platform.target }}-unknown-linux-musl
+          cd target/${{ matrix.platform.target }}-unknown-linux-musl/release
+          tar cJf ../../../breeze-${{ matrix.platform.target }}-unknown-linux-musl.tar.xz breeze
+
       - name: Build wheels
         uses: PyO3/maturin-action@v1
         with:
