@@ -32,10 +32,6 @@ runs:
       run: npm install
       shell: bash
 
-    # - name: Create virtual environment with specific Python version
-    #   run: uv venv --python python${{ matrix.python-version }}
-    #   shell: bash
-
     - name: Install maturin
       run: |
         uv pip install --python .venv maturin[patchelf]
