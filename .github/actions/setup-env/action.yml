@@ -5,6 +5,10 @@ inputs:
     description: 'Python version to use'
     required: false
     default: '3.12'
+  rust-target:
+    description: 'Rust target triple to install (optional)'
+    required: false
+    default: ''
 
 runs:
   using: 'composite'
@@ -26,7 +30,7 @@ runs:
       if: runner.os == 'Linux'
       run: |
         sudo apt-get update
-        sudo apt-get install -y mold libc++-dev libc++abi-dev libstdc++-11-dev g++-11
+        sudo apt-get install -y mold libc++-dev libc++abi-dev libstdc++-11-dev g++-11 libssl-dev pkg-config
       shell: bash
 
     - name: Download and setup ONNX Runtime on Linux
@@ -59,4 +63,9 @@ runs:
     - name: Install maturin
       run: |
         uv pip install --python .venv maturin[patchelf]
+      shell: bash
+
+    - name: Install Rust target
+      if: inputs.rust-target != ''
+      run: rustup target add ${{ inputs.rust-target }}
       shell: bash

@@ -64,6 +64,8 @@ jobs:
 
       - name: Setup build environment
         uses: ./.github/actions/setup-env
+        with:
+          rust-target: ${{ matrix.platform.target }}-unknown-linux-gnu
       - name: Build breeze binary
         run: |
           if [ "${{ matrix.platform.target }}" = "x86_64" ]; then
@@ -112,6 +114,8 @@ jobs:
 
       - name: Setup build environment
         uses: ./.github/actions/setup-env
+        with:
+          rust-target: ${{ matrix.platform.target }}-unknown-linux-musl
       - name: Build breeze binary
         run: |
           if [ "${{ matrix.platform.target }}" = "x86_64" ]; then

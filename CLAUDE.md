@@ -16,6 +16,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 !!!!!!!!!!!! NO BACKWARDS COMPATIBILITY !!!!!!!!!!!!
 !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 
+Do not make assumptions, the workflow is:
+
+Read/Investigate -> Think/Research -> Propose & Discuss -> Plan -> Write down the plan in plans/docs -> Make a todo list -> Execute -> Validate -> Lint
+
 ## Project Overview
 
 breeze-rustle is a high-performance Rust library with Python and Node.js bindings that provides semantic code chunking capabilities. It uses tree-sitter parsers and nvim-treesitter queries to intelligently split code into meaningful semantic units while preserving context and extracting rich metadata.
