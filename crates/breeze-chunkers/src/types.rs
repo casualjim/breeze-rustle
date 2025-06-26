@@ -76,11 +76,20 @@ impl SemanticChunk {
   }
 }
 
+/// Processing stream type for chunks
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChunkStream {
+  Regular,
+  LargeFile,
+}
+
 /// A chunk from a project file with type information
 #[derive(Debug, Clone)]
 pub struct ProjectChunk {
   pub file_path: String,
   pub chunk: Chunk,
+  pub file_size: u64,
+  pub stream: ChunkStream,
 }
 
 impl ProjectChunk {

@@ -27,7 +27,7 @@ use futures::{Stream, StreamExt};
 use crate::chunker::InnerChunker;
 // Re-export main types
 pub use crate::types::{
-  Chunk, ChunkError, ChunkMetadata, FileMetadata, ProjectChunk, SemanticChunk,
+  Chunk, ChunkError, ChunkMetadata, ChunkStream, FileMetadata, ProjectChunk, SemanticChunk,
 };
 pub use crate::walker::{CandidateMatcher, WalkOptions, walk_files, walk_project};
 

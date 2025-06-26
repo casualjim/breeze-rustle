@@ -1,9 +1,276 @@
-use std::collections::HashMap;
-use tracing::{debug, error};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
+use tokio::sync::mpsc;
+use tokio_util::sync::CancellationToken;
+use tracing::{debug, error, info};
 use uuid::Uuid;
 
+use crate::IndexerError;
+use crate::bulk_indexer::IndexingStats;
 use crate::models::{ChunkMetadataUpdate, CodeChunk, CodeDocument};
-use crate::pipeline::{FileAccumulator, PipelineChunk};
+use crate::pipeline::{EmbeddedChunk, EmbeddedChunkWithFile, FileAccumulator, PipelineChunk};
+use breeze_chunkers::ChunkStream;
+
+/// Context for document building operations
+pub(crate) struct DocumentBuildContext<'a> {
+  pub doc_tx: &'a mpsc::Sender<CodeDocument>,
+  pub chunk_tx: &'a mpsc::Sender<CodeChunk>,
+  pub stats: &'a IndexingStats,
+  pub cancel_token: &'a CancellationToken,
+}
+
+/// Stream-specific document builder that maintains ordering for a single stream
+struct StreamDocumentBuilder {
+  project_id: Uuid,
+  embedding_dim: usize,
+  file_accumulators: BTreeMap<String, FileAccumulator>,
+  pending_chunks: BTreeMap<usize, Vec<EmbeddedChunkWithFile>>,
+  next_expected_batch_id: usize,
+  failed_files: BTreeSet<String>,
+  total_files_built: u64,
+}
+
+impl StreamDocumentBuilder {
+  fn new(project_id: Uuid, embedding_dim: usize) -> Self {
+    Self {
+      project_id,
+      embedding_dim,
+      file_accumulators: BTreeMap::new(),
+      pending_chunks: BTreeMap::new(),
+      next_expected_batch_id: 0,
+      failed_files: BTreeSet::new(),
+      total_files_built: 0,
+    }
+  }
+
+  async fn add_chunk(
+    &mut self,
+    embedded_chunk: EmbeddedChunkWithFile,
+    document_batch: &mut Vec<CodeDocument>,
+    ctx: &DocumentBuildContext<'_>,
+  ) -> Result<(), IndexerError> {
+    let batch_id = match &embedded_chunk {
+      EmbeddedChunkWithFile::Embedded { batch_id, .. } => *batch_id,
+      EmbeddedChunkWithFile::EndOfFile { batch_id, .. } => *batch_id,
+      EmbeddedChunkWithFile::BatchFailure { batch_id, .. } => *batch_id,
+    };
+
+    // Add chunk to pending buffer
+    self
+      .pending_chunks
+      .entry(batch_id)
+      .or_default()
+      .push(embedded_chunk);
+
+    // Process any chunks that are now in order
+    while let Some((&current_batch_id, _)) = self.pending_chunks.first_key_value() {
+      if current_batch_id == self.next_expected_batch_id {
+        // Process this batch
+        let batch_chunks = self.pending_chunks.remove(&current_batch_id).unwrap();
+
+        for embedded_chunk in batch_chunks {
+          self
+            .process_chunk(embedded_chunk, current_batch_id, document_batch, ctx)
+            .await?;
+        }
+
+        self.next_expected_batch_id += 1;
+      } else {
+        // We're missing some earlier batch, stop processing
+        break;
+      }
+    }
+
+    Ok(())
+  }
+
+  async fn process_chunk(
+    &mut self,
+    embedded_chunk: EmbeddedChunkWithFile,
+    batch_id: usize,
+    document_batch: &mut Vec<CodeDocument>,
+    ctx: &DocumentBuildContext<'_>,
+  ) -> Result<(), IndexerError> {
+    match embedded_chunk {
+      EmbeddedChunkWithFile::Embedded {
+        file_path,
+        chunk,
+        embedding,
+        ..
+      } => {
+        // Skip chunks for failed files
+        if self.failed_files.contains(&file_path) {
+          return Ok(());
+        }
+
+        // Accumulate chunk
+        let accumulator = self
+          .file_accumulators
+          .entry(file_path.clone())
+          .or_insert_with(|| FileAccumulator::new(file_path));
+
+        accumulator.add_chunk(EmbeddedChunk {
+          chunk: *chunk,
+          embedding,
+        });
+      }
+      EmbeddedChunkWithFile::EndOfFile {
+        file_path,
+        content,
+        content_hash,
+        ..
+      } => {
+        // Skip EOF for failed files
+        if self.failed_files.contains(&file_path) {
+          return Ok(());
+        }
+
+        // Build document for completed file
+        if let Some(mut accumulator) = self.file_accumulators.remove(&file_path) {
+          self.total_files_built += 1;
+          debug!(
+            file_path,
+            total_files_built = self.total_files_built,
+            batch_id,
+            "Building document for file: {file_path}"
+          );
+
+          // Add the EOF chunk to the accumulator
+          accumulator.add_chunk(EmbeddedChunk {
+            chunk: PipelineChunk::EndOfFile {
+              file_path: file_path.clone(),
+              content,
+              content_hash,
+            },
+            embedding: vec![],
+          });
+
+          // Build the document
+          let result = build_document_from_accumulator(
+            self.project_id,
+            accumulator,
+            self.embedding_dim,
+            document_batch,
+            ctx,
+          )
+          .await;
+
+          if let Err(e) = result {
+            error!("Failed to build document for {}: {}", file_path, e);
+            self.failed_files.insert(file_path);
+          }
+        } else {
+          error!(
+            "Received EOF chunk for file without content chunks: {}",
+            file_path
+          );
+        }
+      }
+      EmbeddedChunkWithFile::BatchFailure {
+        failed_files: batch_failed_files,
+        error,
+        ..
+      } => {
+        error!("Batch {} failed: {}", batch_id, error);
+        for file in batch_failed_files {
+          self.failed_files.insert(file);
+        }
+      }
+    }
+
+    Ok(())
+  }
+
+  async fn flush_remaining(
+    &mut self,
+    document_batch: &mut Vec<CodeDocument>,
+    ctx: &DocumentBuildContext<'_>,
+  ) -> Result<(), IndexerError> {
+    // Process any remaining pending chunks
+    for (batch_id, batch_chunks) in std::mem::take(&mut self.pending_chunks) {
+      debug!(
+        "Processing remaining batch {} with {} chunks",
+        batch_id,
+        batch_chunks.len()
+      );
+      for embedded_chunk in batch_chunks {
+        self
+          .process_chunk(embedded_chunk, batch_id, document_batch, ctx)
+          .await?;
+      }
+    }
+
+    Ok(())
+  }
+}
+
+/// Dual-stream document builder that routes chunks to appropriate stream builders
+pub(crate) struct DualStreamDocumentBuilder {
+  regular_builder: StreamDocumentBuilder,
+  large_file_builder: StreamDocumentBuilder,
+}
+
+impl DualStreamDocumentBuilder {
+  pub fn new(project_id: Uuid, embedding_dim: usize) -> Self {
+    Self {
+      regular_builder: StreamDocumentBuilder::new(project_id, embedding_dim),
+      large_file_builder: StreamDocumentBuilder::new(project_id, embedding_dim),
+    }
+  }
+
+  pub async fn add_chunk(
+    &mut self,
+    embedded_chunk: EmbeddedChunkWithFile,
+    document_batch: &mut Vec<CodeDocument>,
+    ctx: &DocumentBuildContext<'_>,
+  ) -> Result<(), IndexerError> {
+    // Route to appropriate builder based on stream
+    let stream = match &embedded_chunk {
+      EmbeddedChunkWithFile::Embedded { stream, .. } => *stream,
+      EmbeddedChunkWithFile::EndOfFile { stream, .. } => *stream,
+      EmbeddedChunkWithFile::BatchFailure { stream, .. } => *stream,
+    };
+
+    match stream {
+      ChunkStream::Regular => {
+        self
+          .regular_builder
+          .add_chunk(embedded_chunk, document_batch, ctx)
+          .await
+      }
+      ChunkStream::LargeFile => {
+        self
+          .large_file_builder
+          .add_chunk(embedded_chunk, document_batch, ctx)
+          .await
+      }
+    }
+  }
+
+  pub async fn flush_remaining(
+    &mut self,
+    document_batch: &mut Vec<CodeDocument>,
+    ctx: &DocumentBuildContext<'_>,
+  ) -> Result<(u64, BTreeSet<String>), IndexerError> {
+    // Flush both builders
+    self
+      .regular_builder
+      .flush_remaining(document_batch, ctx)
+      .await?;
+
+    self
+      .large_file_builder
+      .flush_remaining(document_batch, ctx)
+      .await?;
+
+    // Combine results
+    let total_files =
+      self.regular_builder.total_files_built + self.large_file_builder.total_files_built;
+    let mut all_failed_files = self.regular_builder.failed_files.clone();
+    all_failed_files.extend(self.large_file_builder.failed_files.clone());
+
+    Ok((total_files, all_failed_files))
+  }
+}
 
 /// Build a document from accumulated file chunks using weighted average
 /// Returns both the document and the individual chunks for storage
@@ -11,9 +278,11 @@ pub(crate) async fn build_document_from_accumulator(
   project_id: Uuid,
   accumulator: FileAccumulator,
   embedding_dim: usize,
-) -> Option<(CodeDocument, Vec<CodeChunk>)> {
+  document_batch: &mut Vec<CodeDocument>,
+  ctx: &DocumentBuildContext<'_>,
+) -> Result<(), IndexerError> {
   if accumulator.embedded_chunks.is_empty() {
-    return None;
+    return Ok(());
   }
 
   let file_path = accumulator.file_path;
@@ -81,12 +350,18 @@ pub(crate) async fn build_document_from_accumulator(
     } else {
       // This shouldn't happen but handle gracefully
       error!("EOF chunk found but missing content for {}", file_path);
-      return None;
+      return Err(IndexerError::Task(format!(
+        "EOF chunk found but missing content for {}",
+        file_path
+      )));
     }
   } else {
     // No EOF chunk found - this shouldn't happen in normal flow
     error!("No EOF chunk found for {}", file_path);
-    return None;
+    return Err(IndexerError::Task(format!(
+      "No EOF chunk found for {}",
+      file_path
+    )));
   };
 
   // Create document with content from EOF chunk
@@ -152,7 +427,112 @@ pub(crate) async fn build_document_from_accumulator(
   doc.update_embedding(aggregated_embedding);
   doc.update_content_hash(content_hash);
 
-  Some((doc, code_chunks))
+  // Send chunks
+  for chunk in code_chunks {
+    if ctx.chunk_tx.send(chunk).await.is_err() {
+      return Err(IndexerError::Task("Chunk receiver dropped".into()));
+    }
+  }
+
+  // Batch documents before sending
+  document_batch.push(doc);
+  if document_batch.len() >= 100 || ctx.cancel_token.is_cancelled() {
+    for doc in document_batch.drain(..) {
+      if ctx.doc_tx.send(doc).await.is_err() {
+        return Err(IndexerError::Task("Document receiver dropped".into()));
+      }
+    }
+  }
+
+  ctx.stats.increment_files_stored();
+  Ok(())
+}
+
+/// Document builder task that uses DualStreamDocumentBuilder
+pub(crate) async fn document_builder_task(
+  project_id: Uuid,
+  mut embedded_rx: mpsc::Receiver<EmbeddedChunkWithFile>,
+  doc_tx: mpsc::Sender<CodeDocument>,
+  chunk_tx: mpsc::Sender<CodeChunk>,
+  embedding_dim: usize,
+  stats: IndexingStats,
+  cancel_token: CancellationToken,
+) -> (usize, Option<(BTreeSet<String>, String)>) {
+  let mut builder = DualStreamDocumentBuilder::new(project_id, embedding_dim);
+  let mut document_batch: Vec<CodeDocument> = Vec::with_capacity(100);
+
+  let ctx = DocumentBuildContext {
+    doc_tx: &doc_tx,
+    chunk_tx: &chunk_tx,
+    stats: &stats,
+    cancel_token: &cancel_token,
+  };
+
+  loop {
+    tokio::select! {
+      _ = cancel_token.cancelled() => {
+        info!("Document builder cancelled");
+        break;
+      }
+      embedded_chunk = embedded_rx.recv() => {
+        match embedded_chunk {
+          Some(embedded_chunk) => {
+            if let Err(e) = builder.add_chunk(
+              embedded_chunk,
+              &mut document_batch,
+              &ctx,
+            ).await {
+              error!("Failed to process chunk: {}", e);
+              // Stop processing on error - likely means receiver dropped
+              break;
+            }
+          }
+          None => break,
+        }
+      }
+    }
+  }
+
+  // Flush any remaining documents
+  if !document_batch.is_empty() {
+    for doc in document_batch {
+      if doc_tx.send(doc).await.is_err() {
+        error!("Failed to send final documents - receiver dropped");
+        break;
+      }
+    }
+  }
+
+  // Process any remaining pending chunks
+  let mut final_batch = Vec::new();
+  match builder.flush_remaining(&mut final_batch, &ctx).await {
+    Ok((total_files, failed_files)) => {
+      // Send final batch
+      for doc in final_batch {
+        if doc_tx.send(doc).await.is_err() {
+          error!("Failed to send final documents - receiver dropped");
+          break;
+        }
+      }
+
+      info!(
+        total_files = total_files,
+        files_stored = stats.get_files_stored(),
+        "Document builder completed"
+      );
+
+      if failed_files.is_empty() {
+        (total_files as usize, None)
+      } else {
+        let error_summary = format!("{} files failed", failed_files.len());
+        (total_files as usize, Some((failed_files, error_summary)))
+      }
+    }
+    Err(e) => {
+      error!("Failed to flush remaining documents: {}", e);
+      (0, Some((BTreeSet::new(), e.to_string())))
+    }
+  }
 }
 
 #[cfg(test)]
@@ -219,9 +599,33 @@ mod tests {
     });
 
     let project_id = uuid::Uuid::now_v7();
-    let (doc, chunks) = build_document_from_accumulator(project_id, accumulator, 3)
+    let (doc_tx, _doc_rx) = mpsc::channel(1);
+    let (chunk_tx, mut chunk_rx) = mpsc::channel(10);
+    let stats = IndexingStats::new();
+    let cancel_token = CancellationToken::new();
+    let mut document_batch = Vec::new();
+
+    let ctx = DocumentBuildContext {
+      doc_tx: &doc_tx,
+      chunk_tx: &chunk_tx,
+      stats: &stats,
+      cancel_token: &cancel_token,
+    };
+
+    build_document_from_accumulator(project_id, accumulator, 3, &mut document_batch, &ctx)
       .await
       .unwrap();
+
+    // Get the document from the batch
+    assert_eq!(document_batch.len(), 1);
+    let doc = document_batch.pop().unwrap();
+
+    // Collect chunks
+    drop(chunk_tx);
+    let mut chunks = Vec::new();
+    while let Some(chunk) = chunk_rx.recv().await {
+      chunks.push(chunk);
+    }
 
     // Verify document properties
     assert_eq!(doc.file_path, file_path);
@@ -248,7 +652,24 @@ mod tests {
   async fn test_empty_chunks() {
     let project_id = uuid::Uuid::now_v7();
     let accumulator = FileAccumulator::new("empty.txt".to_string());
-    let result = build_document_from_accumulator(project_id, accumulator, 3).await;
-    assert!(result.is_none());
+    let (doc_tx, _doc_rx) = mpsc::channel(1);
+    let (chunk_tx, _chunk_rx) = mpsc::channel(10);
+    let stats = IndexingStats::new();
+    let cancel_token = CancellationToken::new();
+    let mut document_batch = Vec::new();
+
+    let ctx = DocumentBuildContext {
+      doc_tx: &doc_tx,
+      chunk_tx: &chunk_tx,
+      stats: &stats,
+      cancel_token: &cancel_token,
+    };
+
+    // Should return error for empty accumulator
+    let _result =
+      build_document_from_accumulator(project_id, accumulator, 3, &mut document_batch, &ctx).await;
+
+    // Empty accumulator should not produce any documents
+    assert_eq!(document_batch.len(), 0);
   }
 }

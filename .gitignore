@@ -88,3 +88,5 @@ node_modules/
 .code_indexer/
 *.pem
 output.map
+
+aqua.yaml

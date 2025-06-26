@@ -212,15 +212,10 @@ jobs:
         uses: ./.github/actions/setup-env
       - name: Build breeze binary
         run: |
-          if [ "${{ matrix.platform.target }}" = "x86_64" ]; then
-            cargo zigbuild --workspace --exclude breeze-py --exclude breeze-napi --release --target x86_64-apple-darwin
-            cd target/x86_64-apple-darwin/release
-            tar cJf ../../../breeze-x86_64-apple-darwin.tar.xz breeze
-          else
-            cargo zigbuild --workspace --exclude breeze-py --exclude breeze-napi --release --target aarch64-apple-darwin
-            cd target/aarch64-apple-darwin/release
-            tar cJf ../../../breeze-aarch64-apple-darwin.tar.xz breeze
-          fi
+          cargo build --workspace --exclude breeze-py --exclude breeze-napi --release --target ${{ matrix.platform.target }}-apple-darwin
+          cd target/${{ matrix.platform.target }}-apple-darwin/release
+          tar cJf ../../../breeze-${{ matrix.platform.target }}-apple-darwin.tar.xz breeze
+
       - name: Build wheels
         uses: PyO3/maturin-action@v1
         with:

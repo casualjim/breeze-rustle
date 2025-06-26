@@ -1,5 +1,7 @@
-use crate::pipeline::{PipelineChunk, PipelineProjectChunk};
+use crate::pipeline::{ChunkBatch, PipelineChunk, PipelineProjectChunk};
 use async_trait::async_trait;
+
+use breeze_chunkers::ChunkStream;
 
 /// Represents a batch of chunks ready for embedding
 #[derive(Debug, Clone)]
@@ -7,17 +9,15 @@ pub struct EmbeddingBatch {
   pub batch_id: usize,
   pub chunks: Vec<PipelineProjectChunk>,
   pub eof_chunks: Vec<PipelineProjectChunk>,
+  pub stream: ChunkStream,
 }
 
 /// Strategy for batching chunks for embedding
 #[async_trait]
 pub trait BatchingStrategy: Send + Sync {
-  /// Prepare chunks for batching
-  /// Takes chunks with their batch IDs and groups them appropriately
-  async fn prepare_batches(
-    &self,
-    chunks: Vec<(usize, PipelineProjectChunk)>,
-  ) -> Vec<EmbeddingBatch>;
+  /// Prepare batches for embedding
+  /// Takes batches and reorganizes them based on the strategy
+  async fn prepare_batches(&self, batches: Vec<ChunkBatch>) -> Vec<EmbeddingBatch>;
 
   /// Maximum items per batch
   fn max_batch_size(&self) -> usize;
@@ -39,41 +39,41 @@ impl LocalBatchingStrategy {
 #[cfg(any(feature = "local-embeddings", test))]
 #[async_trait]
 impl BatchingStrategy for LocalBatchingStrategy {
-  async fn prepare_batches(
-    &self,
-    chunks: Vec<(usize, PipelineProjectChunk)>,
-  ) -> Vec<EmbeddingBatch> {
-    use std::collections::BTreeMap;
-
-    // Group chunks by batch_id, separating regular chunks from EOF chunks
-    let mut batches: BTreeMap<usize, (Vec<PipelineProjectChunk>, Vec<PipelineProjectChunk>)> =
-      BTreeMap::new();
-
-    for (batch_id, chunk) in chunks {
-      let (regular, eof) = batches.entry(batch_id).or_insert((Vec::new(), Vec::new()));
-
-      match &chunk.chunk {
-        PipelineChunk::EndOfFile { .. } => eof.push(chunk),
-        _ => regular.push(chunk),
-      }
-    }
-
-    // Process each batch_id's chunks
+  async fn prepare_batches(&self, batches: Vec<ChunkBatch>) -> Vec<EmbeddingBatch> {
     let mut result = Vec::new();
-    for (batch_id, (regular_chunks, eof_chunks)) in batches {
+
+    for batch in batches {
+      let ChunkBatch {
+        batch_id,
+        chunks,
+        stream,
+      } = batch;
+
+      // Separate regular chunks from EOF chunks
+      let mut regular_chunks = Vec::new();
+      let mut eof_chunks = Vec::new();
+
+      for chunk in chunks {
+        match &chunk.chunk {
+          PipelineChunk::EndOfFile { .. } => eof_chunks.push(chunk),
+          _ => regular_chunks.push(chunk),
+        }
+      }
+
       // Split regular chunks into smaller batches respecting batch_size
       for chunk_batch in regular_chunks.chunks(self.batch_size) {
         result.push(EmbeddingBatch {
           batch_id,
           chunks: chunk_batch.to_vec(),
           eof_chunks: Vec::new(), // EOF chunks only go with the last batch
+          stream,
         });
       }
 
       // Add EOF chunks to the last batch of this batch_id
       if !eof_chunks.is_empty() {
         if let Some(last_batch) = result.last_mut() {
-          if last_batch.batch_id == batch_id {
+          if last_batch.batch_id == batch_id && last_batch.stream == stream {
             last_batch.eof_chunks = eof_chunks;
           } else {
             // Create a new batch just for EOF chunks if no regular chunks exist
@@ -81,6 +81,7 @@ impl BatchingStrategy for LocalBatchingStrategy {
               batch_id,
               chunks: Vec::new(),
               eof_chunks,
+              stream,
             });
           }
         } else {
@@ -89,6 +90,7 @@ impl BatchingStrategy for LocalBatchingStrategy {
             batch_id,
             chunks: Vec::new(),
             eof_chunks,
+            stream,
           });
         }
       }
@@ -124,28 +126,27 @@ impl TokenAwareBatchingStrategy {
 
 #[async_trait]
 impl BatchingStrategy for TokenAwareBatchingStrategy {
-  async fn prepare_batches(
-    &self,
-    chunks: Vec<(usize, PipelineProjectChunk)>,
-  ) -> Vec<EmbeddingBatch> {
-    use std::collections::BTreeMap;
-
-    // Group chunks by batch_id, separating regular chunks from EOF chunks
-    let mut batches: BTreeMap<usize, (Vec<PipelineProjectChunk>, Vec<PipelineProjectChunk>)> =
-      BTreeMap::new();
-
-    for (batch_id, chunk) in chunks {
-      let (regular, eof) = batches.entry(batch_id).or_insert((Vec::new(), Vec::new()));
-
-      match &chunk.chunk {
-        PipelineChunk::EndOfFile { .. } => eof.push(chunk),
-        _ => regular.push(chunk),
-      }
-    }
-
-    // Process each batch_id's chunks
+  async fn prepare_batches(&self, batches: Vec<ChunkBatch>) -> Vec<EmbeddingBatch> {
     let mut result = Vec::new();
-    for (batch_id, (regular_chunks, eof_chunks)) in batches {
+
+    for batch in batches {
+      let ChunkBatch {
+        batch_id,
+        chunks,
+        stream,
+      } = batch;
+
+      // Separate regular chunks from EOF chunks
+      let mut regular_chunks = Vec::new();
+      let mut eof_chunks = Vec::new();
+
+      for chunk in chunks {
+        match &chunk.chunk {
+          PipelineChunk::EndOfFile { .. } => eof_chunks.push(chunk),
+          _ => regular_chunks.push(chunk),
+        }
+      }
+
       let mut current_batch = Vec::new();
       let mut current_tokens = 0;
 
@@ -174,6 +175,7 @@ impl BatchingStrategy for TokenAwareBatchingStrategy {
             batch_id,
             chunks: current_batch,
             eof_chunks: Vec::new(),
+            stream,
           });
           current_batch = Vec::new();
           current_tokens = 0;
@@ -190,6 +192,7 @@ impl BatchingStrategy for TokenAwareBatchingStrategy {
           batch_id,
           chunks: current_batch,
           eof_chunks: eof_chunks.clone(),
+          stream,
         });
       } else if !eof_chunks.is_empty() {
         // No regular chunks, create batch with just EOF chunks
@@ -197,10 +200,15 @@ impl BatchingStrategy for TokenAwareBatchingStrategy {
           batch_id,
           chunks: Vec::new(),
           eof_chunks,
+          stream,
         });
       } else {
-        // Add EOF chunks to the last batch of this batch_id
-        if let Some(last_batch) = result.iter_mut().rev().find(|b| b.batch_id == batch_id) {
+        // Add EOF chunks to the last batch of this batch_id and stream
+        if let Some(last_batch) = result
+          .iter_mut()
+          .rev()
+          .find(|b| b.batch_id == batch_id && b.stream == stream)
+        {
           last_batch.eof_chunks = eof_chunks;
         }
       }

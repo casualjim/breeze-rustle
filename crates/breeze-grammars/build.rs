@@ -170,7 +170,7 @@ fn use_npm_parsers(parser_lib_path: &Path, out_path: &Path) {
   // Link C++ standard library as some grammars use C++ scanners
   // The pre-compiled grammars from npm are built with GCC, so they need libstdc++
   let target = env::var("TARGET").unwrap_or_default();
-  
+
   if target.contains("linux") {
     // Linux: Use GNU's libstdc++ which is what the npm grammars expect
     println!("cargo:rustc-link-lib=stdc++");

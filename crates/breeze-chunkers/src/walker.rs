@@ -3,7 +3,7 @@ use crate::{
   chunker::InnerChunker,
   dir::{Ignore, IgnoreBuilder},
   languages::get_language,
-  types::{Chunk, ChunkError, ProjectChunk},
+  types::{Chunk, ChunkError, ChunkStream, ProjectChunk},
 };
 use blake3::Hasher;
 use futures::{Stream, StreamExt};
@@ -166,6 +166,8 @@ pub fn walk_project(
               chunk: Chunk::Delete {
                 file_path: existing_path.to_string_lossy().to_string(),
               },
+              file_size: 0,                 // File no longer exists
+              stream: ChunkStream::Regular, // Delete chunks default to Regular
             };
             if tx_clone.send(Ok(delete_chunk)).await.is_err() {
               break;
@@ -271,17 +273,14 @@ where
         }
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
           // File doesn't exist - emit a Delete chunk immediately
-          debug!("File not found, emitting delete: {}", path.display());
-          println!(
-            "DEBUG: walk_files emitting Delete chunk for missing file: {}",
-            path.display()
-          );
           let path_str = path.to_string_lossy().to_string();
           let delete_chunk = ProjectChunk {
             file_path: path_str.clone(),
             chunk: Chunk::Delete {
               file_path: path_str,
             },
+            file_size: 0,                 // File doesn't exist
+            stream: ChunkStream::Regular, // Delete chunks are always regular stream
           };
           if let Err(send_err) = tx.send(Ok(delete_chunk)).await {
             debug!("Failed to send delete chunk: {}", send_err);
@@ -535,7 +534,13 @@ async fn process_with_dual_pools(
 
             // Check if file will be skipped
             let mut chunk_count = 0;
-            let mut stream = Box::pin(process_file(&path, chunker.clone(), existing_hash));
+            let mut stream = Box::pin(process_file(
+              &path,
+              size,
+              ChunkStream::LargeFile,
+              chunker.clone(),
+              existing_hash,
+            ));
             while let Some(result) = stream.next().await {
               chunk_count += 1;
               if tx.send(result).await.is_err() {
@@ -603,7 +608,13 @@ async fn process_with_dual_pools(
 
             // Check if file will be skipped
             let mut chunk_count = 0;
-            let mut stream = Box::pin(process_file(&path, chunker.clone(), existing_hash));
+            let mut stream = Box::pin(process_file(
+              &path,
+              size,
+              ChunkStream::Regular,
+              chunker.clone(),
+              existing_hash,
+            ));
             while let Some(result) = stream.next().await {
               chunk_count += 1;
               if tx.send(result).await.is_err() {
@@ -659,6 +670,8 @@ async fn process_with_dual_pools(
 /// Process a single file and yield chunks as a stream
 fn process_file<P: AsRef<Path>>(
   path: P,
+  file_size: u64,
+  stream: crate::types::ChunkStream,
   chunker: Arc<InnerChunker>,
   existing_hash: Option<[u8; 32]>,
 ) -> impl Stream<Item = Result<ProjectChunk, ChunkError>> + Send {
@@ -686,12 +699,13 @@ fn process_file<P: AsRef<Path>>(
               if e.kind() == std::io::ErrorKind::NotFound {
                   // File was deleted between collection and reading
                   debug!("File deleted during processing: {}", path.display());
-                  println!("DEBUG: Walker emitting Delete chunk for: {}", path.display());
                   yield ProjectChunk {
                       file_path: path_str.clone(),
                       chunk: Chunk::Delete {
                           file_path: path_str.clone(),
                       },
+                      file_size,
+                      stream,
                   };
                   return;
               } else {
@@ -749,6 +763,8 @@ fn process_file<P: AsRef<Path>>(
                       yield ProjectChunk {
                           file_path: path_str.clone(),
                           chunk,
+                          file_size,
+                          stream,
                       };
                   }
                   Err(_) => {
@@ -770,6 +786,8 @@ fn process_file<P: AsRef<Path>>(
                       content: content_for_eof,
                       content_hash,
                   },
+                  file_size,
+                  stream,
               };
               return;
           }
@@ -785,6 +803,8 @@ fn process_file<P: AsRef<Path>>(
           yield ProjectChunk {
               file_path: path_str.clone(),
               chunk,
+              file_size,
+              stream,
           };
       }
 
@@ -796,6 +816,8 @@ fn process_file<P: AsRef<Path>>(
               content: content_for_eof,
               content_hash,
           },
+          file_size,
+          stream,
       };
   }
 }
@@ -1185,7 +1207,14 @@ fn helper() {
 
     let chunker = Arc::new(InnerChunker::new(100, Tokenizer::Characters).unwrap());
 
-    let mut stream = Box::pin(process_file(&rust_file, chunker, None));
+    let file_size = fs::metadata(&rust_file).unwrap().len();
+    let mut stream = Box::pin(process_file(
+      &rust_file,
+      file_size,
+      ChunkStream::Regular,
+      chunker,
+      None,
+    ));
 
     let mut chunks = Vec::new();
     while let Some(result) = stream.next().await {
@@ -1229,7 +1258,14 @@ fn main() {
     let chunker = Arc::new(InnerChunker::new(100, Tokenizer::Characters).unwrap());
 
     // First, process the file without any existing hashes
-    let mut stream = Box::pin(process_file(&test_file, chunker.clone(), None));
+    let file_size = fs::metadata(&test_file).unwrap().len();
+    let mut stream = Box::pin(process_file(
+      &test_file,
+      file_size,
+      ChunkStream::Regular,
+      chunker.clone(),
+      None,
+    ));
 
     let mut chunks = Vec::new();
     while let Some(result) = stream.next().await {
@@ -1249,8 +1285,11 @@ fn main() {
     };
 
     // Now process the same file again with the hash
+    let file_size = fs::metadata(&test_file).unwrap().len();
     let mut stream = Box::pin(process_file(
       &test_file,
+      file_size,
+      ChunkStream::Regular,
       chunker.clone(),
       Some(content_hash),
     ));
@@ -1275,7 +1314,14 @@ fn main() {
     fs::write(&test_file, new_content).unwrap();
 
     // Process with the old hash - should get chunks because file changed
-    let mut stream = Box::pin(process_file(&test_file, chunker, Some(content_hash)));
+    let file_size = fs::metadata(&test_file).unwrap().len();
+    let mut stream = Box::pin(process_file(
+      &test_file,
+      file_size,
+      ChunkStream::Regular,
+      chunker,
+      Some(content_hash),
+    ));
 
     let mut chunks = Vec::new();
     while let Some(result) = stream.next().await {

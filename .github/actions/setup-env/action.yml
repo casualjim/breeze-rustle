@@ -20,12 +20,13 @@ runs:
       shell: bash
       env:
         MISE_PYTHON_UV_VENV_CREATE_ARGS: "--python python${{ inputs.python-version }}"
+        GITHUB_TOKEN: ${{ github.token }}
 
     - name: Install mold linker and C++ libraries on Linux
       if: runner.os == 'Linux'
       run: |
         sudo apt-get update
-        sudo apt-get install -y mold libc++-dev libc++abi-dev libstdc++-14-dev g++-14
+        sudo apt-get install -y mold libc++-dev libc++abi-dev libstdc++-11-dev g++-11
       shell: bash
 
     - name: Download and setup ONNX Runtime on Linux
@@ -42,10 +43,10 @@ runs:
           echo "Unsupported architecture: $ARCH"
           exit 1
         fi
-        
+
         wget -q https://github.com/microsoft/onnxruntime/releases/download/v${ONNX_VERSION}/onnxruntime-linux-${ONNX_ARCH}-${ONNX_VERSION}.tgz
         tar -xzf onnxruntime-linux-${ONNX_ARCH}-${ONNX_VERSION}.tgz
-        
+
         # Set environment variables
         echo "ORT_LIBRARY_PATH=$PWD/onnxruntime-linux-${ONNX_ARCH}-${ONNX_VERSION}/lib" >> $GITHUB_ENV
         echo "LD_LIBRARY_PATH=$PWD/onnxruntime-linux-${ONNX_ARCH}-${ONNX_VERSION}/lib:$LD_LIBRARY_PATH" >> $GITHUB_ENV
