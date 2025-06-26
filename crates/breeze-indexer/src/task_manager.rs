@@ -333,7 +333,7 @@ impl TaskManager {
             batch_id = %failed_batch.id,
             retry_count = failed_batch.retry_count,
             remaining_failures = failed_batch.failed_files.len(),
-            elapsed_secs = elapsed.as_secs_f64(),
+            elapsed = %humantime::format_duration(elapsed),
             "Retry batch partially succeeded"
           );
 
@@ -344,7 +344,7 @@ impl TaskManager {
           info!(
             batch_id = %failed_batch.id,
             files_indexed,
-            elapsed_secs = elapsed.as_secs_f64(),
+            elapsed = %humantime::format_duration(elapsed),
             "Retry batch fully succeeded"
           );
 
@@ -355,7 +355,7 @@ impl TaskManager {
         error!(
           batch_id = %failed_batch.id,
           error = %e,
-          elapsed_secs = elapsed.as_secs_f64(),
+          elapsed = %humantime::format_duration(elapsed),
           "Retry batch failed"
         );
 
@@ -431,7 +431,7 @@ impl TaskManager {
           info!(
             task_id = %task.id,
             files_indexed,
-            elapsed_secs = elapsed.as_secs_f64(),
+            elapsed = %humantime::format_duration(elapsed),
             "Task partially completed with failures"
           );
           self
@@ -441,7 +441,7 @@ impl TaskManager {
           info!(
             task_id = %task.id,
             files_indexed,
-            elapsed_secs = elapsed.as_secs_f64(),
+            elapsed = %humantime::format_duration(elapsed),
             "Task completed successfully"
           );
           self.update_task_completed(&task.id, files_indexed).await?;
@@ -451,7 +451,7 @@ impl TaskManager {
         error!(
           task_id = %task.id,
           error = %e,
-          elapsed_secs = elapsed.as_secs_f64(),
+          elapsed = %humantime::format_duration(elapsed),
           "Task failed"
         );
         self.update_task_failed(&task.id, &e.to_string()).await?;

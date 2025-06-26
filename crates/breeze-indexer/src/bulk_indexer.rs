@@ -204,8 +204,8 @@ impl BulkIndexer {
 
     // Process each change to expand directories to file paths
     for change in changes {
-      println!(
-        "DEBUG: Processing change: {:?} for path: {}",
+      debug!(
+        "Processing change: {:?} for path: {}",
         change.operation,
         change.path.display()
       );
@@ -214,8 +214,8 @@ impl BulkIndexer {
           // For delete operations, always check if there are files under this path in the database
           // This handles both explicit directory deletions and the case where a directory
           // was deleted and no longer exists on disk
-          println!(
-            "DEBUG: Checking if path has files under it: {}",
+          debug!(
+            "Checking if path has files under it: {}",
             change.path.display()
           );
           let dir_str = change.path.to_string_lossy();
@@ -274,8 +274,8 @@ impl BulkIndexer {
 
           if !found_files.is_empty() {
             // Found files in the database - add them all for deletion
-            println!(
-              "DEBUG: Found {} files in DB under path: {}",
+            debug!(
+              "Found {} files in DB under path: {}",
               found_files.len(),
               change.path.display()
             );
@@ -285,8 +285,8 @@ impl BulkIndexer {
           } else {
             // No files found in DB - just add the original path
             // It might be a file that doesn't exist yet or was already deleted
-            println!(
-              "DEBUG: No files found in DB for path: {}, adding as-is",
+            debug!(
+              "No files found in DB for path: {}, adding as-is",
               change.path.display()
             );
             file_paths.push(change.path.clone());
@@ -307,14 +307,6 @@ impl BulkIndexer {
     if file_paths.is_empty() {
       info!("No files to process after expanding directories");
       return Ok((0, None));
-    }
-
-    println!(
-      "index_file_changes: Processing {} file paths:",
-      file_paths.len()
-    );
-    for path in &file_paths {
-      println!("  - {}", path.display());
     }
 
     // Create a stream from all file paths
@@ -410,9 +402,10 @@ impl BulkIndexer {
     // Progress tracking and cancellation
     let stats = IndexingStats::new();
     let cancel_token = external_cancel_token.unwrap_or_default();
-    
-    // Start progress reporter
-    let progress_handle = self.spawn_progress_reporter(stats.clone(), cancel_token.clone());
+
+    // Start progress reporter with its own cancellation token
+    let progress_cancel_token = CancellationToken::new();
+    let progress_handle = self.spawn_progress_reporter(stats.clone(), progress_cancel_token.clone());
 
     // Start pipeline stages with cancellation support
     // we start this with in the reverse order of execution
@@ -462,10 +455,10 @@ impl BulkIndexer {
     // Wait for pipeline completion with proper error handling
     let walk_result = walk_handle.await;
     let doc_result = doc_handle.await;
+    // Now wait for sink results
     let sink_result = sink_handle.await;
     let chunk_sink_result = chunk_sink_handle.await;
     let delete_result = delete_handle.await;
-
     // Wait for all embedding workers
     let embed_results = futures::future::join_all(embed_handles).await;
 
@@ -517,15 +510,31 @@ impl BulkIndexer {
       .map_err(|e| IndexerError::Task(format!("Chunk sink task failed: {}", e)))?;
 
     // Cancel progress reporter
-    cancel_token.cancel();
+    progress_cancel_token.cancel();
     let _ = progress_handle.await;
 
     // Report final results
     info!(
-      files_chunked = format!("{}/{}", stats.files_chunked.load(Ordering::Relaxed), stats.files.load(Ordering::Relaxed)),
-      files_embedded = format!("{}/{}", stats.files_embedded.load(Ordering::Relaxed), stats.files.load(Ordering::Relaxed)),
-      files_stored = format!("{}/{}", stats.files_stored.load(Ordering::Relaxed), stats.files.load(Ordering::Relaxed)),
-      chunks = format!("{}/{}", stats.chunks_processed.load(Ordering::Relaxed), stats.chunks.load(Ordering::Relaxed)),
+      files_chunked = format!(
+        "{}/{}",
+        stats.files_chunked.load(Ordering::Relaxed),
+        stats.files.load(Ordering::Relaxed)
+      ),
+      files_embedded = format!(
+        "{}/{}",
+        stats.files_embedded.load(Ordering::Relaxed),
+        stats.files.load(Ordering::Relaxed)
+      ),
+      files_stored = format!(
+        "{}/{}",
+        stats.files_stored.load(Ordering::Relaxed),
+        stats.files.load(Ordering::Relaxed)
+      ),
+      chunks = format!(
+        "{}/{}",
+        stats.chunks_processed.load(Ordering::Relaxed),
+        stats.chunks.load(Ordering::Relaxed)
+      ),
       batches = stats.batches.load(Ordering::Relaxed),
       documents = stats.documents.load(Ordering::Relaxed),
       documents_written,
@@ -545,7 +554,7 @@ impl BulkIndexer {
       let start = Instant::now();
       let mut interval = tokio::time::interval(std::time::Duration::from_secs(10));
       interval.tick().await; // Skip the immediate tick
-      
+
       loop {
         tokio::select! {
           _ = cancel_token.cancelled() => break,
@@ -557,7 +566,7 @@ impl BulkIndexer {
             let files_chunked = stats.files_chunked.load(Ordering::Relaxed);
             let files_embedded = stats.files_embedded.load(Ordering::Relaxed);
             let files_stored = stats.files_stored.load(Ordering::Relaxed);
-            
+
             info!(
               elapsed = %humantime::format_duration(elapsed),
               files_chunked = format!("{}/{}", files_chunked, files),
@@ -733,10 +742,10 @@ impl BulkIndexer {
 
 #[derive(Clone)]
 struct IndexingStats {
-  files: Arc<AtomicUsize>,  // Total files discovered
-  chunks: Arc<AtomicUsize>,  // Total chunks created
-  batches: Arc<AtomicUsize>, // Total batches processed
-  documents: Arc<AtomicUsize>, // Documents created
+  files: Arc<AtomicUsize>,            // Total files discovered
+  chunks: Arc<AtomicUsize>,           // Total chunks created
+  batches: Arc<AtomicUsize>,          // Total batches processed
+  documents: Arc<AtomicUsize>,        // Documents created
   chunks_processed: Arc<AtomicUsize>, // Chunks embedded
   files_chunked: Arc<AtomicUsize>,    // Files that completed chunking
   files_embedded: Arc<AtomicUsize>,   // Files that completed embedding
@@ -829,7 +838,6 @@ async fn stream_processor_task(
             if let Chunk::Delete { file_path } = &project_chunk.chunk {
               // Send delete request immediately
               info!("Stream processor sending delete request for: {}", file_path);
-              println!("DEBUG: Stream processor received Delete chunk for: {}", file_path);
               if let Err(e) = params.delete_tx.send((params.project_id, PathBuf::from(file_path))).await {
                 error!("Failed to send delete request for {}: {}", file_path, e);
               }
@@ -866,7 +874,9 @@ async fn stream_processor_task(
             }
           }
           Some(Err(e)) => error!("Error processing chunk: {}", e),
-          None => break,
+          None => {
+            break;
+          }
         }
       }
     }
@@ -907,7 +917,6 @@ async fn remote_embedder_worker_task(
   // Keep batches in order - BTreeMap maintains key order
   let mut pending_batches: std::collections::BTreeMap<usize, PendingBatch> =
     std::collections::BTreeMap::new();
-
 
   loop {
     // Check for cancellation
@@ -1057,7 +1066,7 @@ async fn remote_embedder_worker_task(
                   content_hash,
                 } = eof_chunk.chunk
                 {
-                    let eof = EmbeddedChunkWithFile::EndOfFile {
+                  let eof = EmbeddedChunkWithFile::EndOfFile {
                     batch_id: embedding_batch.batch_id,
                     file_path,
                     content,
@@ -1122,7 +1131,6 @@ async fn embedder_task(
   // Keep batches in order - BTreeMap maintains key order
   let mut pending_batches: std::collections::BTreeMap<usize, PendingBatch> =
     std::collections::BTreeMap::new();
-
 
   loop {
     tokio::select! {
@@ -1295,10 +1303,7 @@ async fn process_embedding_batch(
     return;
   }
 
-  debug!(
-    "Processing embedding batch of {} chunks",
-    batch.len()
-  );
+  debug!("Processing embedding batch of {} chunks", batch.len());
 
   // Collect files in this batch for failure tracking
   let mut files_in_batch = std::collections::BTreeSet::new();
@@ -1330,7 +1335,9 @@ async fn process_embedding_batch(
     Ok(embeddings) => {
       debug!("Successfully embedded {} chunks", embeddings.len());
       stats.batches.fetch_add(1, Ordering::Relaxed);
-      stats.chunks_processed.fetch_add(embeddings.len(), Ordering::Relaxed);
+      stats
+        .chunks_processed
+        .fetch_add(embeddings.len(), Ordering::Relaxed);
 
       let mut embedding_iter = embeddings.into_iter();
       let mut chunk_idx_iter = chunks_to_embed.into_iter();
@@ -1778,18 +1785,15 @@ async fn delete_handler_task(
             let delete_expr = format!("project_id = '{}' AND file_path = '{}'", project_id, escaped_path);
 
             info!("Delete handler received delete request for: {}", file_path.display());
-            println!("DEBUG: Delete handler processing delete for: {} with expr: {}", file_path.display(), delete_expr);
 
             let table_guard = table.write().await;
             match table_guard.delete(&delete_expr).await {
               Ok(_) => {
                 delete_count += 1;
                 info!("Successfully deleted document: {}", file_path.display());
-                println!("DEBUG: Successfully deleted: {}", file_path.display());
               }
               Err(e) => {
                 error!("Failed to delete document {}: {}", file_path.display(), e);
-                println!("DEBUG: Failed to delete {}: {}", file_path.display(), e);
               }
             }
             drop(table_guard); // Release the write lock
