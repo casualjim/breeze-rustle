@@ -21,6 +21,8 @@ RUN apk add --no-cache \
     bash \
     clang\
     curl \
-    protobuf-dev
+    protobuf-dev \
+    libc++-dev \
+    libc++-static
 
 RUN cargo install cargo-zigbuild
