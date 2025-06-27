@@ -68,6 +68,8 @@ jobs:
           rust-target: ${{ matrix.platform.target }}-unknown-linux-gnu
       - name: Build breeze binary
         run: |
+          echo RUSTFLAGS=$RUSTFLAGS
+          echo CFLAGS=$CFLAGS
           cargo build --workspace --exclude breeze-py --exclude breeze-napi --release --target ${{ matrix.platform.target }}-unknown-linux-gnu
           cd target/${{ matrix.platform.target }}-unknown-linux-gnu/release
           tar cJf ../../../breeze-${{ matrix.platform.target }}-unknown-linux-gnu.tar.xz breeze
@@ -115,11 +117,11 @@ jobs:
         run: |
           docker run \
             --rm \
-            -it \
             -e RUSTFLAGS="-C link-arg=-fuse-ld=mold" \
             -v $PWD:/app \
-            -w /app ghcr.io/casualjim/breeze-alpine-builder bash \
-            -c 'npm install && cargo zigbuild --no-default-features --workspace --exclude breeze-py --exclude breeze-napi --release --target ${{ matrix.platform.target }}-unknown-linux-musl'
+            -w /app ghcr.io/casualjim/breeze-alpine-builder \
+            bash -c \
+              'npm install && cargo zigbuild --no-default-features --workspace --exclude breeze-py --exclude breeze-napi --release --target ${{ matrix.platform.target }}-unknown-linux-musl'
 
           cd target/${{ matrix.platform.target }}-unknown-linux-musl/release
           tar cJf ../../../breeze-${{ matrix.platform.target }}-unknown-linux-musl.tar.xz breeze

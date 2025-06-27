@@ -30,11 +30,14 @@ runs:
       if: runner.os == 'Linux'
       run: |
         sudo apt-get update
-        sudo apt-get install -y mold libc++-dev libc++abi-dev libstdc++-11-dev g++-11 libssl-dev pkg-config
+        sudo apt-get install -y mold libc++-dev libc++abi-dev libstdc++-11-dev g++-11 libssl-dev pkg-config clang
         ARCH=$(uname -m)
+        echo "Architecture detected: $ARCH"
         if [ "$ARCH" = "aarch64" ]; then
+          echo "Setting ARM64-specific environment variables"
           echo "CFLAGS=-I/usr/include -I/usr/include/aarch64-linux-gnu" >> $GITHUB_ENV
           echo "RUSTFLAGS=-L/usr/lib/aarch64-linux-gnu" >> $GITHUB_ENV
+          echo "::notice::Set CFLAGS and RUSTFLAGS for ARM64 build"
         fi
       shell: bash
 
