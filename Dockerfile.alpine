@@ -3,6 +3,7 @@ FROM rust:alpine
 RUN apk add --no-cache \
     build-base \
     openssl-dev \
+    openssl-libs-static \
     musl-dev \
     libffi-dev \
     python3 \
@@ -16,5 +17,10 @@ RUN apk add --no-cache \
     g++ \
     make \
     pkgconf \
-    mold
+    mold \
+    bash \
+    clang\
+    curl \
+    protobuf-dev
+
 RUN cargo install cargo-zigbuild
