@@ -36,22 +36,7 @@ jobs:
 
       - name: Run Rust tests
         run: |
-
           cargo nextest run --features local-embeddings --no-fail-fast --build-jobs 3
-
-
-      - name: Setup SSH debug session on failure
-        # Only run this step if the previous one failed or if debugging is manually enabled
-        if: ${{ failure() || github.event.inputs.debug_enabled }}
-        uses: lhotari/action-upterm@v1
-        with:
-          # Optional: Limit SSH access to the user who triggered the workflow.
-          # Highly recommended for security.
-          limit-access-to-actor: true
-          # Optional: Shut down the session if no one connects after a timeout.
-          # This prevents a stuck workflow from consuming all your minutes.
-          wait-timeout-minutes: 10
-
 
       - name: Run Python tests
         run: |
@@ -83,7 +68,7 @@ jobs:
           rust-target: ${{ matrix.platform.target }}-unknown-linux-gnu
       - name: Build breeze binary
         run: |
-          cargo zigbuild --workspace --exclude breeze-py --exclude breeze-napi --release --target ${{ matrix.platform.target }}-unknown-linux-gnu
+          cargo build --workspace --exclude breeze-py --exclude breeze-napi --release --target ${{ matrix.platform.target }}-unknown-linux-gnu
           cd target/${{ matrix.platform.target }}-unknown-linux-gnu/release
           tar cJf ../../../breeze-${{ matrix.platform.target }}-unknown-linux-gnu.tar.xz breeze
 
@@ -128,7 +113,8 @@ jobs:
           rust-target: ${{ matrix.platform.target }}-unknown-linux-musl
       - name: Build breeze binary
         run: |
-          cargo zigbuild --workspace --exclude breeze-py --exclude breeze-napi --release --target ${{ matrix.platform.target }}-unknown-linux-musl
+          # Build breeze binary for musl target, this does not support the ONNX Runtime
+          cargo zigbuild --no-default-features --workspace --exclude breeze-py --exclude breeze-napi --release --target ${{ matrix.platform.target }}-unknown-linux-musl
           cd target/${{ matrix.platform.target }}-unknown-linux-musl/release
           tar cJf ../../../breeze-${{ matrix.platform.target }}-unknown-linux-musl.tar.xz breeze
 

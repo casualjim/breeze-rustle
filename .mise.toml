@@ -4,7 +4,6 @@ python.uv_venv_auto = true
 
 [tools]
 rust = { version = "latest", profile = "default" }
-just = "1"
 "aqua:cargo-bins/cargo-binstall" = "latest"
 mkcert = "latest"
 uv = "latest"

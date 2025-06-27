@@ -1,0 +1,20 @@
+FROM rust:alpine
+
+RUN apk add --no-cache \
+    build-base \
+    openssl-dev \
+    musl-dev \
+    libffi-dev \
+    python3 \
+    py3-pip \
+    uv \
+    nodejs \
+    npm \
+    git \
+    zig \
+    gcc \
+    g++ \
+    make \
+    pkgconf \
+    mold
+RUN cargo install cargo-zigbuild
