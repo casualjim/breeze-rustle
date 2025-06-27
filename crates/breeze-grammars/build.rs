@@ -168,20 +168,22 @@ fn use_npm_parsers(parser_lib_path: &Path, out_path: &Path) {
   );
 
   // Link C++ standard library as some grammars use C++ scanners
-  // The pre-compiled grammars from npm are built with GCC, so they need libstdc++
+  // All npm packages are built with Zig, which uses LLVM's libc++
   let target = env::var("TARGET").unwrap_or_default();
 
   if target.contains("linux") {
-    // Linux: Use GNU's libstdc++ which is what the npm grammars expect
-    println!("cargo:rustc-link-lib=stdc++");
+    // All Linux targets (glibc and musl): Built with Zig's LLVM libc++
+    println!("cargo:rustc-link-lib=c++");
+    println!("cargo:rustc-link-lib=c++abi");
   } else if target.contains("apple") {
     // macOS: Use libc++ which is the system default
     println!("cargo:rustc-link-lib=c++");
   } else if target.contains("windows") {
     // Windows: C++ runtime is linked automatically by MSVC
   } else {
-    // Fallback: Use libstdc++
-    println!("cargo:rustc-link-lib=stdc++");
+    // Fallback: Use libc++
+    println!("cargo:rustc-link-lib=c++");
+    println!("cargo:rustc-link-lib=c++abi");
   }
 
   // Check if there's a metadata file alongside the library

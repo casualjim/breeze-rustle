@@ -38,6 +38,9 @@ jobs:
         run: |
           cargo zigbuild --tests --features local-embeddings
           cargo nextest run --features local-embeddings --no-fail-fast
+        env:
+          CC: zig cc
+          CXX: zig c++
 
       - name: Run Python tests
         run: |
@@ -68,7 +71,7 @@ jobs:
           rust-target: ${{ matrix.platform.target }}-unknown-linux-gnu
       - name: Build breeze binary
         run: |
-          cargo build --workspace --exclude breeze-py --exclude breeze-napi --release --target ${{ matrix.platform.target }}-unknown-linux-gnu
+          cargo zigbuild --workspace --exclude breeze-py --exclude breeze-napi --release --target ${{ matrix.platform.target }}-unknown-linux-gnu
           cd target/${{ matrix.platform.target }}-unknown-linux-gnu/release
           tar cJf ../../../breeze-${{ matrix.platform.target }}-unknown-linux-gnu.tar.xz breeze
 
@@ -113,7 +116,7 @@ jobs:
           rust-target: ${{ matrix.platform.target }}-unknown-linux-musl
       - name: Build breeze binary
         run: |
-          cargo build --workspace --exclude breeze-py --exclude breeze-napi --release --target ${{ matrix.platform.target }}-unknown-linux-musl
+          cargo zigbuild --workspace --exclude breeze-py --exclude breeze-napi --release --target ${{ matrix.platform.target }}-unknown-linux-musl
           cd target/${{ matrix.platform.target }}-unknown-linux-musl/release
           tar cJf ../../../breeze-${{ matrix.platform.target }}-unknown-linux-musl.tar.xz breeze
 

@@ -1,6 +1,6 @@
 {
   "dependencies": {
-    "@kumos/tree-sitter-parsers": "^0.1.3"
+    "@kumos/tree-sitter-parsers": "^0.1.4"
   },
   "description": "High-performance semantic code chunking with tree-sitter",
   "name": "breeze-rustle",
