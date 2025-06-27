@@ -36,11 +36,21 @@ jobs:
 
       - name: Run Rust tests
         run: |
-          cargo zigbuild --tests --features local-embeddings
           cargo nextest run --features local-embeddings --no-fail-fast
-        env:
-          CC: zig cc
-          CXX: zig c++
+
+
+      - name: Setup SSH debug session on failure
+        # Only run this step if the previous one failed or if debugging is manually enabled
+        if: ${{ failure() || github.event.inputs.debug_enabled }}
+        uses: lhotari/action-upterm@v1
+        with:
+          # Optional: Limit SSH access to the user who triggered the workflow.
+          # Highly recommended for security.
+          limit-access-to-actor: true
+          # Optional: Shut down the session if no one connects after a timeout.
+          # This prevents a stuck workflow from consuming all your minutes.
+          wait-timeout-minutes: 10
+
 
       - name: Run Python tests
         run: |
@@ -51,6 +61,7 @@ jobs:
       - name: Run Node.js tests
         run: |
           cd crates/breeze-napi && npm run test:all
+
 
   linux:
     runs-on: ${{ matrix.platform.runner }}
