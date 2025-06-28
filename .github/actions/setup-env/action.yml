@@ -29,14 +29,23 @@ runs:
     - name: Install mold linker and C++ libraries on Linux
       if: runner.os == 'Linux'
       run: |
+        # We need to ensure that all the C++ uses the same standard library
+        # Install the same LLVM as the one used by the Zig toolchain
+        wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key | sudo tee /etc/apt/trusted.gpg.d/apt.llvm.org.asc
+        echo "deb http://apt.llvm.org/jammy/ llvm-toolchain-jammy-19 main" | sudo tee /etc/apt/sources.list.d/llvm-19.list
         sudo apt-get update
-        sudo apt-get install -y mold libc++-dev libc++abi-dev libstdc++-11-dev g++-11 libssl-dev pkg-config clang
+        sudo apt-get install -y mold libssl-dev pkg-config libc++-19-dev libc++abi-19-dev clang-19
         ARCH=$(uname -m)
         echo "Architecture detected: $ARCH"
+        echo "CXXFLAGS=-stdlib=libc++" >> $GITHUB_ENV
+        echo "CC=clang-19" >> $GITHUB_ENV
+        echo "CXX=clang++-19" >> $GITHUB_ENV
+        echo "CXXSTDLIB=c++" >> $GITHUB_ENV
         if [ "$ARCH" = "aarch64" ]; then
           echo "Detected ARM64 architecture"
           ldconfig -p | grep -E "c\+\+|stdc\+\+" | head -20
           ls /usr/lib/aarch64-linux-gnu
+          # looks like in cloud images the libc++ is not symlinked correctly
           sudo ln -s /usr/lib/aarch64-linux-gnu/libc++.so.1 /usr/lib/aarch64-linux-gnu/libc++.so
 
           echo "Setting ARM64-specific environment variables"
