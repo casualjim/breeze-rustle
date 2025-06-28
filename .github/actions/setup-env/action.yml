@@ -13,6 +13,32 @@ inputs:
 runs:
   using: 'composite'
   steps:
+
+    - name: Install mold linker and C++ libraries on Linux
+      if: runner.os == 'Linux'
+      run: |
+        # We need to ensure that all the C++ uses the same standard library
+        # Install the same LLVM as the one used by the Zig toolchain
+        wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key | sudo tee /etc/apt/trusted.gpg.d/apt.llvm.org.asc
+        echo "deb http://apt.llvm.org/jammy/ llvm-toolchain-jammy-19 main" | sudo tee /etc/apt/sources.list.d/llvm-19.list
+        sudo apt-get update
+        sudo apt-get install -y mold libssl-dev pkg-config libc++-19-dev libc++abi-19-dev clang-19
+        ARCH=$(uname -m)
+        echo "CXXFLAGS=-stdlib=libc++" >> $GITHUB_ENV
+        echo "CC=clang-19" >> $GITHUB_ENV
+        echo "CXX=clang++-19" >> $GITHUB_ENV
+        echo "CXXSTDLIB=c++" >> $GITHUB_ENV
+        if [ "$ARCH" = "aarch64" ]; then
+          if [[ ! -e /usr/lib/aarch64-linux-gnu/libc++.so ]] || [[ -L /usr/lib/aarch64-linux-gnu/libc++.so && ! -e /usr/lib/aarch64-linux-gnu/libc++.so ]]; then
+            sudo ln -sf /usr/lib/aarch64-linux-gnu/libc++.so.1 /usr/lib/aarch64-linux-gnu/libc++.so
+          fi
+
+          echo "Setting ARM64-specific environment variables"
+          echo "CFLAGS=-I/usr/include -I/usr/include/aarch64-linux-gnu" >> $GITHUB_ENV
+          echo "RUSTFLAGS=-L/usr/lib/aarch64-linux-gnu" >> $GITHUB_ENV
+        fi
+      shell: bash
+
     - name: Install mise
       uses: jdx/mise-action@v2
       with:
@@ -26,34 +52,6 @@ runs:
         MISE_PYTHON_UV_VENV_CREATE_ARGS: "--python python${{ inputs.python-version }}"
         GITHUB_TOKEN: ${{ github.token }}
 
-    - name: Install mold linker and C++ libraries on Linux
-      if: runner.os == 'Linux'
-      run: |
-        # We need to ensure that all the C++ uses the same standard library
-        # Install the same LLVM as the one used by the Zig toolchain
-        wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key | sudo tee /etc/apt/trusted.gpg.d/apt.llvm.org.asc
-        echo "deb http://apt.llvm.org/jammy/ llvm-toolchain-jammy-19 main" | sudo tee /etc/apt/sources.list.d/llvm-19.list
-        sudo apt-get update
-        sudo apt-get install -y mold libssl-dev pkg-config libc++-19-dev libc++abi-19-dev clang-19
-        ARCH=$(uname -m)
-        echo "Architecture detected: $ARCH"
-        echo "CXXFLAGS=-stdlib=libc++" >> $GITHUB_ENV
-        echo "CC=clang-19" >> $GITHUB_ENV
-        echo "CXX=clang++-19" >> $GITHUB_ENV
-        echo "CXXSTDLIB=c++" >> $GITHUB_ENV
-        if [ "$ARCH" = "aarch64" ]; then
-          echo "Detected ARM64 architecture"
-          ldconfig -p | grep -E "c\+\+|stdc\+\+" | head -20
-          ls /usr/lib/aarch64-linux-gnu
-          # looks like in cloud images the libc++ is not symlinked correctly
-          sudo ln -s /usr/lib/aarch64-linux-gnu/libc++.so.1 /usr/lib/aarch64-linux-gnu/libc++.so
-
-          echo "Setting ARM64-specific environment variables"
-          echo "CFLAGS=-I/usr/include -I/usr/include/aarch64-linux-gnu" >> $GITHUB_ENV
-          echo "RUSTFLAGS=-L/usr/lib/aarch64-linux-gnu" >> $GITHUB_ENV
-          echo "::notice::Set CFLAGS and RUSTFLAGS for ARM64 build"
-        fi
-      shell: bash
 
     - name: Download and setup ONNX Runtime on Linux
       if: runner.os == 'Linux'
