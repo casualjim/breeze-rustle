@@ -118,6 +118,10 @@ pub struct Config {
   /// LanceDB optimization threshold - optimize when table version advances by this amount
   #[serde(default = "default_optimize_threshold")]
   pub optimize_threshold: u64,
+
+  /// Document batch size for flushing (default: 100)
+  #[serde(default = "default_document_batch_size")]
+  pub document_batch_size: usize,
 }
 
 impl Default for Config {
@@ -134,6 +138,7 @@ impl Default for Config {
       large_file_threads: Some(4),
       embedding_workers: 4,
       optimize_threshold: default_optimize_threshold(),
+      document_batch_size: default_document_batch_size(),
     }
   }
 }
@@ -206,6 +211,7 @@ impl Config {
       large_file_threads: Some(4),
       embedding_workers: 3,
       optimize_threshold: 250,
+      document_batch_size: 100,
     };
 
     (temp_dir, config)
@@ -231,6 +237,10 @@ fn default_max_concurrent_requests() -> usize {
 
 fn default_optimize_threshold() -> u64 {
   250
+}
+
+fn default_document_batch_size() -> usize {
+  100
 }
 
 #[cfg(test)]

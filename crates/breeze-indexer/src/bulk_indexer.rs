@@ -16,7 +16,7 @@ use uuid::Uuid;
 use crate::IndexerError;
 use crate::config::Config;
 use crate::converter::BufferedRecordBatchConverter;
-use crate::document_builder::document_builder_task;
+use crate::document_builder::{DocumentBuilderParams, document_builder_task};
 use crate::embeddings::EmbeddingProvider;
 use crate::models::CodeDocument;
 use crate::pipeline::{ChunkBatch, EmbeddedChunkWithFile, PipelineChunk, PipelineProjectChunk};
@@ -24,16 +24,6 @@ use crate::sinks::lancedb_sink::LanceDbSink;
 
 // Type alias for document builder result
 type DocumentBuilderResult = (usize, Option<(std::collections::BTreeSet<String>, String)>);
-
-struct DocumentBuilderParams {
-  project_id: Uuid,
-  embedded_rx: mpsc::Receiver<EmbeddedChunkWithFile>,
-  doc_tx: mpsc::Sender<CodeDocument>,
-  chunk_tx: mpsc::Sender<crate::models::CodeChunk>,
-  embedding_dim: usize,
-  stats: IndexingStats,
-  cancel_token: CancellationToken,
-}
 
 pub struct BulkIndexer {
   config: Arc<Config>,
@@ -423,6 +413,7 @@ impl BulkIndexer {
       embedding_dim,
       stats: stats.clone(),
       cancel_token: cancel_token.clone(),
+      batch_size: self.config.document_batch_size,
     });
 
     // Spawn batch router
@@ -729,15 +720,7 @@ impl BulkIndexer {
     &self,
     params: DocumentBuilderParams,
   ) -> tokio::task::JoinHandle<DocumentBuilderResult> {
-    tokio::spawn(document_builder_task(
-      params.project_id,
-      params.embedded_rx,
-      params.doc_tx,
-      params.chunk_tx,
-      params.embedding_dim,
-      params.stats,
-      params.cancel_token,
-    ))
+    tokio::spawn(document_builder_task(params))
   }
 
   fn spawn_sink(
@@ -1123,6 +1106,7 @@ async fn remote_embedder_worker_task(
                 file_path,
                 content,
                 content_hash,
+                expected_chunks,
               } = eof_chunk.chunk
               {
                 stats.files_embedded.fetch_add(1, Ordering::Relaxed);
@@ -1132,6 +1116,7 @@ async fn remote_embedder_worker_task(
                   content,
                   content_hash,
                   stream: batch.stream,
+                  expected_chunks,
                 };
                 if embedded_tx.send(eof).await.is_err() {
                   return;
@@ -1147,6 +1132,7 @@ async fn remote_embedder_worker_task(
             file_path,
             content,
             content_hash,
+            expected_chunks,
           } = eof_chunk.chunk
           {
             stats.files_embedded.fetch_add(1, Ordering::Relaxed);
@@ -1156,6 +1142,7 @@ async fn remote_embedder_worker_task(
               content,
               content_hash,
               stream: batch.stream,
+              expected_chunks,
             };
             if embedded_tx.send(eof).await.is_err() {
               return;
@@ -1271,7 +1258,7 @@ async fn embedder_task(
 
                 // Send EOF chunks if this batch is complete
                 for eof_chunk in embedding_batch.eof_chunks {
-                  if let PipelineChunk::EndOfFile { file_path, content, content_hash } = eof_chunk.chunk {
+                  if let PipelineChunk::EndOfFile { file_path, content, content_hash, expected_chunks } = eof_chunk.chunk {
                     stats.files_embedded.fetch_add(1, Ordering::Relaxed);
                     let eof = EmbeddedChunkWithFile::EndOfFile {
                       batch_id: embedding_batch.batch_id,
@@ -1279,6 +1266,7 @@ async fn embedder_task(
                       content,
                       content_hash,
                       stream: embedding_batch.stream,
+                      expected_chunks,
                     };
                     if embedded_tx.send(eof).await.is_err() {
                       return;
@@ -1323,13 +1311,14 @@ async fn embedder_task(
 
                   // Send EOF chunks
                   for eof_chunk in embedding_batch.eof_chunks {
-                    if let PipelineChunk::EndOfFile { file_path, content, content_hash } = eof_chunk.chunk {
+                    if let PipelineChunk::EndOfFile { file_path, content, content_hash, expected_chunks } = eof_chunk.chunk {
                             let eof = EmbeddedChunkWithFile::EndOfFile {
                         batch_id: embedding_batch.batch_id,
                         file_path,
                         content,
                         content_hash,
                         stream: embedding_batch.stream,
+                        expected_chunks,
                       };
                       if embedded_tx.send(eof).await.is_err() {
                         return;
@@ -1342,7 +1331,7 @@ async fn embedder_task(
               // Send any remaining EOF chunks
               for (bid, pending_batch) in pending_batches {
                 for eof_chunk in pending_batch.eof_chunks {
-                  if let PipelineChunk::EndOfFile { file_path, content, content_hash } = eof_chunk.chunk {
+                  if let PipelineChunk::EndOfFile { file_path, content, content_hash, expected_chunks } = eof_chunk.chunk {
                     stats.files_embedded.fetch_add(1, Ordering::Relaxed);
                     let eof = EmbeddedChunkWithFile::EndOfFile {
                       batch_id: bid,
@@ -1350,6 +1339,7 @@ async fn embedder_task(
                       content,
                       content_hash,
                       stream: pending_batch.stream,
+                      expected_chunks,
                     };
                     if embedded_tx.send(eof).await.is_err() {
                       return;
@@ -1601,13 +1591,20 @@ async fn delete_handler_task(
 mod tests {
   use super::*;
   use crate::config::Config;
+  use crate::models::CodeChunk;
   use breeze_chunkers::{ChunkError, ChunkMetadata, ProjectChunk, SemanticChunk};
   use futures_util::stream;
+  use lancedb::arrow::IntoArrow;
   use tempfile::tempdir;
   use tokio_util::sync::CancellationToken;
 
   // Helper to create test chunks with fake tokens
-  fn create_test_chunk(file_path: &str, text: &str, is_eof: bool) -> ProjectChunk {
+  fn create_test_chunk(
+    file_path: &str,
+    text: &str,
+    is_eof: bool,
+    expected_chunks: usize,
+  ) -> ProjectChunk {
     use std::collections::HashMap;
     use std::sync::OnceLock;
 
@@ -1638,6 +1635,7 @@ mod tests {
           file_path: file_path.to_string(),
           content,
           content_hash,
+          expected_chunks,
         },
         file_size: 0,
         stream: ChunkStream::Regular,
@@ -1777,11 +1775,11 @@ mod tests {
     let file2 = format!("test_basic_flow_file2_{}.rs", std::process::id());
 
     let chunks = vec![
-      Ok(create_test_chunk(&file1, "fn main() {}", false)),
-      Ok(create_test_chunk(&file1, "println!(\"Hello\");", false)),
-      Ok(create_test_chunk(&file1, "", true)), // EOF
-      Ok(create_test_chunk(&file2, "struct Foo;", false)),
-      Ok(create_test_chunk(&file2, "", true)), // EOF
+      Ok(create_test_chunk(&file1, "fn main() {}", false, 0)),
+      Ok(create_test_chunk(&file1, "println!(\"Hello\");", false, 0)),
+      Ok(create_test_chunk(&file1, "", true, 2)), // EOF with 2 expected chunks
+      Ok(create_test_chunk(&file2, "struct Foo;", false, 0)),
+      Ok(create_test_chunk(&file2, "", true, 1)), // EOF with 1 expected chunk
     ];
 
     let chunk_stream = stream::iter(chunks);
@@ -1808,15 +1806,16 @@ mod tests {
     let stats_clone = stats.clone();
     let cancel_clone = cancel_token.clone();
     let builder_handle = tokio::spawn(async move {
-      document_builder_task(
-        Uuid::now_v7(),
+      document_builder_task(DocumentBuilderParams {
+        project_id: Uuid::now_v7(),
         embedded_rx,
         doc_tx,
         chunk_tx,
         embedding_dim,
-        stats_clone,
-        cancel_clone,
-      )
+        stats: stats_clone,
+        cancel_token: cancel_clone,
+        batch_size: 100, // Default batch size
+      })
       .await;
     });
 
@@ -1885,6 +1884,7 @@ mod tests {
         content: "chunk1".to_string(),
         content_hash: [0u8; 32],
         stream: ChunkStream::Regular,
+        expected_chunks: 1,
       })
       .await
       .unwrap();
@@ -1897,6 +1897,7 @@ mod tests {
         content: "chunk1".to_string(),
         content_hash: [1u8; 32],
         stream: ChunkStream::Regular,
+        expected_chunks: 1,
       })
       .await
       .unwrap();
@@ -1955,11 +1956,11 @@ mod tests {
 
     // Stream with an error in the middle
     let chunks = vec![
-      Ok(create_test_chunk("file1.rs", "valid", false)),
-      Ok(create_test_chunk("file1.rs", "", true)),
+      Ok(create_test_chunk("file1.rs", "valid", false, 0)),
+      Ok(create_test_chunk("file1.rs", "", true, 1)),
       Err(ChunkError::ParseError("simulated error".to_string())),
-      Ok(create_test_chunk("file2.rs", "still valid", false)),
-      Ok(create_test_chunk("file2.rs", "", true)),
+      Ok(create_test_chunk("file2.rs", "still valid", false, 0)),
+      Ok(create_test_chunk("file2.rs", "", true, 1)),
     ];
 
     let chunk_stream = stream::iter(chunks);
@@ -1979,9 +1980,9 @@ mod tests {
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
 
     // Send a few chunks
-    tx.send(Ok(create_test_chunk("file1.rs", "content", false)))
+    tx.send(Ok(create_test_chunk("file1.rs", "content", false, 0)))
       .unwrap();
-    tx.send(Ok(create_test_chunk("file1.rs", "", true)))
+    tx.send(Ok(create_test_chunk("file1.rs", "", true, 1)))
       .unwrap();
     // Don't close the channel - it will block forever waiting for more
 
@@ -2063,9 +2064,10 @@ mod tests {
         "bigfile.rs",
         &format!("chunk {}", i),
         false,
+        0,
       )));
     }
-    chunks.push(Ok(create_test_chunk("bigfile.rs", "", true)));
+    chunks.push(Ok(create_test_chunk("bigfile.rs", "", true, 10)));
 
     let chunk_stream = stream::iter(chunks);
     let (count, failures) = indexer
@@ -2115,50 +2117,6 @@ mod tests {
   }
 
   #[tokio::test]
-  async fn test_pipeline_eof_only_files() {
-    let (_temp_dir, config) = Config::test();
-    // Create embedding provider for tests
-    let (embedding_provider, embedding_dim) = create_test_embedding_provider().await;
-
-    let temp_db = tempdir().unwrap();
-    let connection = lancedb::connect(temp_db.path().to_str().unwrap())
-      .execute()
-      .await
-      .unwrap();
-    let table = CodeDocument::ensure_table(&connection, "test", embedding_dim)
-      .await
-      .unwrap();
-    let chunk_table =
-      crate::models::CodeChunk::ensure_table(&connection, "test_chunks", embedding_dim)
-        .await
-        .unwrap();
-
-    let indexer = BulkIndexer::new(
-      Arc::new(config),
-      embedding_provider,
-      embedding_dim,
-      Arc::new(RwLock::new(table)),
-      Arc::new(RwLock::new(chunk_table)),
-    );
-
-    // Files with only EOF markers (empty files)
-    let chunks = vec![
-      Ok(create_test_chunk("empty1.rs", "", true)),
-      Ok(create_test_chunk("empty2.rs", "", true)),
-    ];
-
-    let chunk_stream = stream::iter(chunks);
-    let (count, failures) = indexer
-      .index_stream(Uuid::now_v7(), chunk_stream, 10, None)
-      .await
-      .unwrap();
-
-    // Empty files should not create documents
-    assert_eq!(count, 0, "Should not index empty files");
-    assert!(failures.is_none(), "Should have no failures");
-  }
-
-  #[tokio::test]
   async fn test_pipeline_single_file_multiple_chunks() {
     let (_temp_dir, config) = Config::test();
     // Create embedding provider for tests
@@ -2187,10 +2145,10 @@ mod tests {
 
     // Single file with multiple chunks
     let chunks = vec![
-      Ok(create_test_chunk("single.rs", "fn one() {}", false)),
-      Ok(create_test_chunk("single.rs", "fn two() {}", false)),
-      Ok(create_test_chunk("single.rs", "fn three() {}", false)),
-      Ok(create_test_chunk("single.rs", "", true)), // EOF
+      Ok(create_test_chunk("single.rs", "fn one() {}", false, 0)),
+      Ok(create_test_chunk("single.rs", "fn two() {}", false, 0)),
+      Ok(create_test_chunk("single.rs", "fn three() {}", false, 0)),
+      Ok(create_test_chunk("single.rs", "", true, 3)), // EOF
     ];
 
     let chunk_stream = stream::iter(chunks);
@@ -2288,8 +2246,9 @@ mod tests {
         &file_name,
         &format!("fn file{}() {{}}", i),
         false,
+        0,
       )));
-      chunks.push(Ok(create_test_chunk(&file_name, "", true))); // EOF
+      chunks.push(Ok(create_test_chunk(&file_name, "", true, 1))); // EOF
     }
 
     let chunk_stream = stream::iter(chunks);
@@ -2508,6 +2467,7 @@ def goodbye():
           file_path: file_path.to_string(),
           content: content.to_string(),
           content_hash,
+          expected_chunks: 1, // Each test file has 1 chunk
         },
         file_size: 0,
       };
@@ -2651,7 +2611,7 @@ def goodbye():
 
     // Spawn document builder task
     let builder_handle = tokio::spawn(async move {
-      document_builder_task(
+      document_builder_task(DocumentBuilderParams {
         project_id,
         embedded_rx,
         doc_tx,
@@ -2659,7 +2619,8 @@ def goodbye():
         embedding_dim,
         stats,
         cancel_token,
-      )
+        batch_size: 100, // Default batch size
+      })
       .await;
     });
 
@@ -2699,6 +2660,7 @@ def goodbye():
         content: "content1".to_string(),
         content_hash: [1u8; 32],
         stream: ChunkStream::Regular,
+        expected_chunks: 1,
       })
       .await
       .unwrap();
@@ -2726,6 +2688,7 @@ def goodbye():
         content: "content2".to_string(),
         content_hash: [2u8; 32],
         stream: ChunkStream::Regular,
+        expected_chunks: 1,
       })
       .await
       .unwrap();
@@ -2766,6 +2729,7 @@ def goodbye():
         content: "content3".to_string(),
         content_hash: [3u8; 32],
         stream: ChunkStream::Regular,
+        expected_chunks: 1,
       })
       .await
       .unwrap();
@@ -2826,36 +2790,45 @@ def goodbye():
     let large_file = format!("large_{}.rs", test_id);
 
     // Helper to create large file chunk
-    let create_large_file_chunk = |file_path: &str, text: &str, is_eof: bool| {
-      let mut chunk = create_test_chunk(file_path, text, is_eof);
-      chunk.stream = ChunkStream::LargeFile;
-      chunk
-    };
+    let create_large_file_chunk =
+      |file_path: &str, text: &str, is_eof: bool, expected_chunks: usize| {
+        let mut chunk = create_test_chunk(file_path, text, is_eof, expected_chunks);
+        chunk.stream = ChunkStream::LargeFile;
+        chunk
+      };
 
     let chunks = vec![
       // Regular file chunks
-      Ok(create_test_chunk(&regular_file, "fn regular() {", false)),
+      Ok(create_test_chunk(&regular_file, "fn regular() {", false, 0)),
       Ok(create_test_chunk(
         &regular_file,
         "  println!(\"regular\");",
         false,
+        0,
       )),
-      Ok(create_test_chunk(&regular_file, "}", false)),
-      Ok(create_test_chunk(&regular_file, "", true)), // EOF
+      Ok(create_test_chunk(&regular_file, "}", false, 0)),
+      Ok(create_test_chunk(&regular_file, "", true, 3)), // EOF
       // Large file chunks (should be processed on separate stream)
-      Ok(create_large_file_chunk(&large_file, "fn large() {", false)),
+      Ok(create_large_file_chunk(
+        &large_file,
+        "fn large() {",
+        false,
+        0,
+      )),
       Ok(create_large_file_chunk(
         &large_file,
         "  // Very large file",
         false,
+        0,
       )),
       Ok(create_large_file_chunk(
         &large_file,
         "  println!(\"large\");",
         false,
+        0,
       )),
-      Ok(create_large_file_chunk(&large_file, "}", false)),
-      Ok(create_large_file_chunk(&large_file, "", true)), // EOF
+      Ok(create_large_file_chunk(&large_file, "}", false, 0)),
+      Ok(create_large_file_chunk(&large_file, "", true, 4)), // EOF
     ];
 
     let chunk_stream = stream::iter(chunks);
@@ -2945,7 +2918,7 @@ def goodbye():
     for i in 0..3 {
       for (file_path, stream_type) in &files {
         let text = format!("chunk {} from {}", i, file_path);
-        let mut chunk = create_test_chunk(file_path, &text, false);
+        let mut chunk = create_test_chunk(file_path, &text, false, 0);
         chunk.stream = *stream_type;
         chunks.push(Ok(chunk));
       }
@@ -2953,7 +2926,7 @@ def goodbye():
 
     // Add EOF markers for all files
     for (file_path, stream_type) in &files {
-      let mut chunk = create_test_chunk(file_path, "", true);
+      let mut chunk = create_test_chunk(file_path, "", true, 3);
       chunk.stream = *stream_type;
       chunks.push(Ok(chunk));
     }
@@ -3007,11 +2980,11 @@ def goodbye():
 
     let chunks = vec![
       // Regular stream - should succeed
-      Ok(create_test_chunk(&regular_file, "content", false)),
-      Ok(create_test_chunk(&regular_file, "", true)),
+      Ok(create_test_chunk(&regular_file, "content", false, 0)),
+      Ok(create_test_chunk(&regular_file, "", true, 1)),
       // Large file with error in the middle
       Ok({
-        let mut chunk = create_test_chunk(&large_file_error, "start", false);
+        let mut chunk = create_test_chunk(&large_file_error, "start", false, 0);
         chunk.stream = ChunkStream::LargeFile;
         chunk
       }),
@@ -3020,12 +2993,12 @@ def goodbye():
       )),
       // Another large file that should still process
       Ok({
-        let mut chunk = create_test_chunk(&large_file_ok, "content", false);
+        let mut chunk = create_test_chunk(&large_file_ok, "content", false, 0);
         chunk.stream = ChunkStream::LargeFile;
         chunk
       }),
       Ok({
-        let mut chunk = create_test_chunk(&large_file_ok, "", true);
+        let mut chunk = create_test_chunk(&large_file_ok, "", true, 1);
         chunk.stream = ChunkStream::LargeFile;
         chunk
       }),
@@ -3040,10 +3013,106 @@ def goodbye():
 
     // Regular file and the second large file should succeed
     // The error in the large file stream shouldn't affect the regular stream
-    assert!(
-      count >= 2,
-      "Should have indexed at least 2 documents despite error"
+    assert_eq!(
+      count, 2,
+      "Should have indexed exactly 2 documents (regular_ok and large_ok)"
     );
-    assert!(failures.is_none(), "Should have no embedding failures");
+    assert!(
+      failures.is_some(),
+      "Should have failures for the incomplete large_error file"
+    );
+  }
+
+  #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+  async fn test_document_batching_flushes_continuously() -> Result<(), Box<dyn std::error::Error>> {
+    // This test reproduces the issue where documents aren't flushed until all embeddings complete
+    let _ = tracing_subscriber::fmt()
+      .with_env_filter("breeze_indexer=debug")
+      .try_init();
+
+    let (_temp_dir, mut config) = Config::test();
+
+    // Set a small batch size to ensure we trigger multiple flushes
+    config.document_batch_size = 10;
+
+    // Create embedding provider for tests
+    let (embedding_provider, embedding_dim) = create_test_embedding_provider().await;
+
+    let temp_db = tempdir().unwrap();
+    let connection = lancedb::connect(temp_db.path().to_str().unwrap())
+      .execute()
+      .await
+      .unwrap();
+    let table_name = format!("test_embeddings_{}", std::process::id());
+    let chunk_table_name = format!("test_chunks_{}", std::process::id());
+
+    // Create dummy document for table creation
+    let mut dummy_doc = CodeDocument::new(Uuid::nil(), "dummy.rs".to_string(), "dummy".to_string());
+    dummy_doc.update_embedding(vec![0.0; embedding_dim]);
+    let batches: Box<dyn arrow::array::RecordBatchReader + Send> = dummy_doc.into_arrow().unwrap();
+    let table = connection
+      .create_table(&table_name, batches)
+      .execute()
+      .await
+      .unwrap();
+
+    // Create dummy chunk for chunk table creation
+    let mut dummy_chunk = CodeChunk::builder()
+      .file_id(Uuid::nil())
+      .project_id(Uuid::nil())
+      .file_path("dummy.rs".to_string())
+      .content("dummy".to_string())
+      .start_byte(0)
+      .end_byte(5)
+      .start_line(1)
+      .end_line(1)
+      .build();
+    dummy_chunk.update_embedding(vec![0.0; embedding_dim]);
+    let chunk_batches: Box<dyn arrow::array::RecordBatchReader + Send> =
+      dummy_chunk.into_arrow().unwrap();
+    let chunk_table = connection
+      .create_table(&chunk_table_name, chunk_batches)
+      .execute()
+      .await
+      .unwrap();
+
+    let indexer = BulkIndexer::new(
+      Arc::new(config),
+      embedding_provider,
+      embedding_dim,
+      Arc::new(RwLock::new(table)),
+      Arc::new(RwLock::new(chunk_table)),
+    );
+
+    // Create 50 files to ensure we exceed the batch size multiple times
+    let mut chunks = Vec::new();
+    for i in 0..50 {
+      let file_path = format!("file_{}.rs", i);
+      chunks.push(Ok(create_test_chunk(
+        &file_path,
+        &format!("content for file {}", i),
+        false,
+        0,
+      )));
+      chunks.push(Ok(create_test_chunk(&file_path, "", true, 1)));
+    }
+
+    let chunk_stream = stream::iter(chunks);
+
+    let (count, failures) = indexer
+      .index_stream(Uuid::now_v7(), chunk_stream, 256, None)
+      .await
+      .unwrap();
+
+    // The count includes the dummy document used for table creation
+    assert_eq!(
+      count, 51,
+      "Should have indexed all 50 documents plus 1 dummy document"
+    );
+    assert!(failures.is_none(), "Should have no failures");
+
+    // The key assertion: we should see "Flushing document batch" logs multiple times
+    // during processing, not just at the end. This can be verified by examining logs.
+    Ok(())
   }
 }

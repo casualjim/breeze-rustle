@@ -45,7 +45,7 @@ batch_size = 256 # Number of chunks to collect in a batch betfore sending to the
 [embeddings]
 # The selected embedding provider, from the providers defined below
 # provider = "local" | "openai" | "ollama"  | "llamacpp"| "voyage" | "cohere" | "my-provider" | ...
-provider = "voyage"
+provider = "qwen3"
 workers = 5 # Number of concurrent chunk batchers to use for the embedding provider
 
 [embeddings.local]
@@ -115,26 +115,14 @@ tokens_per_minute = 1_000_000
 
 max_concurrent_requests = 1
 
-# runpodctl create pod \
-#  --gpuType 'NVIDIA GeForce RTX 3090' \
-#  --imageName vllm/vllm-openai:latest \
-#  --volumeSize 30 \
-#  --containerDiskSize 10 \
-#  --name qwen3-embed-2 \
-#  --secureCloud \
-#  --args '--host 0.0.0.0 --port 8000 --model Qwen/Qwen3-Embedding-0.6B --enforce-eager --trust-remote-code --max-model-len 32768 --max-num-seqs 200 --max-num-batched-tokens 192000 --gpu-memory-utilization 0.95 --disable-log-stats --api-key sk-moFgaeiq8K76FXkCNx2ydwtnxWutYotT' \
-# --ports '8000/http' \
-# --ports '22/tcp' \
-# --volumePath /workspace \
-# --env "HF_HOME=/workspace/hf_home"
 [embeddings.qwen3]
 model = "Qwen/Qwen3-Embedding-0.6B"
-api_base = "https://wfqcjfjn5a7hiv-8000.proxy.runpod.net/v1"
+api_base = "https://ivan-3--qwen3-embedding-serve.modal.run/v1"
 context_length = 32768
 embedding_dim = 1024
 tokenizer = "hf:Qwen/Qwen3-Embedding-0.6B"
 
-requests_per_minute = 3000
+requests_per_minute = 45
 tokens_per_minute = 10_000_000
 max_concurrent_requests = 10
 max_tokens_per_request = 128_000

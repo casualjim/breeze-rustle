@@ -610,6 +610,7 @@ max_concurrent_requests = 5
       large_file_threads: Some(self.indexer.workers.large_file),
       embedding_workers: self.embeddings.workers,
       optimize_threshold: self.indexer.optimize_threshold,
+      document_batch_size: 100, // Default to 100
     })
   }
 }

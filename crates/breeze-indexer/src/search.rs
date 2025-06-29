@@ -514,6 +514,7 @@ mod tests {
       large_file_threads: None,
       embedding_workers: 1,
       optimize_threshold: 250,
+      document_batch_size: 100,
     };
 
     let embedding_provider = create_embedding_provider(&config).await.unwrap();

@@ -125,6 +125,8 @@ pub struct PySemanticChunk {
   pub content: Option<String>, // Only populated for EOF chunks
   #[pyo3(get)]
   pub content_hash: Option<Vec<u8>>, // Only populated for EOF chunks
+  #[pyo3(get)]
+  pub expected_chunks: Option<usize>, // Only populated for EOF chunks
 }
 
 impl From<Chunk> for PySemanticChunk {
@@ -140,6 +142,7 @@ impl From<Chunk> for PySemanticChunk {
         metadata: sc.metadata.into(),
         content: None,
         content_hash: None,
+        expected_chunks: None,
       },
       Chunk::Text(sc) => Self {
         chunk_type: ChunkType::Text,
@@ -151,11 +154,13 @@ impl From<Chunk> for PySemanticChunk {
         metadata: sc.metadata.into(),
         content: None,
         content_hash: None,
+        expected_chunks: None,
       },
       Chunk::EndOfFile {
         file_path,
         content,
         content_hash,
+        expected_chunks,
       } => Self {
         chunk_type: ChunkType::EndOfFile,
         text: file_path,
@@ -174,6 +179,7 @@ impl From<Chunk> for PySemanticChunk {
         },
         content: Some(content),
         content_hash: Some(content_hash.to_vec()),
+        expected_chunks: Some(expected_chunks),
       },
       Chunk::Delete { file_path } => Self {
         chunk_type: ChunkType::Delete,
@@ -193,6 +199,7 @@ impl From<Chunk> for PySemanticChunk {
         },
         content: None,
         content_hash: None,
+        expected_chunks: None,
       },
     }
   }

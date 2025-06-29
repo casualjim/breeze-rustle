@@ -755,11 +755,13 @@ fn process_file<P: AsRef<Path>>(
       if let Some(language) = detected_language {
           let mut chunk_stream = Box::pin(chunker.chunk_code(content, language.clone(), Some(path_str.clone())));
           let mut had_success = false;
+          let mut chunk_count = 0;
 
           while let Some(chunk_result) = chunk_stream.next().await {
               match chunk_result {
                   Ok(chunk) => {
                       had_success = true;
+                      chunk_count += 1;
                       yield ProjectChunk {
                           file_path: path_str.clone(),
                           chunk,
@@ -778,13 +780,14 @@ fn process_file<P: AsRef<Path>>(
 
           // If semantic chunking succeeded, we're done
           if had_success {
-              // Emit EOF marker for this file
+              // Emit EOF marker with chunk count
               yield ProjectChunk {
                   file_path: path_str.clone(),
                   chunk: Chunk::EndOfFile {
                       file_path: path_str.clone(),
                       content: content_for_eof,
                       content_hash,
+                      expected_chunks: chunk_count,
                   },
                   file_size,
                   stream,
@@ -796,10 +799,12 @@ fn process_file<P: AsRef<Path>>(
       // Fall back to text chunking
       // Note: content was already moved into chunk_code if we tried semantic chunking
       let content_for_text = content_for_eof.clone();
+      let mut chunk_count = 0;
 
       let mut chunk_stream = Box::pin(chunker.chunk_text(content_for_text, Some(path_str.clone())));
       while let Some(chunk_result) = chunk_stream.next().await {
           let chunk = chunk_result?;
+          chunk_count += 1;
           yield ProjectChunk {
               file_path: path_str.clone(),
               chunk,
@@ -808,13 +813,14 @@ fn process_file<P: AsRef<Path>>(
           };
       }
 
-      // Emit EOF marker for this file
+      // Emit EOF marker with chunk count
       yield ProjectChunk {
           file_path: path_str.clone(),
           chunk: Chunk::EndOfFile {
               file_path: path_str,
               content: content_for_eof,
               content_hash,
+              expected_chunks: chunk_count,
           },
           file_size,
           stream,
@@ -1635,6 +1641,76 @@ fn main() {
       walker_only_filtered.len() + matcher_only.len(),
       walker_only_filtered,
       matcher_only
+    );
+  }
+
+  #[tokio::test]
+  async fn test_eof_chunk_expected_chunks() {
+    let temp_dir = TempDir::new().unwrap();
+    let test_file = temp_dir.path().join("test.py");
+
+    // Create a Python file that will generate multiple chunks
+    let content = r#"
+def function_one():
+    """First function with a long docstring that should help ensure we get multiple chunks when using a small chunk size."""
+    return 1
+
+def function_two():
+    """Second function."""
+    return 2
+
+def function_three():
+    """Third function."""
+    return 3
+"#;
+
+    fs::write(&test_file, content).unwrap();
+
+    // Use a small chunk size to ensure multiple chunks
+    let chunker = Arc::new(InnerChunker::new(50, Tokenizer::Characters).unwrap());
+    let file_size = fs::metadata(&test_file).unwrap().len();
+
+    let mut stream = Box::pin(process_file(
+      &test_file,
+      file_size,
+      ChunkStream::Regular,
+      chunker,
+      None,
+    ));
+
+    let mut chunks = Vec::new();
+    while let Some(result) = stream.next().await {
+      chunks.push(result.unwrap());
+    }
+
+    // Find the EOF chunk
+    let eof_chunk = chunks
+      .iter()
+      .find(|c| matches!(c.chunk, Chunk::EndOfFile { .. }))
+      .expect("Should have an EOF chunk");
+
+    // Count non-EOF chunks
+    let content_chunks = chunks
+      .iter()
+      .filter(|c| !matches!(c.chunk, Chunk::EndOfFile { .. }))
+      .count();
+
+    // Extract expected_chunks from EOF
+    let expected_chunks = match &eof_chunk.chunk {
+      Chunk::EndOfFile {
+        expected_chunks, ..
+      } => *expected_chunks,
+      _ => panic!("Expected EOF chunk"),
+    };
+
+    assert_eq!(
+      expected_chunks, content_chunks,
+      "EOF chunk should have correct expected_chunks count"
+    );
+
+    assert!(
+      content_chunks > 1,
+      "Should have multiple chunks with small chunk size"
     );
   }
 }

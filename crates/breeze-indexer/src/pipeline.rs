@@ -12,6 +12,7 @@ pub enum PipelineChunk {
     file_path: String,
     content: String,
     content_hash: [u8; 32], // Blake3 hash
+    expected_chunks: usize,
   },
 }
 
@@ -24,10 +25,12 @@ impl PipelineChunk {
         file_path,
         content,
         content_hash,
+        expected_chunks,
       } => Some(PipelineChunk::EndOfFile {
         file_path,
         content,
         content_hash,
+        expected_chunks,
       }),
       Chunk::Delete { .. } => None,
     }
@@ -75,6 +78,7 @@ pub(crate) enum EmbeddedChunkWithFile {
     content: String,
     content_hash: [u8; 32],
     stream: ChunkStream,
+    expected_chunks: usize,
   },
   /// Batch failure notification
   BatchFailure {
@@ -90,6 +94,9 @@ pub(crate) enum EmbeddedChunkWithFile {
 pub(crate) struct FileAccumulator {
   pub file_path: String,
   pub embedded_chunks: Vec<EmbeddedChunk>,
+  pub expected_chunks: Option<usize>,
+  pub received_content_chunks: usize,
+  pub has_eof: bool,
 }
 
 impl FileAccumulator {
@@ -97,10 +104,30 @@ impl FileAccumulator {
     Self {
       file_path,
       embedded_chunks: Vec::new(),
+      expected_chunks: None,
+      received_content_chunks: 0,
+      has_eof: false,
     }
   }
 
   pub(crate) fn add_chunk(&mut self, chunk: EmbeddedChunk) {
+    match &chunk.chunk {
+      PipelineChunk::EndOfFile {
+        expected_chunks, ..
+      } => {
+        self.expected_chunks = Some(*expected_chunks);
+      }
+      _ => {
+        // This is a content chunk
+        self.received_content_chunks += 1;
+      }
+    }
     self.embedded_chunks.push(chunk);
+  }
+
+  pub(crate) fn is_complete(&self) -> bool {
+    // File is complete when:
+    // We have received all expected content chunks
+    self.expected_chunks == Some(self.received_content_chunks)
   }
 }

@@ -63,6 +63,7 @@ pub struct SemanticChunkJs {
   pub metadata: ChunkMetadataJs,
   pub content: Option<String>,       // Only populated for EOF chunks
   pub content_hash: Option<Vec<u8>>, // Only populated for EOF chunks
+  pub expected_chunks: Option<i32>,  // Only populated for EOF chunks
 }
 
 impl From<RustChunk> for SemanticChunkJs {
@@ -78,6 +79,7 @@ impl From<RustChunk> for SemanticChunkJs {
         metadata: sc.metadata.into(),
         content: None,
         content_hash: None,
+        expected_chunks: None,
       },
       RustChunk::Text(sc) => Self {
         chunk_type: ChunkType::Text,
@@ -89,11 +91,13 @@ impl From<RustChunk> for SemanticChunkJs {
         metadata: sc.metadata.into(),
         content: None,
         content_hash: None,
+        expected_chunks: None,
       },
       RustChunk::EndOfFile {
         file_path,
         content,
         content_hash,
+        expected_chunks,
       } => Self {
         chunk_type: ChunkType::EndOfFile,
         text: file_path,
@@ -112,6 +116,7 @@ impl From<RustChunk> for SemanticChunkJs {
         },
         content: Some(content),
         content_hash: Some(content_hash.to_vec()),
+        expected_chunks: Some(expected_chunks as i32),
       },
       RustChunk::Delete { file_path } => Self {
         chunk_type: ChunkType::Delete,
@@ -131,6 +136,7 @@ impl From<RustChunk> for SemanticChunkJs {
         },
         content: None,
         content_hash: None,
+        expected_chunks: None,
       },
     }
   }

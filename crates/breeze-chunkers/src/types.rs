@@ -25,6 +25,7 @@ pub enum Chunk {
     file_path: String,
     content: String,
     content_hash: [u8; 32], // Blake3 hash
+    expected_chunks: usize, // Number of content chunks for this file
   },
   Delete {
     file_path: String,

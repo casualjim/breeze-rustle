@@ -21,9 +21,10 @@ dev = [
     "pytest>=8.3.5",
     "pytest-asyncio>=1.0.0",
     "breeze-langdetect>=0.1.0",
-    "polars>=0.20.0",
+    "polars>=1.31.0",
     "matplotlib>=3.7.0",
-    "seaborn>=0.12.0"
+    "seaborn>=0.12.0",
+    "modal>=1.0.5"
 ]
 
 [tool.pytest.ini_options]
