@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+#MISE description="Run the linters from .pre-commit-config.yaml"
+
+proj_dir=$(git rev-parse --show-toplevel)
+
+cd "$proj_dir" || exit 1
+
+prefligit run --all-files

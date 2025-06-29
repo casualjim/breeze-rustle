@@ -4,7 +4,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Instant;
 
-use breeze_chunkers::{Chunk, ChunkStream, Tokenizer, WalkOptions, walk_project};
+use breeze_chunkers::{Chunk, Tokenizer, WalkOptions, walk_project};
 use futures_util::{StreamExt, TryStreamExt};
 use lancedb::Table;
 use lancedb::query::{ExecutableQuery, QueryBase};
@@ -382,10 +382,6 @@ impl BulkIndexer {
     // Create channels with bounded capacity for backpressure
     let (batch_tx, batch_rx) = mpsc::channel::<ChunkBatch>(10);
 
-    // Create separate channels for each stream
-    let (regular_batch_tx, regular_batch_rx) = mpsc::channel::<ChunkBatch>(10);
-    let (large_file_batch_tx, large_file_batch_rx) = mpsc::channel::<ChunkBatch>(5);
-
     let (embedded_tx, embedded_rx) = mpsc::channel::<EmbeddedChunkWithFile>(100);
     let (doc_tx, doc_rx) = mpsc::channel::<CodeDocument>(50);
     let (chunk_tx, chunk_rx) = mpsc::channel::<crate::models::CodeChunk>(100);
@@ -416,58 +412,29 @@ impl BulkIndexer {
       batch_size: self.config.document_batch_size,
     });
 
-    // Spawn batch router
-    let router_handle = tokio::spawn(batch_router_task(
-      batch_rx,
-      regular_batch_tx,
-      large_file_batch_tx,
-      cancel_token.clone(),
-    ));
-
     // Choose between single worker or multi-worker based on provider type
     let mut embed_handles = Vec::new();
 
     if self.embedding_provider.is_remote() {
-      // For remote providers, spawn multiple workers with work-stealing for each stream
+      // For remote providers, spawn multiple workers with work-stealing
       info!(
-        "Using {} concurrent embedding workers per stream for remote provider",
+        "Using {} concurrent embedding workers for remote provider",
         self.config.embedding_workers
       );
 
-      // Regular stream workers
-      let regular_handles = self.spawn_remote_embedders(
-        regular_batch_rx,
+      embed_handles = self.spawn_remote_embedders(
+        batch_rx,
         embedded_tx.clone(),
         stats.clone(),
         cancel_token.clone(),
         self.config.embedding_workers,
       );
-      embed_handles.extend(regular_handles);
-
-      // Large file stream workers
-      let large_file_handles = self.spawn_remote_embedders(
-        large_file_batch_rx,
-        embedded_tx.clone(),
-        stats.clone(),
-        cancel_token.clone(),
-        self.config.embedding_workers,
-      );
-      embed_handles.extend(large_file_handles);
     } else {
-      // For local providers, use single worker per stream
-      info!("Using single embedding worker per stream for local provider");
+      // For local providers, use single worker
+      info!("Using single embedding worker for local provider");
 
-      // Regular stream embedder
       embed_handles.push(self.spawn_embedder(
-        regular_batch_rx,
-        embedded_tx.clone(),
-        stats.clone(),
-        cancel_token.clone(),
-      ));
-
-      // Large file stream embedder
-      embed_handles.push(self.spawn_embedder(
-        large_file_batch_rx,
+        batch_rx,
         embedded_tx.clone(),
         stats.clone(),
         cancel_token.clone(),
@@ -488,29 +455,23 @@ impl BulkIndexer {
     drop(embedded_tx);
 
     // Wait for pipeline completion with proper error handling
+    // First wait for the stream processor to complete
     let walk_result = walk_handle.await;
-    let router_result = router_handle.await;
+
+    // Then wait for all embedding workers to complete
+    let embed_results = futures::future::join_all(embed_handles).await;
+
+    // Only after all producers are done, wait for consumers
     let doc_result = doc_handle.await;
-    // Now wait for sink results
     let sink_result = sink_handle.await;
     let chunk_sink_result = chunk_sink_handle.await;
     let delete_result = delete_handle.await;
-    // Wait for all embedding workers
-    let embed_results = futures::future::join_all(embed_handles).await;
 
     // Check all results and report errors, cancelling other tasks on first error
     if let Err(e) = walk_result {
       cancel_token.cancel();
       return Err(IndexerError::Task(format!(
         "Stream processor task failed: {}",
-        e
-      )));
-    }
-
-    if let Err(e) = router_result {
-      cancel_token.cancel();
-      return Err(IndexerError::Task(format!(
-        "Batch router task failed: {}",
         e
       )));
     }
@@ -820,22 +781,20 @@ struct StreamProcessorParams {
   cancel_token: CancellationToken,
 }
 
-// Single stream batcher with its own batch ID sequence
+// Stream batcher with its own batch ID sequence
 struct StreamBatcher {
   buffer: Vec<PipelineProjectChunk>,
   chunk_count: usize,
   max_batch_size: usize,
-  stream_type: ChunkStream,
   batch_id: usize,
 }
 
 impl StreamBatcher {
-  fn new(max_batch_size: usize, stream_type: ChunkStream) -> Self {
+  fn new(max_batch_size: usize) -> Self {
     Self {
       buffer: Vec::new(),
       chunk_count: 0,
       max_batch_size,
-      stream_type,
       batch_id: 0,
     }
   }
@@ -863,7 +822,6 @@ impl StreamBatcher {
       let batch = ChunkBatch {
         batch_id: self.batch_id,
         chunks: std::mem::take(&mut self.buffer),
-        stream: self.stream_type,
       };
       if tx.send(batch).await.is_err() {
         return Err(());
@@ -872,77 +830,6 @@ impl StreamBatcher {
       self.chunk_count = 0;
     }
     Ok(())
-  }
-}
-
-// Dual stream batcher that uses two StreamBatchers
-struct DualStreamBatcher {
-  regular: StreamBatcher,
-  large_file: StreamBatcher,
-}
-
-impl DualStreamBatcher {
-  fn new(max_batch_size: usize) -> Self {
-    Self {
-      regular: StreamBatcher::new(max_batch_size, ChunkStream::Regular),
-      large_file: StreamBatcher::new(max_batch_size, ChunkStream::LargeFile),
-    }
-  }
-
-  async fn add_chunk(
-    &mut self,
-    chunk: PipelineProjectChunk,
-    stream: ChunkStream,
-    tx: &mpsc::Sender<ChunkBatch>,
-  ) -> Result<(), ()> {
-    match stream {
-      ChunkStream::Regular => self.regular.add_chunk(chunk, tx).await,
-      ChunkStream::LargeFile => self.large_file.add_chunk(chunk, tx).await,
-    }
-  }
-
-  async fn flush_remaining(&mut self, tx: &mpsc::Sender<ChunkBatch>) -> Result<(), ()> {
-    self.regular.flush(tx).await?;
-    self.large_file.flush(tx).await?;
-    Ok(())
-  }
-}
-
-// Batch router that splits batches by stream type
-async fn batch_router_task(
-  mut batch_rx: mpsc::Receiver<ChunkBatch>,
-  regular_tx: mpsc::Sender<ChunkBatch>,
-  large_file_tx: mpsc::Sender<ChunkBatch>,
-  cancel_token: CancellationToken,
-) {
-  let _guard = TaskGuard::new("Batch router");
-
-  loop {
-    tokio::select! {
-      _ = cancel_token.cancelled() => {
-        info!("Batch router cancelled");
-        break;
-      }
-      batch = batch_rx.recv() => {
-        match batch {
-          Some(batch) => {
-            let tx = match batch.stream {
-              ChunkStream::Regular => &regular_tx,
-              ChunkStream::LargeFile => &large_file_tx,
-            };
-
-            if tx.send(batch).await.is_err() {
-              debug!("Stream-specific embedder dropped, stopping router");
-              break;
-            }
-          }
-          None => {
-            debug!("Batch channel closed");
-            break;
-          }
-        }
-      }
-    }
   }
 }
 
@@ -974,7 +861,7 @@ async fn stream_processor_task(
 ) {
   let _guard = TaskGuard::new("Stream processor");
   let mut chunk_stream = Box::pin(chunk_stream);
-  let mut batcher = DualStreamBatcher::new(params.max_batch_size);
+  let mut batcher = StreamBatcher::new(params.max_batch_size);
 
   loop {
     tokio::select! {
@@ -997,7 +884,6 @@ async fn stream_processor_task(
 
             // Convert to PipelineChunk
             if let Some(pipeline_chunk) = PipelineChunk::from_chunk(project_chunk.chunk.clone()) {
-              let chunk_stream = project_chunk.stream; // Save stream type before moving
               let pipeline_project_chunk = PipelineProjectChunk {
                 file_path: project_chunk.file_path,
                 chunk: pipeline_chunk,
@@ -1015,7 +901,7 @@ async fn stream_processor_task(
               }
 
               // Add chunk to batcher
-              if batcher.add_chunk(pipeline_project_chunk, chunk_stream, &params.batch_tx).await.is_err() {
+              if batcher.add_chunk(pipeline_project_chunk, &params.batch_tx).await.is_err() {
                 debug!("Receiver dropped, stopping stream processor");
                 break;
               }
@@ -1030,8 +916,8 @@ async fn stream_processor_task(
     }
   }
 
-  // Send remaining chunks from both streams
-  let _ = batcher.flush_remaining(&params.batch_tx).await;
+  // Send remaining chunks
+  let _ = batcher.flush(&params.batch_tx).await;
 
   info!(
     files = params.stats.files.load(Ordering::Relaxed),
@@ -1077,7 +963,6 @@ async fn remote_embedder_worker_task(
           let chunk_batch = ChunkBatch {
             batch_id,
             chunks: regular_chunks,
-            stream: batch.stream,
           };
 
           let embedding_batches = batching_strategy.prepare_batches(vec![chunk_batch]).await;
@@ -1094,7 +979,6 @@ async fn remote_embedder_worker_task(
               embedding_provider.as_ref(),
               embedding_batch.chunks,
               embedding_batch.batch_id,
-              batch.stream,
               &embedded_tx,
               &stats,
             )
@@ -1115,10 +999,11 @@ async fn remote_embedder_worker_task(
                   file_path,
                   content,
                   content_hash,
-                  stream: batch.stream,
                   expected_chunks,
                 };
                 if embedded_tx.send(eof).await.is_err() {
+                  // Receiver dropped - expected during shutdown
+                  debug!("EOF receiver dropped - stopping worker");
                   return;
                 }
               }
@@ -1141,10 +1026,11 @@ async fn remote_embedder_worker_task(
               file_path,
               content,
               content_hash,
-              stream: batch.stream,
               expected_chunks,
             };
             if embedded_tx.send(eof).await.is_err() {
+              // Receiver dropped - expected during shutdown
+              debug!("EOF receiver dropped - stopping worker");
               return;
             }
           }
@@ -1162,7 +1048,12 @@ async fn remote_embedder_worker_task(
     }
   }
 
-  debug!("Remote embedder worker {} completed", worker_id);
+  info!(
+    worker_id,
+    chunks = stats.chunks_processed.load(Ordering::Relaxed),
+    files = stats.files_embedded.load(Ordering::Relaxed),
+    "Remote embedder worker completed"
+  );
 }
 
 async fn embedder_task(
@@ -1179,7 +1070,6 @@ async fn embedder_task(
   struct PendingBatch {
     regular_chunks: Vec<PipelineProjectChunk>,
     eof_chunks: Vec<PipelineProjectChunk>,
-    stream: ChunkStream,
   }
 
   // Keep batches in order - BTreeMap maintains key order
@@ -1196,7 +1086,6 @@ async fn embedder_task(
         match batch {
           Some(batch) => {
             let batch_id = batch.batch_id;
-            let stream = batch.stream; // Save stream type
 
             // Separate EOF markers from regular chunks
             let (eof_chunks, regular_chunks): (Vec<_>, Vec<_>) = batch.chunks.into_iter()
@@ -1206,7 +1095,6 @@ async fn embedder_task(
             pending_batches.insert(batch_id, PendingBatch {
               regular_chunks,
               eof_chunks,
-              stream,
             });
 
             // Check if we have enough chunks to process
@@ -1231,7 +1119,6 @@ async fn embedder_task(
                   batches_to_process.push(ChunkBatch {
                     batch_id: *bid,
                     chunks,
-                    stream: pending_batch.stream,
                   });
                 }
               }
@@ -1250,7 +1137,6 @@ async fn embedder_task(
                   embedding_provider.as_ref(),
                   embedding_batch.chunks,
                   embedding_batch.batch_id,
-                  embedding_batch.stream,
                   &embedded_tx,
                   &stats,
                 )
@@ -1265,10 +1151,11 @@ async fn embedder_task(
                       file_path,
                       content,
                       content_hash,
-                      stream: embedding_batch.stream,
                       expected_chunks,
                     };
                     if embedded_tx.send(eof).await.is_err() {
+                      // Receiver dropped - expected during shutdown
+                      debug!("EOF receiver dropped - stopping");
                       return;
                     }
                   }
@@ -1291,7 +1178,6 @@ async fn embedder_task(
                   remaining_batches.push(ChunkBatch {
                     batch_id: *bid,
                     chunks,
-                    stream: pending_batch.stream,
                   });
                 }
               }
@@ -1304,7 +1190,6 @@ async fn embedder_task(
                     embedding_provider.as_ref(),
                     embedding_batch.chunks,
                     embedding_batch.batch_id,
-                    embedding_batch.stream,
                     &embedded_tx,
                     &stats,
                   ).await;
@@ -1317,10 +1202,11 @@ async fn embedder_task(
                         file_path,
                         content,
                         content_hash,
-                        stream: embedding_batch.stream,
                         expected_chunks,
                       };
                       if embedded_tx.send(eof).await.is_err() {
+                        // Receiver dropped - expected during shutdown
+                        debug!("EOF receiver dropped - stopping");
                         return;
                       }
                     }
@@ -1338,10 +1224,11 @@ async fn embedder_task(
                       file_path,
                       content,
                       content_hash,
-                      stream: pending_batch.stream,
                       expected_chunks,
                     };
                     if embedded_tx.send(eof).await.is_err() {
+                      // Receiver dropped - expected during shutdown
+                      debug!("Final EOF receiver dropped - stopping");
                       return;
                     }
                   }
@@ -1358,7 +1245,9 @@ async fn embedder_task(
 
   info!(
     batches = stats.batches.load(Ordering::Relaxed),
-    "Embedder completed"
+    chunks = stats.chunks_processed.load(Ordering::Relaxed),
+    files = stats.files_embedded.load(Ordering::Relaxed),
+    "Embedder completed successfully"
   );
 }
 
@@ -1366,7 +1255,6 @@ async fn process_embedding_batch(
   embedding_provider: &dyn EmbeddingProvider,
   batch: Vec<PipelineProjectChunk>,
   batch_id: usize,
-  stream: ChunkStream,
   embedded_tx: &mpsc::Sender<EmbeddedChunkWithFile>,
   stats: &IndexingStats,
 ) {
@@ -1422,10 +1310,10 @@ async fn process_embedding_batch(
               file_path: pc.file_path,
               chunk: Box::new(pc.chunk),
               embedding: embedding_vec,
-              stream,
             };
             if embedded_tx.send(item).await.is_err() {
-              error!("Failed to send embedded chunk - receiver dropped");
+              // Receiver dropped - this is expected during shutdown
+              debug!("Embedded chunk receiver dropped - stopping batch processing");
               return;
             }
           }
@@ -1440,11 +1328,11 @@ async fn process_embedding_batch(
         batch_id,
         failed_files: files_in_batch,
         error: e.to_string(),
-        stream,
       };
 
       if embedded_tx.send(failure).await.is_err() {
-        error!("Failed to send batch failure notification - receiver dropped");
+        // Receiver dropped - this is expected during shutdown
+        debug!("Batch failure receiver dropped - stopping");
       }
     }
   }
@@ -1638,7 +1526,6 @@ mod tests {
           expected_chunks,
         },
         file_size: 0,
-        stream: ChunkStream::Regular,
       }
     } else {
       // Accumulate content for this file
@@ -1671,7 +1558,6 @@ mod tests {
           },
         }),
         file_size: 0,
-        stream: ChunkStream::Regular,
       }
     }
   }
@@ -1843,7 +1729,6 @@ mod tests {
           },
         })),
         embedding: vec![0.1; embedding_dim],
-        stream: ChunkStream::Regular,
       })
       .await
       .unwrap();
@@ -1871,7 +1756,6 @@ mod tests {
           },
         })),
         embedding: vec![0.2; embedding_dim],
-        stream: ChunkStream::Regular,
       })
       .await
       .unwrap();
@@ -1883,7 +1767,7 @@ mod tests {
         file_path: "file1.rs".to_string(),
         content: "chunk1".to_string(),
         content_hash: [0u8; 32],
-        stream: ChunkStream::Regular,
+
         expected_chunks: 1,
       })
       .await
@@ -1896,7 +1780,7 @@ mod tests {
         file_path: "file2.rs".to_string(),
         content: "chunk1".to_string(),
         content_hash: [1u8; 32],
-        stream: ChunkStream::Regular,
+
         expected_chunks: 1,
       })
       .await
@@ -2480,7 +2364,6 @@ def goodbye():
       let batch = ChunkBatch {
         batch_id,
         chunks: chunk_batch.to_vec(),
-        stream: ChunkStream::Regular,
       };
       batch_tx.send(batch).await.unwrap();
     }
@@ -2647,7 +2530,6 @@ def goodbye():
           },
         })),
         embedding: vec![0.1; embedding_dim],
-        stream: ChunkStream::Regular,
       })
       .await
       .unwrap();
@@ -2659,7 +2541,7 @@ def goodbye():
         file_path: "file1.rs".to_string(),
         content: "content1".to_string(),
         content_hash: [1u8; 32],
-        stream: ChunkStream::Regular,
+
         expected_chunks: 1,
       })
       .await
@@ -2675,7 +2557,6 @@ def goodbye():
         batch_id: 1,
         failed_files: failed_files.clone(),
         error: "Mock embedding failure".to_string(),
-        stream: ChunkStream::Regular,
       })
       .await
       .unwrap();
@@ -2687,7 +2568,7 @@ def goodbye():
         file_path: "file2.rs".to_string(),
         content: "content2".to_string(),
         content_hash: [2u8; 32],
-        stream: ChunkStream::Regular,
+
         expected_chunks: 1,
       })
       .await
@@ -2716,7 +2597,6 @@ def goodbye():
           },
         })),
         embedding: vec![0.3; embedding_dim],
-        stream: ChunkStream::Regular,
       })
       .await
       .unwrap();
@@ -2728,7 +2608,7 @@ def goodbye():
         file_path: "file3.rs".to_string(),
         content: "content3".to_string(),
         content_hash: [3u8; 32],
-        stream: ChunkStream::Regular,
+
         expected_chunks: 1,
       })
       .await
@@ -2792,9 +2672,7 @@ def goodbye():
     // Helper to create large file chunk
     let create_large_file_chunk =
       |file_path: &str, text: &str, is_eof: bool, expected_chunks: usize| {
-        let mut chunk = create_test_chunk(file_path, text, is_eof, expected_chunks);
-        chunk.stream = ChunkStream::LargeFile;
-        chunk
+        create_test_chunk(file_path, text, is_eof, expected_chunks)
       };
 
     let chunks = vec![
@@ -2905,29 +2783,27 @@ def goodbye():
 
     // Create heavily interleaved chunks from multiple files
     let test_id = std::process::id();
-    let files: Vec<(String, ChunkStream)> = vec![
-      (format!("file1_{}.rs", test_id), ChunkStream::Regular),
-      (format!("file2_{}.rs", test_id), ChunkStream::LargeFile),
-      (format!("file3_{}.rs", test_id), ChunkStream::Regular),
-      (format!("file4_{}.rs", test_id), ChunkStream::LargeFile),
+    let files: Vec<String> = vec![
+      format!("file1_{}.rs", test_id),
+      format!("file2_{}.rs", test_id),
+      format!("file3_{}.rs", test_id),
+      format!("file4_{}.rs", test_id),
     ];
 
     let mut chunks = Vec::new();
 
     // Interleave chunks from all files
     for i in 0..3 {
-      for (file_path, stream_type) in &files {
+      for file_path in &files {
         let text = format!("chunk {} from {}", i, file_path);
-        let mut chunk = create_test_chunk(file_path, &text, false, 0);
-        chunk.stream = *stream_type;
+        let chunk = create_test_chunk(file_path, &text, false, 0);
         chunks.push(Ok(chunk));
       }
     }
 
     // Add EOF markers for all files
-    for (file_path, stream_type) in &files {
-      let mut chunk = create_test_chunk(file_path, "", true, 3);
-      chunk.stream = *stream_type;
+    for file_path in &files {
+      let chunk = create_test_chunk(file_path, "", true, 3);
       chunks.push(Ok(chunk));
     }
 
@@ -2983,25 +2859,13 @@ def goodbye():
       Ok(create_test_chunk(&regular_file, "content", false, 0)),
       Ok(create_test_chunk(&regular_file, "", true, 1)),
       // Large file with error in the middle
-      Ok({
-        let mut chunk = create_test_chunk(&large_file_error, "start", false, 0);
-        chunk.stream = ChunkStream::LargeFile;
-        chunk
-      }),
+      Ok(create_test_chunk(&large_file_error, "start", false, 0)),
       Err(ChunkError::ParseError(
         "simulated large file error".to_string(),
       )),
       // Another large file that should still process
-      Ok({
-        let mut chunk = create_test_chunk(&large_file_ok, "content", false, 0);
-        chunk.stream = ChunkStream::LargeFile;
-        chunk
-      }),
-      Ok({
-        let mut chunk = create_test_chunk(&large_file_ok, "", true, 1);
-        chunk.stream = ChunkStream::LargeFile;
-        chunk
-      }),
+      Ok(create_test_chunk(&large_file_ok, "content", false, 0)),
+      Ok(create_test_chunk(&large_file_ok, "", true, 1)),
     ];
 
     let chunk_stream = stream::iter(chunks);

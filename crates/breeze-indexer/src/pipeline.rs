@@ -1,4 +1,4 @@
-use breeze_chunkers::{Chunk, ChunkStream, SemanticChunk};
+use breeze_chunkers::{Chunk, SemanticChunk};
 
 /// Type alias for a boxed stream
 pub(crate) type BoxStream<T> = std::pin::Pin<Box<dyn futures_util::Stream<Item = T> + Send>>;
@@ -57,7 +57,6 @@ pub(crate) struct EmbeddedChunk {
 pub struct ChunkBatch {
   pub batch_id: usize,
   pub chunks: Vec<PipelineProjectChunk>,
-  pub stream: ChunkStream,
 }
 
 /// Embedded chunks with file path information
@@ -69,7 +68,6 @@ pub(crate) enum EmbeddedChunkWithFile {
     file_path: String,
     chunk: Box<PipelineChunk>,
     embedding: Vec<f32>,
-    stream: ChunkStream,
   },
   /// EOF marker - no embedding needed
   EndOfFile {
@@ -77,7 +75,6 @@ pub(crate) enum EmbeddedChunkWithFile {
     file_path: String,
     content: String,
     content_hash: [u8; 32],
-    stream: ChunkStream,
     expected_chunks: usize,
   },
   /// Batch failure notification
@@ -85,7 +82,6 @@ pub(crate) enum EmbeddedChunkWithFile {
     batch_id: usize,
     failed_files: std::collections::BTreeSet<String>,
     error: String,
-    stream: ChunkStream,
   },
 }
 

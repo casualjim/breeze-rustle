@@ -46,7 +46,8 @@
       "mcp__filesystem__list_allowed_directories",
       "mcp__filesystem__search_files",
       "mcp__code-index__search_code_advanced",
-      "Bash(curl:*)"
+      "Bash(curl:*)",
+      "Bash(mise lint:*)"
     ],
     "deny": []
   }

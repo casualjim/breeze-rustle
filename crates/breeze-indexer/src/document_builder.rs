@@ -8,7 +8,6 @@ use crate::IndexerError;
 use crate::bulk_indexer::IndexingStats;
 use crate::models::{ChunkMetadataUpdate, CodeChunk, CodeDocument};
 use crate::pipeline::{EmbeddedChunk, EmbeddedChunkWithFile, FileAccumulator, PipelineChunk};
-use breeze_chunkers::ChunkStream;
 
 /// Context for document building operations
 pub(crate) struct DocumentBuildContext<'a> {
@@ -218,64 +217,6 @@ impl StreamDocumentBuilder {
   }
 }
 
-/// Dual-stream document builder that routes chunks to appropriate stream builders
-pub(crate) struct DualStreamDocumentBuilder {
-  regular_builder: StreamDocumentBuilder,
-  large_file_builder: StreamDocumentBuilder,
-}
-
-impl DualStreamDocumentBuilder {
-  pub fn new(project_id: Uuid, embedding_dim: usize) -> Self {
-    Self {
-      regular_builder: StreamDocumentBuilder::new(project_id, embedding_dim),
-      large_file_builder: StreamDocumentBuilder::new(project_id, embedding_dim),
-    }
-  }
-
-  pub async fn add_chunk(
-    &mut self,
-    embedded_chunk: EmbeddedChunkWithFile,
-    document_batch: &mut Vec<CodeDocument>,
-    ctx: &DocumentBuildContext<'_>,
-  ) -> Result<(), IndexerError> {
-    // Route to appropriate builder based on stream
-    let stream = match &embedded_chunk {
-      EmbeddedChunkWithFile::Embedded { stream, .. } => *stream,
-      EmbeddedChunkWithFile::EndOfFile { stream, .. } => *stream,
-      EmbeddedChunkWithFile::BatchFailure { stream, .. } => *stream,
-    };
-
-    match stream {
-      ChunkStream::Regular => {
-        self
-          .regular_builder
-          .add_chunk(embedded_chunk, document_batch, ctx)
-          .await
-      }
-      ChunkStream::LargeFile => {
-        self
-          .large_file_builder
-          .add_chunk(embedded_chunk, document_batch, ctx)
-          .await
-      }
-    }
-  }
-
-  pub async fn flush_remaining(&mut self) -> Result<(u64, BTreeSet<String>), IndexerError> {
-    // Flush both builders
-    self.regular_builder.flush_remaining().await?;
-    self.large_file_builder.flush_remaining().await?;
-
-    // Combine results
-    let total_files =
-      self.regular_builder.total_files_built + self.large_file_builder.total_files_built;
-    let mut all_failed_files = self.regular_builder.failed_files.clone();
-    all_failed_files.extend(self.large_file_builder.failed_files.clone());
-
-    Ok((total_files, all_failed_files))
-  }
-}
-
 /// Build a document from accumulated file chunks using weighted average
 /// Returns both the document and the individual chunks for storage
 pub(crate) async fn build_document_from_accumulator(
@@ -320,10 +261,11 @@ pub(crate) async fn build_document_from_accumulator(
   // Compute weighted average embedding
   let mut aggregated_embedding = vec![0.0; embedding_dim];
 
-  for (i, embedded_chunk) in embedded_chunks.iter().enumerate() {
-    if matches!(embedded_chunk.chunk, PipelineChunk::EndOfFile { .. }) {
-      continue;
-    }
+  for (i, embedded_chunk) in embedded_chunks
+    .iter()
+    .filter(|ec| !matches!(ec.chunk, PipelineChunk::EndOfFile { .. }))
+    .enumerate()
+  {
     let weight = weights[i];
     for (j, &value) in embedded_chunk.embedding.iter().enumerate() {
       if j < embedding_dim {
@@ -478,7 +420,7 @@ pub(crate) struct DocumentBuilderParams {
   pub batch_size: usize,
 }
 
-/// Document builder task that uses DualStreamDocumentBuilder
+/// Document builder task that uses StreamDocumentBuilder
 pub(crate) async fn document_builder_task(
   params: DocumentBuilderParams,
 ) -> (usize, Option<(BTreeSet<String>, String)>) {
@@ -492,7 +434,7 @@ pub(crate) async fn document_builder_task(
     cancel_token,
     batch_size,
   } = params;
-  let mut builder = DualStreamDocumentBuilder::new(project_id, embedding_dim);
+  let mut builder = StreamDocumentBuilder::new(project_id, embedding_dim);
   let mut document_batch: Vec<CodeDocument> = Vec::with_capacity(100);
 
   let ctx = DocumentBuildContext {
@@ -513,14 +455,14 @@ pub(crate) async fn document_builder_task(
         match embedded_chunk {
           Some(embedded_chunk) => {
             let chunk_info = match &embedded_chunk {
-              EmbeddedChunkWithFile::Embedded { batch_id, file_path, stream, .. } => {
-                format!("Embedded chunk - batch: {}, file: {}, stream: {:?}", batch_id, file_path, stream)
+              EmbeddedChunkWithFile::Embedded { batch_id, file_path, .. } => {
+                format!("Embedded chunk - batch: {}, file: {}", batch_id, file_path)
               }
-              EmbeddedChunkWithFile::EndOfFile { batch_id, file_path, stream, .. } => {
-                format!("EOF - batch: {}, file: {}, stream: {:?}", batch_id, file_path, stream)
+              EmbeddedChunkWithFile::EndOfFile { batch_id, file_path, .. } => {
+                format!("EOF - batch: {}, file: {}", batch_id, file_path)
               }
-              EmbeddedChunkWithFile::BatchFailure { batch_id, stream, .. } => {
-                format!("Batch failure - batch: {}, stream: {:?}", batch_id, stream)
+              EmbeddedChunkWithFile::BatchFailure { batch_id, .. } => {
+                format!("Batch failure - batch: {}", batch_id)
               }
             };
             debug!("Document builder received: {}", chunk_info);
@@ -544,13 +486,14 @@ pub(crate) async fn document_builder_task(
     }
   }
 
-  // Flush any remaining documents
+  // Flush any remaining documents as a batch
   if !document_batch.is_empty() {
     info!(
-      "Final flush: sending {} remaining documents",
+      "Final flush: sending batch of {} documents",
       document_batch.len()
     );
-    for doc in document_batch {
+    // Send all documents at once to ensure they're batched together
+    for doc in document_batch.drain(..) {
       if doc_tx.send(doc).await.is_err() {
         error!("Failed to send final documents - receiver dropped");
         break;
@@ -559,25 +502,25 @@ pub(crate) async fn document_builder_task(
   }
 
   // Process any remaining pending chunks
-  match builder.flush_remaining().await {
-    Ok((total_files, failed_files)) => {
-      info!(
-        total_files = total_files,
-        files_stored = stats.get_files_stored(),
-        "Document builder completed"
-      );
+  if let Err(e) = builder.flush_remaining().await {
+    error!("Failed to flush remaining documents: {}", e);
+  }
 
-      if failed_files.is_empty() {
-        (total_files as usize, None)
-      } else {
-        let error_summary = format!("{} files failed", failed_files.len());
-        (total_files as usize, Some((failed_files, error_summary)))
-      }
-    }
-    Err(e) => {
-      error!("Failed to flush remaining documents: {}", e);
-      (0, Some((BTreeSet::new(), e.to_string())))
-    }
+  // Get results from builder
+  let total_files = builder.total_files_built;
+  let failed_files = builder.failed_files;
+
+  info!(
+    total_files = total_files,
+    files_stored = stats.get_files_stored(),
+    "Document builder completed"
+  );
+
+  if failed_files.is_empty() {
+    (total_files as usize, None)
+  } else {
+    let error_summary = format!("{} files failed", failed_files.len());
+    (total_files as usize, Some((failed_files, error_summary)))
   }
 }
 
