@@ -72,11 +72,11 @@ async fn async_main() {
 
   // Load configuration using config-rs
   let config = match breeze::Config::load(cli.config.clone()) {
-    Ok(cfg) => {
-      if let Some(path) = &cli.config {
-        info!("Loaded configuration with file: {}", path.display());
+    Ok((cfg, loaded_path)) => {
+      if let Some(path) = loaded_path {
+        info!("Loaded configuration from: {}", path.display());
       } else {
-        info!("Loaded configuration from defaults and environment");
+        info!("Loaded configuration from defaults and environment (no config file found)");
       }
       cfg
     }

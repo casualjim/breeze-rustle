@@ -282,18 +282,59 @@ impl Config {
     Ok(data_dir)
   }
 
+  /// Get all default config paths in order of precedence
+  pub fn default_config_paths() -> Vec<PathBuf> {
+    let mut paths = Vec::new();
+    
+    // 1. Current directory
+    paths.push(PathBuf::from(".breeze.toml"));
+    
+    // 2. Application Support directory (macOS)
+    #[cfg(target_os = "macos")]
+    if let Some(app_support) = dirs::config_dir() {
+      let breeze_dir = app_support.join("com.github.casualjim.breeze.server");
+      paths.push(breeze_dir.join("config.toml"));
+    }
+    
+    // 3. User config directory (~/.config/breeze/config.toml)
+    if let Some(config_dir) = dirs::home_dir() {
+      paths.push(config_dir.join(".config").join("breeze").join("config.toml"));
+    }
+    
+    // 4. System-wide config directories
+    paths.push(PathBuf::from("/etc/breeze/config.toml"));
+    paths.push(PathBuf::from("/usr/share/breeze/config.toml"));
+    
+    paths
+  }
+
   /// Load configuration using config-rs with layered sources
-  pub fn load(config_path: Option<PathBuf>) -> anyhow::Result<Self> {
+  /// Returns a tuple of (Config, Option<PathBuf>) where the PathBuf is the config file that was actually loaded
+  pub fn load(config_path: Option<PathBuf>) -> anyhow::Result<(Self, Option<PathBuf>)> {
     let mut builder = config::Config::builder();
+    let mut loaded_config_path = None;
 
     // 1. Start with defaults
     builder = builder.add_source(config::Config::try_from(&Self::default())?);
 
-    // 2. Add config file (uses provided path or default)
-    let config_file = config_path.unwrap_or_else(|| {
-      Self::default_config_path().unwrap_or_else(|_| PathBuf::from(".breeze.toml"))
-    });
-    builder = builder.add_source(config::File::from(config_file).required(false));
+    // 2. Add config file (uses provided path or searches default paths)
+    if let Some(path) = config_path {
+      // If explicit path provided, use only that
+      if path.exists() {
+        loaded_config_path = Some(path.clone());
+      }
+      builder = builder.add_source(config::File::from(path).required(false));
+    } else {
+      // Search through default config paths in order of precedence
+      for path in Self::default_config_paths() {
+        if path.exists() {
+          tracing::debug!("Found config file at: {}", path.display());
+          loaded_config_path = Some(path.clone());
+          builder = builder.add_source(config::File::from(path).required(false));
+          break;
+        }
+      }
+    }
 
     // 3. Add environment variables with BREEZE_ prefix
     builder = builder.add_source(
@@ -334,7 +375,7 @@ impl Config {
       }
     }
 
-    Ok(config)
+    Ok((config, loaded_config_path))
   }
 
   pub fn save_to_file<P: AsRef<std::path::Path>>(&self, path: P) -> anyhow::Result<()> {
@@ -432,21 +473,9 @@ tokens_per_minute = 1_000_000
 max_concurrent_requests = 10
 max_tokens_per_request = 64_000
 
-# runpodctl create pod \
-#  --gpuType 'NVIDIA GeForce RTX 3090' \
-#  --imageName vllm/vllm-openai:latest \
-#  --volumeSize 30 \
-#  --containerDiskSize 10 \
-#  --name qwen3-embed \
-#  --secureCloud \
-#  --args '--host 0.0.0.0 --port 8000 --model Qwen/Qwen3-Embedding-0.6B --enforce-eager --trust-remote-code --max-model-len 32768 --max-num-seqs 200 --max-num-batched-tokens 192000 --gpu-memory-utilization 0.95 --disable-log-stats --api-key sk-moFgaeiq8K76FXkCNx2ydwtnxWutYotT' \
-# --ports '8000/http' \
-# --ports '22/tcp' \
-# --volumePath /workspace \
-# --env "HF_HOME=/workspace/hf_home"
 [embeddings.qwen3]
 model = "Qwen/Qwen3-Embedding-0.6B"
-api_base = "https://wfqcjfjn5a7hiv-8000.proxy.runpod.net/v1"
+api_base = "https://your-runpod-id-8000.proxy.runpod.net/v1"
 context_length = 32768
 embedding_dim = 1024
 tokenizer = "hf:Qwen/Qwen3-Embedding-0.6B"
@@ -644,7 +673,7 @@ mod tests {
     let config = Config::default();
     config.save_to_file(&config_path).unwrap();
 
-    let loaded = Config::load(Some(config_path)).unwrap();
+    let (loaded, _) = Config::load(Some(config_path)).unwrap();
     assert_eq!(config.embeddings.provider, loaded.embeddings.provider);
   }
 
@@ -655,7 +684,7 @@ mod tests {
       .join("config_example.toml");
 
     if example_path.exists() {
-      let config = Config::load(Some(example_path)).expect("Failed to parse example config");
+      let (config, _) = Config::load(Some(example_path)).expect("Failed to parse example config");
 
       // Debug: print the providers map
       eprintln!(
@@ -734,7 +763,7 @@ mod tests {
 
     // Save and reload
     config.save_to_file(&config_path).unwrap();
-    let loaded = Config::load(Some(config_path)).unwrap();
+    let (loaded, _) = Config::load(Some(config_path)).unwrap();
 
     // Verify all values preserved
     assert_eq!(loaded.db_dir, PathBuf::from("./test.db"));
@@ -775,7 +804,7 @@ model = "voyage-code-3"
     std::fs::write(&config_path, config_content).unwrap();
 
     // Load and verify expansion
-    let loaded = Config::load(Some(config_path)).unwrap();
+    let (loaded, _) = Config::load(Some(config_path)).unwrap();
     println!("Loaded db_dir: {:?}", loaded.db_dir);
     println!("Expected: /test/path/db");
     assert_eq!(loaded.db_dir, PathBuf::from("/test/path/db"));
@@ -808,10 +837,55 @@ model = "voyage-code-3"
     std::fs::write(&config_path, config_content).unwrap();
 
     // Load and verify expansion
-    let loaded = Config::load(Some(config_path)).unwrap();
+    let (loaded, _) = Config::load(Some(config_path)).unwrap();
 
     // Should expand to user's home directory
     let home = dirs::home_dir().expect("Could not get home directory");
     assert_eq!(loaded.db_dir, home.join("breeze/db"));
+  }
+
+  #[test]
+  fn test_default_config_paths_search() {
+    // Test that config files are found in the default paths
+    let dir = tempdir().unwrap();
+    let config_path = dir.path().join(".breeze.toml");
+    
+    // Create a config file in the temp directory
+    let config_content = r#"
+db_dir = "./test.db"
+
+[embeddings]
+provider = "voyage"
+"#;
+    std::fs::write(&config_path, config_content).unwrap();
+    
+    // Change working directory to the temp dir
+    let original_dir = std::env::current_dir().unwrap();
+    std::env::set_current_dir(&dir).unwrap();
+    
+    // Load config without specifying a path - should find .breeze.toml
+    let result = Config::load(None);
+    
+    // Restore original directory
+    std::env::set_current_dir(original_dir).unwrap();
+    
+    // Verify the config was loaded
+    let (loaded, loaded_path) = result.unwrap();
+    assert_eq!(loaded.db_dir, PathBuf::from("./test.db"));
+    assert_eq!(loaded.embeddings.provider, "voyage");
+    assert_eq!(loaded_path.unwrap().file_name().unwrap(), ".breeze.toml");
+  }
+
+  #[test]
+  fn test_default_config_paths_order() {
+    // Test that paths are in the correct order
+    let paths = Config::default_config_paths();
+    
+    // First should be current directory
+    assert_eq!(paths[0], PathBuf::from(".breeze.toml"));
+    
+    // System paths should be at the end
+    assert_eq!(paths[paths.len() - 2], PathBuf::from("/etc/breeze/config.toml"));
+    assert_eq!(paths[paths.len() - 1], PathBuf::from("/usr/share/breeze/config.toml"));
   }
 }
