@@ -24,6 +24,7 @@ accelerate = [
 metal = ["candle-core/metal", "candle-nn/metal", "ort/coreml"]
 testing = []
 
+
 [target.'cfg(not(target_os = "macos"))'.dependencies]
 ort = { version = "=2.0.0-rc.10", features = ["load-dynamic", "half"], optional = true }
 [target.'cfg(target_os = "macos")'.dependencies]

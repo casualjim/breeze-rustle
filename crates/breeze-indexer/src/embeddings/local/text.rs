@@ -364,9 +364,9 @@ fn init_models_map() -> HashMap<ONNXModel, ModelInfo<ONNXModel>> {
     },
     ModelInfo {
       model: ONNXModel::Qwen3Embedding06B,
-      dim: 768,
+      dim: 1024,
       description: String::from("Qwen3 Embedding 0.6B"),
-      hf_model_id: String::from("onnx-community/Qwen3-Embedding-0.6B-ONNX"),
+      hf_model_id: String::from("Qwen/Qwen3-Embedding-0.6B"),
       model_code: String::from("onnx-community/Qwen3-Embedding-0.6B-ONNX"),
       model_file: String::from("onnx/model.onnx"),
     },

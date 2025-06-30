@@ -89,9 +89,14 @@ pub(crate) async fn search_chunks(
   // Add language filter if provided
   if let Some(languages) = &options.languages {
     if !languages.is_empty() {
+      // Create case-insensitive language conditions to handle hyperpolyglot's casing
+      // (e.g., "Rust" vs "rust", "C++" vs "cpp")
       let lang_conditions: Vec<String> = languages
         .iter()
-        .map(|lang| format!("language = '{}'", lang))
+        .map(|lang| {
+          // Use ILIKE for case-insensitive matching
+          format!("lower(language) = lower('{}')", lang)
+        })
         .collect();
       let lang_filter = lang_conditions.join(" OR ");
       chunk_query = chunk_query.only_if(lang_filter);

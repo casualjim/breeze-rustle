@@ -34,9 +34,14 @@ pub(crate) async fn search_documents(
   // Add language filter if provided
   if let Some(languages) = &options.languages {
     if !languages.is_empty() {
+      // Create case-insensitive language conditions to handle hyperpolyglot's casing
+      // (e.g., "Rust" vs "rust", "C++" vs "cpp")
       let lang_conditions: Vec<String> = languages
         .iter()
-        .map(|lang| format!("primary_language = '{}'", lang))
+        .map(|lang| {
+          // Use ILIKE for case-insensitive matching
+          format!("lower(primary_language) = lower('{}')", lang)
+        })
         .collect();
       let lang_filter = lang_conditions.join(" OR ");
       doc_query = doc_query.only_if(lang_filter);
