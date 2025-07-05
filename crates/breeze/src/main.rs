@@ -3,6 +3,8 @@ use breeze::app::SearchRequest;
 use breeze::cli::DebugCommands;
 use breeze::cli::{Cli, Commands, ProjectCommands, SearchGranularity, TaskCommands};
 use std::path::PathBuf;
+use syntastica::language_set::SupportedLanguage;
+use syntastica::{highlight, language_set};
 use tokio::signal;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info};
@@ -309,9 +311,38 @@ async fn async_main() {
                         chunk.relevance_score
                       );
 
-                      // Show full chunk content
-                      for line in chunk.content.lines() {
-                        println!("      {}", line);
+                      // Determine language from file extension
+                      let theme = syntastica_themes::catppuccin::mocha();
+                      let mut renderer = syntastica::renderer::TerminalRenderer::default();
+                      let mut language_set = syntastica_parsers::LanguageSetImpl::default();
+                      language_set.preload_all().unwrap();
+
+                      let language = syntastica_parsers::Lang::for_name(
+                        &chunk.language.to_lowercase(),
+                        &mut language_set,
+                      )
+                      .ok();
+
+                      if let Some(language) = language {
+                        // Preload the language to ensure it's ready for highlighting
+                        // language_set.preload(&[language]).unwrap();
+
+                        let highlighted = highlight(
+                          &chunk.content,
+                          language,
+                          &mut language_set,
+                          &mut renderer,
+                          theme,
+                        )
+                        .unwrap();
+
+                        // // Highlight content using syntastica
+                        // Print highlighted lines with indentation
+                        for line in highlighted.lines() {
+                          println!("      {}", line);
+                        }
+                      } else {
+                        println!("{}", &chunk.content[..30.min(chunk.content.len())]);
                       }
                     }
                   }

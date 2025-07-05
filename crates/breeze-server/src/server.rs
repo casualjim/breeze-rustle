@@ -105,11 +105,12 @@ pub async fn run(
 
   let indexer_arc = Arc::new(indexer);
 
-  // Start file watchers for all existing projects
-  if let Err(e) = indexer_arc.start_all_project_watchers().await {
-    error!("Failed to start file watchers: {}", e);
-    // Don't fail server startup if watchers fail
-  }
+  // Disabled automatic file watching to prevent excessive file handle usage
+  // File watching can be enabled per-project as needed
+  // if let Err(e) = indexer_arc.start_all_project_watchers().await {
+  //   error!("Failed to start file watchers: {}", e);
+  //   // Don't fail server startup if watchers fail
+  // }
 
   // Spawn the task worker
   let worker_shutdown = shutdown_token.clone().unwrap_or_default();

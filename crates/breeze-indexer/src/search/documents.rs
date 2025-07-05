@@ -75,6 +75,12 @@ pub(crate) async fn search_documents(
         relevance_score,
         chunk_count: doc.chunk_count,
         chunks: Vec::new(),
+        // Document metadata
+        file_size: doc.file_size,
+        last_modified: doc.last_modified,
+        indexed_at: doc.indexed_at,
+        languages: doc.languages,
+        primary_language: doc.primary_language,
       });
     }
   }
@@ -132,7 +138,16 @@ async fn fetch_chunks_for_document(
         content: chunk.content,
         start_line: chunk.start_line,
         end_line: chunk.end_line,
+        start_byte: chunk.start_byte,
+        end_byte: chunk.end_byte,
         relevance_score,
+        node_type: chunk.node_type,
+        node_name: chunk.node_name,
+        language: chunk.language,
+        parent_context: chunk.parent_context,
+        scope_path: chunk.scope_path,
+        definitions: chunk.definitions,
+        references: chunk.references,
       });
     }
   }

@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use anyhow::{Result, anyhow};
@@ -7,7 +8,7 @@ use lancedb::Table;
 use lancedb::query::{ExecutableQuery, QueryBase};
 use tokio::sync::RwLock;
 
-use crate::models::CodeChunk;
+use crate::models::{CodeChunk, CodeDocument};
 use crate::search::build_hybrid_query;
 use crate::{ChunkResult, SearchOptions, SearchResult};
 
@@ -73,8 +74,41 @@ fn apply_semantic_filters(
   query
 }
 
+/// Fetch document metadata for a set of file IDs
+async fn fetch_document_metadata(
+  documents_table: &Table,
+  file_ids: &[uuid::Uuid],
+) -> Result<HashMap<uuid::Uuid, CodeDocument>> {
+  if file_ids.is_empty() {
+    return Ok(HashMap::new());
+  }
+
+  // Create filter for file IDs
+  let id_conditions: Vec<String> = file_ids.iter().map(|id| format!("id = '{}'", id)).collect();
+  let filter = id_conditions.join(" OR ");
+
+  let query = documents_table
+    .query()
+    .only_if(format!("({})", filter))
+    .limit(file_ids.len());
+
+  let mut results = query.execute().await?;
+  let mut documents = HashMap::new();
+
+  while let Some(batch) = results.try_next().await? {
+    for row in 0..batch.num_rows() {
+      let doc = CodeDocument::from_record_batch(&batch, row)
+        .map_err(|e| anyhow!("Failed to convert document row {}: {}", row, e))?;
+      documents.insert(doc.id, doc);
+    }
+  }
+
+  Ok(documents)
+}
+
 /// Search chunks directly and group by file
 pub(crate) async fn search_chunks(
+  documents_table: Arc<RwLock<Table>>,
   chunks_table: Arc<RwLock<Table>>,
   query: &str,
   query_vector: &[f32],
@@ -118,7 +152,11 @@ pub(crate) async fn search_chunks(
   let ranked_files = rank_files_by_chunks(&file_chunks, options.chunks_per_file);
 
   // Build search results
-  build_chunk_search_results(file_chunks, ranked_files, options)
+  let file_ids: Vec<uuid::Uuid> = ranked_files.iter().map(|(id, _, _)| *id).collect();
+  let documents_table = documents_table.read().await;
+  let document_metadata = fetch_document_metadata(&documents_table, &file_ids).await?;
+
+  build_chunk_search_results(file_chunks, ranked_files, &document_metadata, options)
 }
 
 /// Collect all chunks from query results
@@ -193,8 +231,9 @@ fn rank_files_by_chunks(
 
 /// Build search results from grouped and ranked chunks
 fn build_chunk_search_results(
-  mut file_chunks: std::collections::HashMap<uuid::Uuid, Vec<(CodeChunk, f32)>>,
+  mut file_chunks: HashMap<uuid::Uuid, Vec<(CodeChunk, f32)>>,
   ranked_files: Vec<(uuid::Uuid, f32, String)>,
+  document_metadata: &HashMap<uuid::Uuid, CodeDocument>,
   options: &SearchOptions,
 ) -> Result<Vec<SearchResult>> {
   let mut search_results = Vec::new();
@@ -210,9 +249,21 @@ fn build_chunk_search_results(
         content: chunk.content,
         start_line: chunk.start_line,
         end_line: chunk.end_line,
+        start_byte: chunk.start_byte,
+        end_byte: chunk.end_byte,
         relevance_score: score,
+        node_type: chunk.node_type,
+        node_name: chunk.node_name,
+        language: chunk.language,
+        parent_context: chunk.parent_context,
+        scope_path: chunk.scope_path,
+        definitions: chunk.definitions,
+        references: chunk.references,
       })
       .collect();
+
+    // Get document metadata for this file
+    let doc_metadata = document_metadata.get(&file_id);
 
     search_results.push(SearchResult {
       id: file_id.to_string(),
@@ -220,6 +271,18 @@ fn build_chunk_search_results(
       relevance_score: aggregate_score,
       chunk_count: chunk_results.len() as u32,
       chunks: chunk_results,
+      // Document metadata - use defaults if not found
+      file_size: doc_metadata.map(|d| d.file_size).unwrap_or(0),
+      last_modified: doc_metadata
+        .map(|d| d.last_modified)
+        .unwrap_or_else(|| chrono::Utc::now().naive_utc()),
+      indexed_at: doc_metadata
+        .map(|d| d.indexed_at)
+        .unwrap_or_else(|| chrono::Utc::now().naive_utc()),
+      languages: doc_metadata
+        .map(|d| d.languages.clone())
+        .unwrap_or_default(),
+      primary_language: doc_metadata.and_then(|d| d.primary_language.clone()),
     });
   }
 
