@@ -3,15 +3,14 @@
 <plist version="1.0">
 <dict>
     <key>Label</key>
-    <string>com.breeze-mcp.server</string>
+    <string>com.github.casualjim.breeze.server</string>
 
     <key>ProgramArguments</key>
     <array>
-        <string>/Users/ivan/.cargo/bin/breeze</string>
-        <string>mcp</string>
-        <string>http</string>
-        <string>--port</string>
-        <string>9483</string>
+        <string>{{HOME}}/.cargo/bin/breeze</string>
+        <string>serve</string>
+        <string>--config</string>
+        <string>{{CONFIG_FILE}}</string>
     </array>
 
     <key>WorkingDirectory</key>
@@ -20,7 +19,7 @@
     <key>EnvironmentVariables</key>
     <dict>
         <key>PATH</key>
-        <string>/Users/ivan/.cargo/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin</string>
+        <string>{{HOME}}/.cargo/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin</string>
         <key>RUST_LOG</key>
         <string>error</string>
         <key>HF_HUB_DISABLE_PROGRESS_BARS</key>

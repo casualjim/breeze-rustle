@@ -244,11 +244,12 @@ impl Indexer {
       )
       .await?;
 
-    // Start file watcher for the project
-    if let Err(e) = self.start_file_watcher(project_id).await {
-      error!(project_id = %project_id, error = %e, "Failed to start file watcher");
-      // Don't fail the indexing task if watcher fails to start
-    }
+    // Disabled automatic file watching to prevent excessive file handle usage
+    // File watching can be enabled per-project as needed
+    // if let Err(e) = self.start_file_watcher(project_id).await {
+    //   error!(project_id = %project_id, error = %e, "Failed to start file watcher");
+    //   // Don't fail the indexing task if watcher fails to start
+    // }
 
     Ok(task_id)
   }

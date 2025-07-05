@@ -11,6 +11,7 @@
 mod bert;
 mod model_info;
 mod ort_bert;
+mod ort_qwen3;
 mod pooling;
 mod text;
 mod utils;
@@ -21,7 +22,7 @@ use candle_core::{Device, Tensor};
 use serde::Deserialize;
 use std::sync::Arc;
 
-use crate::embeddings::local::{bert::BertEmbed, ort_bert::OrtBertEmbedder, text::ONNXModel};
+use crate::embeddings::local::{bert::BertEmbed, ort_bert::OrtBertEmbedder, ort_qwen3::OrtQwen3Embedder, text::ONNXModel};
 
 use super::{
   EmbeddingProvider,
@@ -99,7 +100,7 @@ impl EmbeddingResult {
 
 /// Local embedding provider using embed_anything
 pub struct LocalEmbeddingProvider {
-  embedder: Arc<OrtBertEmbedder>,
+  embedder: Arc<dyn BertEmbed + Send + Sync>,
   embedding_dim: usize,
   batch_size: usize,
   #[allow(dead_code)]
@@ -113,12 +114,24 @@ impl LocalEmbeddingProvider {
       super::EmbeddingError::OperationNotSupported(format!("Failed to initialize ORT: {}", e))
     })?;
 
-    // For now, we use BGESmallENV15 as the default
-    // In the future, we can map model_name to different ONNX models
-    let embedder = OrtBertEmbedder::new(Some(ONNXModel::BGESmallENV15), None, None, None, None)
-      .map_err(|e| {
-        super::EmbeddingError::ModelLoadFailed(format!("Failed to create embedder: {}", e))
-      })?;
+    // Map model_name to different ONNX models
+    let embedder: Box<dyn BertEmbed + Send + Sync> = if model_name.to_lowercase().contains("qwen3") {
+      Box::new(OrtQwen3Embedder::new(None, None).map_err(|e| {
+        super::EmbeddingError::ModelLoadFailed(format!("Failed to create Qwen3 embedder: {}", e))
+      })?)
+    } else {
+      // Try to map model name to ONNXModel enum
+      let onnx_model = match model_name.as_str() {
+        "bge-small-en-v1.5" => ONNXModel::BGESmallENV15,
+        "all-minilm-l6-v2" => ONNXModel::AllMiniLML6V2,
+        "all-minilm-l12-v2" => ONNXModel::AllMiniLML12V2,
+        _ => ONNXModel::BGESmallENV15, // Default
+      };
+      Box::new(OrtBertEmbedder::new(Some(onnx_model), None, None, None, None)
+        .map_err(|e| {
+          super::EmbeddingError::ModelLoadFailed(format!("Failed to create BERT embedder: {}", e))
+        })?)
+    };
 
     // Get embedding dimension by embedding a test string
     let test_embeddings = embedder.embed(&["test"], None, None).map_err(|e| {
@@ -135,7 +148,7 @@ impl LocalEmbeddingProvider {
     };
 
     Ok(Self {
-      embedder: Arc::new(embedder),
+      embedder: Arc::from(embedder),
       embedding_dim,
       batch_size: 256, // Large batch size for CPU-based local models
       model_name,

@@ -24,6 +24,7 @@ anyhow.workspace = true
 
 # Embedding providers
 breeze-chunkers = { path = "../breeze-chunkers" }
+breeze-grammars = { path = "../breeze-grammars" }
 breeze-indexer = { path = "../breeze-indexer" }
 breeze-server = { path = "../breeze-server" }
 bytes.workspace = true
@@ -49,6 +50,9 @@ rustls = { version = "0.23.28", features = ["aws-lc-rs", "brotli", "zlib"] }
 serde.workspace = true
 serde_json = "1.0"
 shellexpand = "3.1"
+syntastica = "0.6.1"
+syntastica-parsers = { version = "0.6.1", features = ["most", "some"] }
+syntastica-themes = "0.6.1"
 
 tokio = { workspace = true }
 tokio-util = { workspace = true }

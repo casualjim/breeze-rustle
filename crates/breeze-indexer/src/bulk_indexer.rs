@@ -1339,7 +1339,7 @@ async fn process_embedding_batch(
 }
 
 async fn sink_task(
-  doc_rx: mpsc::Receiver<CodeDocument>,
+  mut doc_rx: mpsc::Receiver<CodeDocument>,
   table: Arc<RwLock<Table>>,
   embedding_dim: usize,
   last_optimize_version: Arc<RwLock<u64>>,
@@ -1352,7 +1352,14 @@ async fn sink_task(
 
   let sink = LanceDbSink::new(table.clone(), last_optimize_version, optimize_threshold);
 
-  let doc_stream = tokio_stream::wrappers::ReceiverStream::new(doc_rx);
+  // Create a stream that handles channel closure gracefully
+  let doc_stream = async_stream::stream! {
+    while let Some(doc) = doc_rx.recv().await {
+      yield doc;
+    }
+    debug!("Document channel closed, ending stream");
+  };
+
   let record_batches = converter.convert(Box::pin(doc_stream));
 
   let mut sink_stream = sink.sink(record_batches);
@@ -1377,7 +1384,7 @@ async fn sink_task(
 }
 
 async fn chunk_sink_task(
-  chunk_rx: mpsc::Receiver<crate::models::CodeChunk>,
+  mut chunk_rx: mpsc::Receiver<crate::models::CodeChunk>,
   table: Arc<RwLock<Table>>,
   embedding_dim: usize,
   last_optimize_version: Arc<RwLock<u64>>,
@@ -1393,7 +1400,14 @@ async fn chunk_sink_task(
     optimize_threshold,
   );
 
-  let chunk_stream = tokio_stream::wrappers::ReceiverStream::new(chunk_rx);
+  // Create a stream that handles channel closure gracefully
+  let chunk_stream = async_stream::stream! {
+    while let Some(chunk) = chunk_rx.recv().await {
+      yield chunk;
+    }
+    debug!("Chunk channel closed, ending stream");
+  };
+
   let record_batches = converter.convert(Box::pin(chunk_stream));
 
   let mut sink_stream = sink.sink(record_batches);

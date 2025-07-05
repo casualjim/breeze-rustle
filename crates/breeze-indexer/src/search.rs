@@ -64,7 +64,18 @@ pub struct ChunkResult {
   pub content: String,
   pub start_line: usize,
   pub end_line: usize,
+  pub start_byte: usize,
+  pub end_byte: usize,
   pub relevance_score: f32,
+
+  // Semantic metadata from CodeChunk
+  pub node_type: String,
+  pub node_name: Option<String>,
+  pub language: String,
+  pub parent_context: Option<String>,
+  pub scope_path: Vec<String>,
+  pub definitions: Vec<String>,
+  pub references: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -74,6 +85,13 @@ pub struct SearchResult {
   pub relevance_score: f32,
   pub chunk_count: u32,
   pub chunks: Vec<ChunkResult>, // Top chunks from this file
+
+  // Document-level metadata from CodeDocument
+  pub file_size: u64,
+  pub last_modified: chrono::NaiveDateTime,
+  pub indexed_at: chrono::NaiveDateTime,
+  pub languages: Vec<String>,
+  pub primary_language: Option<String>,
 }
 
 /// Build a hybrid search query with common filters
@@ -142,6 +160,7 @@ pub async fn hybrid_search(
     }
     SearchGranularity::Chunk => {
       search_chunks(
+        documents_table,
         chunks_table,
         query,
         query_vector,

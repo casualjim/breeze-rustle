@@ -17,7 +17,6 @@ pub struct CodeDocument {
   pub file_size: u64,
   pub last_modified: chrono::NaiveDateTime,
   pub indexed_at: chrono::NaiveDateTime,
-  // New fields for advanced search
   pub languages: Vec<String>,           // All languages found in file
   pub primary_language: Option<String>, // Most prevalent language by token count
   pub chunk_count: u32,                 // Number of chunks in this file

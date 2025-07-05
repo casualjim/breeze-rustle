@@ -83,7 +83,18 @@ pub struct ChunkResult {
   pub content: String,
   pub start_line: usize,
   pub end_line: usize,
+  pub start_byte: usize,
+  pub end_byte: usize,
   pub relevance_score: f32,
+
+  // Semantic metadata from CodeChunk
+  pub node_type: String,
+  pub node_name: Option<String>,
+  pub language: String,
+  pub parent_context: Option<String>,
+  pub scope_path: Vec<String>,
+  pub definitions: Vec<String>,
+  pub references: Vec<String>,
 }
 
 impl From<breeze_indexer::ChunkResult> for ChunkResult {
@@ -92,7 +103,16 @@ impl From<breeze_indexer::ChunkResult> for ChunkResult {
       content: chunk.content,
       start_line: chunk.start_line,
       end_line: chunk.end_line,
+      start_byte: chunk.start_byte,
+      end_byte: chunk.end_byte,
       relevance_score: chunk.relevance_score,
+      node_type: chunk.node_type,
+      node_name: chunk.node_name,
+      language: chunk.language,
+      parent_context: chunk.parent_context,
+      scope_path: chunk.scope_path,
+      definitions: chunk.definitions,
+      references: chunk.references,
     }
   }
 }
@@ -104,6 +124,13 @@ pub struct SearchResult {
   pub relevance_score: f32,
   pub chunk_count: u32,
   pub chunks: Vec<ChunkResult>,
+
+  // Document-level metadata from CodeDocument
+  pub file_size: u64,
+  pub last_modified: chrono::NaiveDateTime,
+  pub indexed_at: chrono::NaiveDateTime,
+  pub languages: Vec<String>,
+  pub primary_language: Option<String>,
 }
 
 impl From<breeze_indexer::SearchResult> for SearchResult {
@@ -114,6 +141,11 @@ impl From<breeze_indexer::SearchResult> for SearchResult {
       relevance_score: result.relevance_score,
       chunk_count: result.chunk_count,
       chunks: result.chunks.into_iter().map(ChunkResult::from).collect(),
+      file_size: result.file_size,
+      last_modified: result.last_modified,
+      indexed_at: result.indexed_at,
+      languages: result.languages,
+      primary_language: result.primary_language,
     }
   }
 }
