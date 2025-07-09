@@ -29,6 +29,10 @@ pub struct Project {
   pub deletion_requested_at: Option<chrono::NaiveDateTime>,
   pub created_at: chrono::NaiveDateTime,
   pub updated_at: chrono::NaiveDateTime,
+  pub rescan_enabled: bool,
+  pub rescan_interval_minutes: Option<u32>,
+  pub last_rescan_at: Option<chrono::NaiveDateTime>,
+  pub next_rescan_at: Option<chrono::NaiveDateTime>,
 }
 
 impl Project {
@@ -52,6 +56,10 @@ impl Project {
       deletion_requested_at: None,
       created_at: now,
       updated_at: now,
+      rescan_enabled: true,
+      rescan_interval_minutes: Some(60),
+      last_rescan_at: None,
+      next_rescan_at: None,
     })
   }
 
@@ -79,6 +87,18 @@ impl Project {
         "updated_at",
         DataType::Timestamp(TimeUnit::Microsecond, None),
         false,
+      ),
+      Field::new("rescan_enabled", DataType::Boolean, false),
+      Field::new("rescan_interval_minutes", DataType::UInt32, true),
+      Field::new(
+        "last_rescan_at",
+        DataType::Timestamp(TimeUnit::Microsecond, None),
+        true,
+      ),
+      Field::new(
+        "next_rescan_at",
+        DataType::Timestamp(TimeUnit::Microsecond, None),
+        true,
       ),
     ];
 
@@ -181,6 +201,63 @@ impl Project {
         message: "Missing or invalid id column".to_string(),
       })?
       .value(row);
+
+    let rescan_enabled = batch
+      .column_by_name("rescan_enabled")
+      .and_then(|col| col.as_any().downcast_ref::<BooleanArray>())
+      .ok_or_else(|| lancedb::Error::Runtime {
+        message: "Missing or invalid rescan_enabled column".to_string(),
+      })?
+      .value(row);
+
+    let rescan_interval_minutes_array = batch
+      .column_by_name("rescan_interval_minutes")
+      .and_then(|col| col.as_any().downcast_ref::<UInt32Array>())
+      .ok_or_else(|| lancedb::Error::Runtime {
+        message: "Missing or invalid rescan_interval_minutes column".to_string(),
+      })?;
+
+    let rescan_interval_minutes = if rescan_interval_minutes_array.is_null(row) {
+      None
+    } else {
+      Some(rescan_interval_minutes_array.value(row))
+    };
+
+    let last_rescan_at_array = batch
+      .column_by_name("last_rescan_at")
+      .and_then(|col| {
+        col
+          .as_any()
+          .downcast_ref::<arrow::array::TimestampMicrosecondArray>()
+      })
+      .ok_or_else(|| lancedb::Error::Runtime {
+        message: "Missing or invalid last_rescan_at column".to_string(),
+      })?;
+
+    let last_rescan_at = if last_rescan_at_array.is_null(row) {
+      None
+    } else {
+      chrono::DateTime::from_timestamp_micros(last_rescan_at_array.value(row))
+        .map(|dt| dt.naive_utc())
+    };
+
+    let next_rescan_at_array = batch
+      .column_by_name("next_rescan_at")
+      .and_then(|col| {
+        col
+          .as_any()
+          .downcast_ref::<arrow::array::TimestampMicrosecondArray>()
+      })
+      .ok_or_else(|| lancedb::Error::Runtime {
+        message: "Missing or invalid next_rescan_at column".to_string(),
+      })?;
+
+    let next_rescan_at = if next_rescan_at_array.is_null(row) {
+      None
+    } else {
+      chrono::DateTime::from_timestamp_micros(next_rescan_at_array.value(row))
+        .map(|dt| dt.naive_utc())
+    };
 
     let id = Uuid::parse_str(id_str).map_err(|e| lancedb::Error::Runtime {
       message: format!("Invalid UUID string: {}", e),
@@ -286,6 +363,10 @@ impl Project {
       updated_at: chrono::DateTime::from_timestamp_micros(updated_at)
         .unwrap_or_default()
         .naive_utc(),
+      rescan_enabled,
+      rescan_interval_minutes,
+      last_rescan_at,
+      next_rescan_at,
     })
   }
 }
@@ -319,6 +400,28 @@ impl lancedb::arrow::IntoArrow for Project {
     let created_at_array = arrow::array::TimestampMicrosecondArray::from(vec![created_at_us]);
     let updated_at_array = arrow::array::TimestampMicrosecondArray::from(vec![updated_at_us]);
 
+    // Rescan fields
+    let rescan_enabled_array = BooleanArray::from(vec![self.rescan_enabled]);
+
+    let rescan_interval_minutes_array = match self.rescan_interval_minutes {
+      Some(v) => UInt32Array::from(vec![Some(v)]),
+      None => UInt32Array::from(vec![None]),
+    };
+
+    let last_rescan_at_array = if let Some(dt) = self.last_rescan_at {
+      let ts = dt.and_utc().timestamp_micros();
+      arrow::array::TimestampMicrosecondArray::from(vec![Some(ts)])
+    } else {
+      arrow::array::TimestampMicrosecondArray::from(vec![None])
+    };
+
+    let next_rescan_at_array = if let Some(dt) = self.next_rescan_at {
+      let ts = dt.and_utc().timestamp_micros();
+      arrow::array::TimestampMicrosecondArray::from(vec![Some(ts)])
+    } else {
+      arrow::array::TimestampMicrosecondArray::from(vec![None])
+    };
+
     // Create the record batch
     let batch = RecordBatch::try_new(
       schema.clone(),
@@ -331,6 +434,10 @@ impl lancedb::arrow::IntoArrow for Project {
         Arc::new(deletion_requested_at_array),
         Arc::new(created_at_array),
         Arc::new(updated_at_array),
+        Arc::new(rescan_enabled_array),
+        Arc::new(rescan_interval_minutes_array),
+        Arc::new(last_rescan_at_array),
+        Arc::new(next_rescan_at_array),
       ],
     )
     .map_err(|e| lancedb::Error::Arrow { source: e })?;

@@ -190,11 +190,18 @@ impl TaskManager {
     // On startup, reset any "running" tasks to "pending" (in case of crash)
     self.reset_stuck_tasks().await?;
 
+    let mut rescan_interval = tokio::time::interval(Duration::from_secs(60));
+
     loop {
       tokio::select! {
         _ = shutdown_token.cancelled() => {
           info!("Task worker shutting down");
           break;
+        }
+        _ = rescan_interval.tick() => {
+            if let Err(e) = self.check_and_submit_rescans().await {
+                error!("Error checking for rescans: {}", e);
+            }
         }
         _ = tokio::time::sleep(Duration::from_secs(1)) => {
           // Check for pending tasks
@@ -699,6 +706,90 @@ impl TaskManager {
         Some(cancel_token.clone()),
       )
       .await
+  }
+
+  /// Check for projects that need periodic rescanning and submit tasks for them
+  async fn check_and_submit_rescans(&self) -> Result<(), IndexerError> {
+    let project_table = self.project_table.read().await;
+    let now = chrono::Utc::now().naive_utc();
+
+    // Query for active projects with rescan enabled and next_rescan_at in the past
+    let filter = format!(
+      "status = 'Active' AND rescan_enabled = true AND next_rescan_at <= timestamp '{}'",
+      now
+        .and_utc()
+        .to_rfc3339_opts(chrono::SecondsFormat::Micros, true)
+    );
+
+    let mut stream = project_table.query().only_if(&filter).execute().await?;
+
+    while let Some(batch) = stream.try_next().await? {
+      for i in 0..batch.num_rows() {
+        let project = Project::from_record_batch(&batch, i)?;
+        let project_id = project.id;
+        let project_path = project.directory.clone();
+
+        info!(
+          project_id = %project_id,
+          "Submitting periodic rescan task for project"
+        );
+
+        // Submit a full index task
+        match self
+          .submit_task(
+            project_id,
+            Path::new(&project_path),
+            crate::models::TaskType::FullIndex,
+          )
+          .await
+        {
+          Ok(_) => {
+            // Update the project's rescan timestamps
+            let last_rescan_at = chrono::Utc::now().naive_utc();
+            let next_rescan_at = if let Some(interval) = project.rescan_interval_minutes {
+              Some(last_rescan_at + chrono::Duration::minutes(i64::from(interval)))
+            } else {
+              None
+            };
+
+            let mut update_query = self
+              .project_table
+              .write()
+              .await
+              .update()
+              .only_if(format!("id = '{}'", project_id).as_str())
+              .column(
+                "last_rescan_at",
+                format!("{}", last_rescan_at.and_utc().timestamp_micros()),
+              );
+
+            if let Some(next) = next_rescan_at {
+              update_query = update_query.column(
+                "next_rescan_at",
+                format!("{}", next.and_utc().timestamp_micros()),
+              );
+            }
+
+            if let Err(e) = update_query.execute().await {
+              error!(
+                project_id = %project_id,
+                error = %e,
+                "Failed to update project rescan timestamps"
+              );
+            }
+          }
+          Err(e) => {
+            error!(
+              project_id = %project_id,
+              error = %e,
+              "Failed to submit rescan task"
+            );
+          }
+        }
+      }
+    }
+
+    Ok(())
   }
 }
 
