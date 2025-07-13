@@ -243,25 +243,26 @@ impl BertEmbed for OrtQwen3Embedder {
 
 #[cfg(test)]
 mod tests {
-  use super::*;    #[test]
-    fn test_ort_qwen3_embed() {
-        // Skip test in CI due to incomplete ONNX model files and disk space constraints
-        if std::env::var("CI").is_ok() {
-            println!("Skipping Qwen3 test in CI environment due to incomplete ONNX model files");
-            return;
-        }
+  use super::*;
+  #[test]
+  fn test_ort_qwen3_embed() {
+    // Skip test in CI due to incomplete ONNX model files and disk space constraints
+    if std::env::var("CI").is_ok() {
+      println!("Skipping Qwen3 test in CI environment due to incomplete ONNX model files");
+      return;
+    }
 
-        println!("Creating Qwen3 embedder...");
-        let embedder = match OrtQwen3Embedder::new(None, None) {
-            Ok(e) => {
-                println!("Embedder created successfully");
-                e
-            }
-            Err(e) => {
-                eprintln!("Failed to create embedder: {}", e);
-                panic!("Failed to create embedder: {}", e);
-            }
-        };
+    println!("Creating Qwen3 embedder...");
+    let embedder = match OrtQwen3Embedder::new(None, None) {
+      Ok(e) => {
+        println!("Embedder created successfully");
+        e
+      }
+      Err(e) => {
+        eprintln!("Failed to create embedder: {}", e);
+        panic!("Failed to create embedder: {}", e);
+      }
+    };
 
     println!("Running embed...");
     let texts = vec![
