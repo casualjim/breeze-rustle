@@ -347,7 +347,7 @@ impl Indexer {
       return Ok(());
     }
 
-    // self.start_all_project_watchers().await?;
+    self.start_all_project_watchers().await?;
 
     // Start worker task
     let worker_shutdown = self.shutdown_token.clone();
@@ -372,7 +372,7 @@ impl Indexer {
 
   /// Stop the indexer
   pub fn stop(&self) {
-    // self.stop_all_watchers();
+    self.stop_all_watchers();
     self.shutdown_token.cancel();
   }
 } // This closing brace belongs to the `impl Indexer` block

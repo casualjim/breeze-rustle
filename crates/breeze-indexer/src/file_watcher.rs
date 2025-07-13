@@ -46,12 +46,12 @@ impl ProjectWatcher {
     let project_id_clone = project_id;
     let project_path_clone = project_path_buf.clone();
 
-    // Create debouncer with 1 second timeout
-    let poll_interval = if cfg!(test) {
-      Duration::from_millis(100)
-    } else {
-      Duration::from_secs(3600) // 1 hour
-    };
+    // // Create debouncer with 1 second timeout
+    // let poll_interval = if cfg!(test) {
+    //   Duration::from_millis(100)
+    // } else {
+    //   Duration::from_secs(3600) // 1 hour
+    // };
 
     let debounce_timeout = if cfg!(test) {
       Duration::from_millis(500) // Much faster for tests
@@ -70,10 +70,10 @@ impl ProjectWatcher {
     // .with_compare_contents(true);
 
     // Added logging for diagnosis
-    debug!(
-      "Watcher config: poll_interval={:?}, compare_contents=false",
-      poll_interval
-    );
+    // debug!(
+    //   "Watcher config: poll_interval={:?}, compare_contents=false",
+    //   poll_interval
+    // );
 
     let mut debouncer =
       notify_debouncer_full::new_debouncer_opt(
