@@ -42,6 +42,7 @@ impl App {
       name,
       directory,
       description,
+      rescan_interval: None, // Default to no rescan interval
     };
 
     let response = self
@@ -97,6 +98,7 @@ impl App {
     let req = UpdateProjectRequest {
       name,
       description: description.map(Some),
+      rescan_interval: None, // Default to no rescan interval
     };
 
     let response = self

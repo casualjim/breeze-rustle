@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::path::Path;
+use std::time::Duration;
 use strum::{Display, EnumString};
 use uuid::Uuid;
 
@@ -29,10 +30,8 @@ pub struct Project {
   pub deletion_requested_at: Option<chrono::NaiveDateTime>,
   pub created_at: chrono::NaiveDateTime,
   pub updated_at: chrono::NaiveDateTime,
-  pub rescan_enabled: bool,
-  pub rescan_interval_minutes: Option<u32>,
-  pub last_rescan_at: Option<chrono::NaiveDateTime>,
-  pub next_rescan_at: Option<chrono::NaiveDateTime>,
+  pub rescan_interval: Option<Duration>,
+  pub last_indexed_at: Option<chrono::NaiveDateTime>,
 }
 
 impl Project {
@@ -56,11 +55,14 @@ impl Project {
       deletion_requested_at: None,
       created_at: now,
       updated_at: now,
-      rescan_enabled: true,
-      rescan_interval_minutes: Some(60),
-      last_rescan_at: None,
-      next_rescan_at: None,
+      rescan_interval: None,
+      last_indexed_at: None,
     })
+  }
+
+  pub fn with_rescan_interval(mut self, rescan_interval: Option<Duration>) -> Self {
+    self.rescan_interval = rescan_interval;
+    self
   }
 
   /// Create the Arrow schema for Project
@@ -88,15 +90,13 @@ impl Project {
         DataType::Timestamp(TimeUnit::Microsecond, None),
         false,
       ),
-      Field::new("rescan_enabled", DataType::Boolean, false),
-      Field::new("rescan_interval_minutes", DataType::UInt32, true),
       Field::new(
-        "last_rescan_at",
-        DataType::Timestamp(TimeUnit::Microsecond, None),
+        "rescan_interval",
+        DataType::Duration(TimeUnit::Microsecond),
         true,
       ),
       Field::new(
-        "next_rescan_at",
+        "last_indexed_at",
         DataType::Timestamp(TimeUnit::Microsecond, None),
         true,
       ),
@@ -127,6 +127,12 @@ impl Project {
     let created_at_array = arrow::array::TimestampMicrosecondArray::from(vec![0i64]);
     let updated_at_array = arrow::array::TimestampMicrosecondArray::from(vec![0i64]);
 
+    // Add missing rescan_interval and last_indexed_at arrays for dummy row
+    let rescan_interval_array =
+      arrow::array::DurationMicrosecondArray::from(vec![None as Option<i64>]);
+    let last_indexed_at_array =
+      arrow::array::TimestampMicrosecondArray::from(vec![None as Option<i64>]);
+
     let batch = RecordBatch::try_new(
       schema.clone(),
       vec![
@@ -138,6 +144,8 @@ impl Project {
         std::sync::Arc::new(deletion_requested_at_array),
         std::sync::Arc::new(created_at_array),
         std::sync::Arc::new(updated_at_array),
+        std::sync::Arc::new(rescan_interval_array),
+        std::sync::Arc::new(last_indexed_at_array),
       ],
     )
     .map_err(|e| lancedb::Error::Arrow { source: e })?;
@@ -202,60 +210,36 @@ impl Project {
       })?
       .value(row);
 
-    let rescan_enabled = batch
-      .column_by_name("rescan_enabled")
-      .and_then(|col| col.as_any().downcast_ref::<BooleanArray>())
+    let rescan_interval_array = batch
+      .column_by_name("rescan_interval")
+      .and_then(|col| col.as_any().downcast_ref::<DurationMicrosecondArray>())
       .ok_or_else(|| lancedb::Error::Runtime {
-        message: "Missing or invalid rescan_enabled column".to_string(),
-      })?
-      .value(row);
-
-    let rescan_interval_minutes_array = batch
-      .column_by_name("rescan_interval_minutes")
-      .and_then(|col| col.as_any().downcast_ref::<UInt32Array>())
-      .ok_or_else(|| lancedb::Error::Runtime {
-        message: "Missing or invalid rescan_interval_minutes column".to_string(),
+        message: "Missing or invalid rescan_interval column".to_string(),
       })?;
 
-    let rescan_interval_minutes = if rescan_interval_minutes_array.is_null(row) {
+    let rescan_interval = if rescan_interval_array.is_null(row) {
       None
     } else {
-      Some(rescan_interval_minutes_array.value(row))
+      Some(Duration::from_micros(
+        rescan_interval_array.value(row) as u64
+      ))
     };
 
-    let last_rescan_at_array = batch
-      .column_by_name("last_rescan_at")
+    let last_indexed_at_array = batch
+      .column_by_name("last_indexed_at")
       .and_then(|col| {
         col
           .as_any()
           .downcast_ref::<arrow::array::TimestampMicrosecondArray>()
       })
       .ok_or_else(|| lancedb::Error::Runtime {
-        message: "Missing or invalid last_rescan_at column".to_string(),
+        message: "Missing or invalid last_indexed_at column".to_string(),
       })?;
 
-    let last_rescan_at = if last_rescan_at_array.is_null(row) {
+    let last_indexed_at = if last_indexed_at_array.is_null(row) {
       None
     } else {
-      chrono::DateTime::from_timestamp_micros(last_rescan_at_array.value(row))
-        .map(|dt| dt.naive_utc())
-    };
-
-    let next_rescan_at_array = batch
-      .column_by_name("next_rescan_at")
-      .and_then(|col| {
-        col
-          .as_any()
-          .downcast_ref::<arrow::array::TimestampMicrosecondArray>()
-      })
-      .ok_or_else(|| lancedb::Error::Runtime {
-        message: "Missing or invalid next_rescan_at column".to_string(),
-      })?;
-
-    let next_rescan_at = if next_rescan_at_array.is_null(row) {
-      None
-    } else {
-      chrono::DateTime::from_timestamp_micros(next_rescan_at_array.value(row))
+      chrono::DateTime::from_timestamp_micros(last_indexed_at_array.value(row))
         .map(|dt| dt.naive_utc())
     };
 
@@ -363,10 +347,8 @@ impl Project {
       updated_at: chrono::DateTime::from_timestamp_micros(updated_at)
         .unwrap_or_default()
         .naive_utc(),
-      rescan_enabled,
-      rescan_interval_minutes,
-      last_rescan_at,
-      next_rescan_at,
+      rescan_interval,
+      last_indexed_at,
     })
   }
 }
@@ -400,22 +382,13 @@ impl lancedb::arrow::IntoArrow for Project {
     let created_at_array = arrow::array::TimestampMicrosecondArray::from(vec![created_at_us]);
     let updated_at_array = arrow::array::TimestampMicrosecondArray::from(vec![updated_at_us]);
 
-    // Rescan fields
-    let rescan_enabled_array = BooleanArray::from(vec![self.rescan_enabled]);
-
-    let rescan_interval_minutes_array = match self.rescan_interval_minutes {
-      Some(v) => UInt32Array::from(vec![Some(v)]),
-      None => UInt32Array::from(vec![None]),
-    };
-
-    let last_rescan_at_array = if let Some(dt) = self.last_rescan_at {
-      let ts = dt.and_utc().timestamp_micros();
-      arrow::array::TimestampMicrosecondArray::from(vec![Some(ts)])
+    let rescan_interval_array = if let Some(interval) = self.rescan_interval {
+      DurationMicrosecondArray::from(vec![Some(interval.as_micros() as i64)])
     } else {
-      arrow::array::TimestampMicrosecondArray::from(vec![None])
+      DurationMicrosecondArray::from(vec![None as Option<i64>])
     };
 
-    let next_rescan_at_array = if let Some(dt) = self.next_rescan_at {
+    let last_indexed_at_array = if let Some(dt) = self.last_indexed_at {
       let ts = dt.and_utc().timestamp_micros();
       arrow::array::TimestampMicrosecondArray::from(vec![Some(ts)])
     } else {
@@ -434,10 +407,8 @@ impl lancedb::arrow::IntoArrow for Project {
         Arc::new(deletion_requested_at_array),
         Arc::new(created_at_array),
         Arc::new(updated_at_array),
-        Arc::new(rescan_enabled_array),
-        Arc::new(rescan_interval_minutes_array),
-        Arc::new(last_rescan_at_array),
-        Arc::new(next_rescan_at_array),
+        Arc::new(rescan_interval_array),
+        Arc::new(last_indexed_at_array),
       ],
     )
     .map_err(|e| lancedb::Error::Arrow { source: e })?;
@@ -507,7 +478,7 @@ mod tests {
   fn test_project_schema() {
     let schema = Project::schema();
 
-    assert_eq!(schema.fields().len(), 8);
+    assert_eq!(schema.fields().len(), 10);
 
     let field_names: Vec<&str> = schema.fields().iter().map(|f| f.name().as_str()).collect();
     assert_eq!(
@@ -520,7 +491,9 @@ mod tests {
         "status",
         "deletion_requested_at",
         "created_at",
-        "updated_at"
+        "updated_at",
+        "rescan_interval",
+        "last_indexed_at",
       ]
     );
 
@@ -532,5 +505,7 @@ mod tests {
     assert!(schema.field(5).is_nullable()); // deletion_requested_at
     assert!(!schema.field(6).is_nullable()); // created_at
     assert!(!schema.field(7).is_nullable()); // updated_at
+    assert!(schema.field(8).is_nullable()); // rescan_interval
+    assert!(schema.field(9).is_nullable()); // last_indexed_at
   }
 }

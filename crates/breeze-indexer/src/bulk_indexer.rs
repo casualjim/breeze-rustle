@@ -31,6 +31,7 @@ pub struct BulkIndexer {
   embedding_dim: usize,
   table: Arc<RwLock<Table>>,
   chunk_table: Arc<RwLock<Table>>,
+  project_table: Arc<RwLock<Table>>,
   last_optimize_version: Arc<RwLock<u64>>,
 }
 
@@ -41,6 +42,7 @@ impl BulkIndexer {
     embedding_dim: usize,
     table: Arc<RwLock<Table>>,
     chunk_table: Arc<RwLock<Table>>,
+    project_table: Arc<RwLock<Table>>,
   ) -> Self {
     // Initialize with version 0 - will be updated on first use
     let last_optimize_version = Arc::new(RwLock::new(0));
@@ -61,6 +63,7 @@ impl BulkIndexer {
       embedding_dim,
       table,
       chunk_table,
+      project_table,
       last_optimize_version,
     }
   }
@@ -518,6 +521,8 @@ impl BulkIndexer {
     progress_cancel_token.cancel();
     let _ = progress_handle.await;
 
+    self.update_project_last_indexed_at(&project_id).await?;
+
     // Report final results
     info!(
       files_chunked = format!(
@@ -734,6 +739,23 @@ impl BulkIndexer {
       table,
       cancel_token,
     ))
+  }
+
+  /// Update the last_indexed_at timestamp for a project
+  async fn update_project_last_indexed_at(&self, project_id: &Uuid) -> Result<(), IndexerError> {
+    let table = self.project_table.write().await;
+    let now = chrono::Utc::now().naive_utc();
+    let now_micros = now.and_utc().timestamp_micros();
+
+    table
+      .update()
+      .only_if(format!("id = '{}'", project_id).as_str())
+      .column("last_indexed_at", &format!("{}", now_micros))
+      .column("updated_at", &format!("{}", now_micros))
+      .execute()
+      .await?;
+
+    Ok(())
   }
 }
 
@@ -1492,8 +1514,8 @@ async fn delete_handler_task(
 #[cfg(test)]
 mod tests {
   use super::*;
-  use crate::config::Config;
   use crate::models::CodeChunk;
+  use crate::{Project, config::Config};
   use breeze_chunkers::{ChunkError, ChunkMetadata, ProjectChunk, SemanticChunk};
   use futures_util::stream;
   use lancedb::arrow::IntoArrow;
@@ -1660,6 +1682,9 @@ mod tests {
       crate::models::CodeChunk::ensure_table(&connection, "test_chunks", embedding_dim)
         .await
         .unwrap();
+    let project_table = Project::ensure_table(&connection, "test_projects")
+      .await
+      .unwrap();
 
     let indexer = BulkIndexer::new(
       Arc::new(config),
@@ -1667,6 +1692,7 @@ mod tests {
       embedding_dim,
       Arc::new(RwLock::new(table)),
       Arc::new(RwLock::new(chunk_table)),
+      Arc::new(RwLock::new(project_table)),
     );
 
     // Create test stream with 2 files
@@ -1844,12 +1870,17 @@ mod tests {
         .await
         .unwrap();
 
+    let project_table = Project::ensure_table(&connection, "test_projects")
+      .await
+      .unwrap();
+
     let indexer = BulkIndexer::new(
       Arc::new(config),
       embedding_provider,
       embedding_dim,
       Arc::new(RwLock::new(table)),
       Arc::new(RwLock::new(chunk_table)),
+      Arc::new(RwLock::new(project_table)),
     );
 
     // Stream with an error in the middle
@@ -1906,12 +1937,17 @@ mod tests {
           .await
           .unwrap();
 
+      let project_table = Project::ensure_table(&connection, "test_projects")
+        .await
+        .unwrap();
+
       let indexer = BulkIndexer::new(
         Arc::new(config),
         embedding_provider,
         embedding_dim,
         Arc::new(RwLock::new(table)),
         Arc::new(RwLock::new(chunk_table)),
+        Arc::new(RwLock::new(project_table)),
       );
       indexer
         .index_stream(Uuid::now_v7(), chunk_stream, 5, None)
@@ -1947,12 +1983,17 @@ mod tests {
         .await
         .unwrap();
 
+    let project_table = Project::ensure_table(&connection, "test_projects")
+      .await
+      .unwrap();
+
     let indexer = BulkIndexer::new(
       Arc::new(config),
       embedding_provider,
       embedding_dim,
       Arc::new(RwLock::new(table)),
       Arc::new(RwLock::new(chunk_table)),
+      Arc::new(RwLock::new(project_table)),
     );
 
     // Create many chunks for one file to test batching
@@ -1996,12 +2037,17 @@ mod tests {
         .await
         .unwrap();
 
+    let project_table = Project::ensure_table(&connection, "test_projects")
+      .await
+      .unwrap();
+
     let indexer = BulkIndexer::new(
       Arc::new(config),
       embedding_provider,
       embedding_dim,
       Arc::new(RwLock::new(table)),
       Arc::new(RwLock::new(chunk_table)),
+      Arc::new(RwLock::new(project_table)),
     );
 
     let chunk_stream = stream::iter(vec![] as Vec<Result<ProjectChunk, ChunkError>>);
@@ -2033,12 +2079,17 @@ mod tests {
         .await
         .unwrap();
 
+    let project_table = Project::ensure_table(&connection, "test_projects")
+      .await
+      .unwrap();
+
     let indexer = BulkIndexer::new(
       Arc::new(config),
       embedding_provider,
       embedding_dim,
       Arc::new(RwLock::new(table)),
       Arc::new(RwLock::new(chunk_table)),
+      Arc::new(RwLock::new(project_table)),
     );
 
     // Single file with multiple chunks
@@ -2126,12 +2177,17 @@ mod tests {
         .await
         .unwrap();
 
+    let project_table = Project::ensure_table(&connection, "test_projects")
+      .await
+      .unwrap();
+
     let indexer = BulkIndexer::new(
       Arc::new(config),
       embedding_provider,
       embedding_dim,
       Arc::new(RwLock::new(table)),
       Arc::new(RwLock::new(chunk_table)),
+      Arc::new(RwLock::new(project_table)),
     );
 
     // Create 101 files to test the 100 document batch limit
@@ -2199,12 +2255,17 @@ mod tests {
         .await
         .unwrap();
 
+    let project_table = Project::ensure_table(&connection, "test_projects")
+      .await
+      .unwrap();
+
     let indexer = BulkIndexer::new(
       Arc::new(config),
       embedding_provider,
       embedding_dim,
       Arc::new(RwLock::new(table)),
       Arc::new(RwLock::new(chunk_table)),
+      Arc::new(RwLock::new(project_table)),
     );
 
     let test_dir = tempdir().unwrap();
@@ -2669,6 +2730,9 @@ def goodbye():
       crate::models::CodeChunk::ensure_table(&connection, "test_chunks", embedding_dim)
         .await
         .unwrap();
+    let project_table = Project::ensure_table(&connection, "test_projects")
+      .await
+      .unwrap();
 
     let indexer = BulkIndexer::new(
       Arc::new(config),
@@ -2676,6 +2740,7 @@ def goodbye():
       embedding_dim,
       Arc::new(RwLock::new(table)),
       Arc::new(RwLock::new(chunk_table)),
+      Arc::new(RwLock::new(project_table)),
     );
 
     // Create test stream with both regular and large file chunks
@@ -2786,6 +2851,9 @@ def goodbye():
       crate::models::CodeChunk::ensure_table(&connection, "test_chunks", embedding_dim)
         .await
         .unwrap();
+    let project_table = Project::ensure_table(&connection, "test_projects")
+      .await
+      .unwrap();
 
     let indexer = BulkIndexer::new(
       Arc::new(config),
@@ -2793,6 +2861,7 @@ def goodbye():
       embedding_dim,
       Arc::new(RwLock::new(table)),
       Arc::new(RwLock::new(chunk_table)),
+      Arc::new(RwLock::new(project_table)),
     );
 
     // Create heavily interleaved chunks from multiple files
@@ -2854,6 +2923,9 @@ def goodbye():
       crate::models::CodeChunk::ensure_table(&connection, "test_chunks", embedding_dim)
         .await
         .unwrap();
+    let project_table = Project::ensure_table(&connection, "test_projects")
+      .await
+      .unwrap();
 
     let indexer = BulkIndexer::new(
       Arc::new(config),
@@ -2861,6 +2933,7 @@ def goodbye():
       embedding_dim,
       Arc::new(RwLock::new(table)),
       Arc::new(RwLock::new(chunk_table)),
+      Arc::new(RwLock::new(project_table)),
     );
 
     let test_id = std::process::id();
@@ -2954,12 +3027,17 @@ def goodbye():
       .await
       .unwrap();
 
+    let project_table = Project::ensure_table(&connection, "test_projects")
+      .await
+      .unwrap();
+
     let indexer = BulkIndexer::new(
       Arc::new(config),
       embedding_provider,
       embedding_dim,
       Arc::new(RwLock::new(table)),
       Arc::new(RwLock::new(chunk_table)),
+      Arc::new(RwLock::new(project_table)),
     );
 
     // Create 50 files to ensure we exceed the batch size multiple times

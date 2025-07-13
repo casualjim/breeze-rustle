@@ -228,12 +228,18 @@ mod tests {
     let (_temp_dir_config, config) = Config::test();
     let embedding_provider = create_embedding_provider(&config).await.unwrap();
 
+    let project_table = crate::models::Project::ensure_table(&connection, "test_projects")
+      .await
+      .unwrap();
+    let project_table = Arc::new(RwLock::new(project_table));
+
     let bulk_indexer = BulkIndexer::new(
       Arc::new(config),
       Arc::from(embedding_provider),
       384,
       code_table.clone(),
       chunk_table,
+      project_table,
     );
 
     let project_table = crate::models::Project::ensure_table(&connection, "test_projects")

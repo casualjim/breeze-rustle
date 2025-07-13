@@ -1,4 +1,5 @@
 mod app;
+mod duration;
 mod error;
 mod mcp;
 mod routes;

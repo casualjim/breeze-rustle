@@ -4,6 +4,8 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use crate::duration::HumanDuration;
+
 // Note: These types are shared between the REST API and MCP server
 // JsonSchema is used for both MCP and future OpenAPI spec generation
 
@@ -13,6 +15,7 @@ pub struct CreateProjectRequest {
   pub name: String,
   pub directory: String,
   pub description: Option<String>,
+  pub rescan_interval: Option<HumanDuration>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -23,6 +26,7 @@ pub struct Project {
   pub description: Option<String>,
   pub created_at: chrono::NaiveDateTime,
   pub updated_at: chrono::NaiveDateTime,
+  pub rescan_interval: Option<HumanDuration>,
 }
 
 impl From<breeze_indexer::Project> for Project {
@@ -34,6 +38,7 @@ impl From<breeze_indexer::Project> for Project {
       description: project.description,
       created_at: project.created_at,
       updated_at: project.updated_at,
+      rescan_interval: project.rescan_interval.map(HumanDuration::from),
     }
   }
 }
@@ -42,6 +47,7 @@ impl From<breeze_indexer::Project> for Project {
 pub struct UpdateProjectRequest {
   pub name: Option<String>,
   pub description: Option<Option<String>>,
+  pub rescan_interval: Option<HumanDuration>,
 }
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
@@ -172,6 +178,7 @@ pub struct UpdateProjectByIdRequest {
   pub project_id: String,
   pub name: Option<String>,
   pub description: Option<Option<String>>,
+  pub rescan_interval: Option<HumanDuration>,
 }
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]

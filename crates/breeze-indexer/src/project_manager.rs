@@ -1,5 +1,6 @@
 use std::path::Path;
 use std::sync::Arc;
+use std::time::Duration;
 use uuid::Uuid;
 
 use futures::TryStreamExt;
@@ -81,6 +82,7 @@ impl ProjectManager {
     name: String,
     directory: String,
     description: Option<String>,
+    rescan_interval: Option<Duration>,
   ) -> Result<Project, IndexerError> {
     // Canonicalize the directory path (validates it's absolute)
     let canonical_directory = Self::canonicalize_path(&directory)?;
@@ -94,8 +96,9 @@ impl ProjectManager {
     }
 
     // Create the project (validates directory exists and is a directory)
-    let project =
-      Project::new(name, canonical_directory, description).map_err(IndexerError::Config)?;
+    let project = Project::new(name, canonical_directory, description)
+      .map(|p| p.with_rescan_interval(rescan_interval))
+      .map_err(IndexerError::Config)?;
 
     // Insert into table
     let arrow_data = project.clone().into_arrow()?;
@@ -172,6 +175,7 @@ impl ProjectManager {
     id: Uuid,
     name: Option<String>,
     description: Option<Option<String>>,
+    rescan_interval: Option<Duration>,
   ) -> Result<Option<Project>, IndexerError> {
     // First check if project exists
     let existing = self.get_project(id).await?;
@@ -197,6 +201,10 @@ impl ProjectManager {
           None => "null".to_string(),
         },
       );
+    }
+
+    if let Some(interval) = rescan_interval {
+      update = update.column("rescan_interval", (interval.as_nanos() as i64).to_string());
     }
 
     // Always update updated_at
@@ -290,6 +298,36 @@ impl ProjectManager {
       Ok(None)
     }
   }
+
+  /// Find projects that need periodic rescanning using a database query.
+  /// This performs interval arithmetic in the database to find projects that are due for rescanning.
+  pub async fn find_projects_needing_rescan(
+    &self,
+    now: chrono::DateTime<chrono::Utc>,
+  ) -> Result<Vec<Project>, IndexerError> {
+    let project_table = self.project_table.read().await;
+    let now_str = now.to_rfc3339();
+
+    // This query finds projects that are active, enabled for rescanning, and either
+    // have never been indexed (last_indexed_at is NULL) or are due for a scan.
+    // `last_indexed_at + rescan_interval` performs interval arithmetic in the DB.
+    let filter = format!(
+      "status = 'Active' AND rescan_interval IS NOT NULL AND (last_indexed_at IS NULL OR (last_indexed_at + rescan_interval) <= timestamp '{}')",
+      now_str
+    );
+
+    let mut stream = project_table.query().only_if(&filter).execute().await?;
+    let mut projects = Vec::new();
+
+    while let Some(batch) = stream.try_next().await? {
+      for i in 0..batch.num_rows() {
+        let project = Project::from_record_batch(&batch, i)?;
+        projects.push(project);
+      }
+    }
+
+    Ok(projects)
+  }
 }
 
 #[cfg(test)]
@@ -360,6 +398,7 @@ mod tests {
       384, // BAAI/bge-small-en-v1.5 has 384 dimensions
       code_table.clone(),
       chunk_table,
+      project_table.clone(),
     );
 
     let task_manager = Arc::new(TaskManager::new(
@@ -386,6 +425,7 @@ mod tests {
         "Test Project".to_string(),
         test_dir.to_str().unwrap().to_string(),
         Some("A test project".to_string()),
+        None,
       )
       .await
       .unwrap();
@@ -405,6 +445,7 @@ mod tests {
       .create_project(
         "Test Project".to_string(),
         "/non/existent/directory".to_string(),
+        None,
         None,
       )
       .await;
@@ -427,6 +468,7 @@ mod tests {
       .create_project(
         "Test Project".to_string(),
         test_dir.to_str().unwrap().to_string(),
+        None,
         None,
       )
       .await
@@ -467,6 +509,7 @@ mod tests {
           format!("Project {}", i),
           test_dir.to_str().unwrap().to_string(),
           None,
+          None,
         )
         .await
         .unwrap();
@@ -495,6 +538,7 @@ mod tests {
         "Original Name".to_string(),
         test_dir.to_str().unwrap().to_string(),
         Some("Original description".to_string()),
+        None,
       )
       .await
       .unwrap();
@@ -510,6 +554,7 @@ mod tests {
         project.id,
         Some("New Name".to_string()),
         Some(Some("New description".to_string())),
+        None,
       )
       .await
       .unwrap()
@@ -535,6 +580,7 @@ mod tests {
       .create_project(
         "To Delete".to_string(),
         test_dir.to_str().unwrap().to_string(),
+        None,
         None,
       )
       .await
@@ -563,7 +609,7 @@ mod tests {
     let dir_path = test_dir.to_str().unwrap().to_string();
 
     let project = project_manager
-      .create_project("Test Project".to_string(), dir_path.clone(), None)
+      .create_project("Test Project".to_string(), dir_path.clone(), None, None)
       .await
       .unwrap();
 
@@ -595,6 +641,7 @@ mod tests {
       .create_project(
         "Test Project".to_string(),
         test_dir.to_str().unwrap().to_string(),
+        None,
         None,
       )
       .await
@@ -647,13 +694,13 @@ mod tests {
 
     // Create first project
     let project1 = project_manager
-      .create_project("Project 1".to_string(), dir_path.clone(), None)
+      .create_project("Project 1".to_string(), dir_path.clone(), None, None)
       .await
       .unwrap();
 
     // Try to create another project with the same directory
     let result = project_manager
-      .create_project("Project 2".to_string(), dir_path.clone(), None)
+      .create_project("Project 2".to_string(), dir_path.clone(), None, None)
       .await;
 
     assert!(result.is_err());
@@ -672,5 +719,350 @@ mod tests {
     let projects = project_manager.list_projects().await.unwrap();
     assert_eq!(projects.len(), 1);
     assert_eq!(projects[0].id, project1.id);
+  }
+
+  /// Test database query logic for finding projects that need rescanning
+  #[tokio::test]
+  async fn test_find_projects_needing_rescan_query() {
+    let (project_manager, temp_dir) = create_test_project_manager().await;
+
+    // Create test projects with different rescanning configurations
+    let test_project_dir = temp_dir.path().join("rescan_test");
+    std::fs::create_dir(&test_project_dir).unwrap();
+
+    let now = chrono::Utc::now();
+    let one_day_ago = now.naive_utc() - chrono::Duration::days(1);
+
+    // Project 1: Should rescan (never indexed, rescan enabled)
+    let project1 = Project::new(
+      "Never Indexed Project".to_string(),
+      test_project_dir.to_str().unwrap().to_string(),
+      None,
+    )
+    .unwrap()
+    .with_rescan_interval(Some(std::time::Duration::from_secs(3600))); // 1 hour
+
+    // Project 2: Should rescan (last indexed more than interval ago)
+    let mut project2 = Project::new(
+      "Old Indexed Project".to_string(),
+      test_project_dir.to_str().unwrap().to_string(),
+      None,
+    )
+    .unwrap()
+    .with_rescan_interval(Some(std::time::Duration::from_secs(3600))); // 1 hour
+    project2.last_indexed_at = Some(one_day_ago); // Indexed 1 day ago, should rescan
+
+    // Project 3: Should NOT rescan (last indexed recently)
+    let mut project3 = Project::new(
+      "Recently Indexed Project".to_string(),
+      test_project_dir.to_str().unwrap().to_string(),
+      None,
+    )
+    .unwrap()
+    .with_rescan_interval(Some(std::time::Duration::from_secs(3600))); // 1 hour
+    project3.last_indexed_at = Some(now.naive_utc() - chrono::Duration::seconds(3599)); // Indexed recently, should NOT rescan yet
+
+    // Project 4: Should NOT rescan (rescanning disabled)
+    let project4 = Project::new(
+      "Rescanning Disabled Project".to_string(),
+      test_project_dir.to_str().unwrap().to_string(),
+      None,
+    )
+    .unwrap(); // No rescan_interval set (None)
+
+    // Insert projects into the database
+    let table = project_manager.project_table.write().await;
+    for project in [&project1, &project2, &project3, &project4] {
+      table
+        .add(project.clone().into_arrow().unwrap())
+        .execute()
+        .await
+        .unwrap();
+    }
+    drop(table);
+
+    // Test the query logic directly
+    let projects_needing_rescan = project_manager
+      .find_projects_needing_rescan(now)
+      .await
+      .unwrap();
+
+    // Debug: Print what we found
+    println!(
+      "Found {} projects needing rescan:",
+      projects_needing_rescan.len()
+    );
+    for project in &projects_needing_rescan {
+      println!(
+        "- Project '{}' (ID: {}), last_indexed_at: {:?}, rescan_interval: {:?}",
+        project.name, project.id, project.last_indexed_at, project.rescan_interval
+      );
+    }
+
+    // Should have 2 projects: project1 (never indexed) and project2 (old indexed)
+    assert_eq!(
+      projects_needing_rescan.len(),
+      2,
+      "Should find 2 projects needing rescan"
+    );
+
+    // Verify the projects are the correct ones
+    let mut found_project_ids: Vec<Uuid> = projects_needing_rescan.iter().map(|p| p.id).collect();
+    found_project_ids.sort();
+    let mut expected_project_ids = vec![project1.id, project2.id];
+    expected_project_ids.sort();
+
+    assert_eq!(
+      found_project_ids, expected_project_ids,
+      "Should find never-indexed and old-indexed projects"
+    );
+  }
+
+  /// Test task submission logic for rescanning projects
+  #[tokio::test]
+  async fn test_rescanning_task_submission() {
+    let (project_manager, temp_dir) = create_test_project_manager().await;
+
+    // Create test projects with different rescanning configurations
+    let test_project_dir = temp_dir.path().join("rescan_test");
+    std::fs::create_dir(&test_project_dir).unwrap();
+
+    let now = chrono::Utc::now();
+    let one_day_ago = now.naive_utc() - chrono::Duration::days(1);
+
+    // Create only projects that should be rescanned for simplicity
+    let project1 = Project::new(
+      "Never Indexed Project".to_string(),
+      test_project_dir.to_str().unwrap().to_string(),
+      None,
+    )
+    .unwrap()
+    .with_rescan_interval(Some(std::time::Duration::from_secs(3600))); // 1 hour
+
+    let mut project2 = Project::new(
+      "Old Indexed Project".to_string(),
+      test_project_dir.to_str().unwrap().to_string(),
+      None,
+    )
+    .unwrap()
+    .with_rescan_interval(Some(std::time::Duration::from_secs(3600))); // 1 hour
+    project2.last_indexed_at = Some(one_day_ago); // Indexed 1 day ago, should rescan
+
+    // Insert projects into the database
+    let table = project_manager.project_table.write().await;
+    for project in [&project1, &project2] {
+      table
+        .add(project.clone().into_arrow().unwrap())
+        .execute()
+        .await
+        .unwrap();
+    }
+    drop(table);
+
+    // Manually find projects needing rescan and submit tasks, mimicking rescan_worker
+    let projects_to_rescan = project_manager
+      .find_projects_needing_rescan(now)
+      .await
+      .unwrap();
+    for project in projects_to_rescan {
+      project_manager
+        .task_manager
+        .submit_task(
+          project.id,
+          Path::new(&project.directory),
+          crate::models::TaskType::FullIndex,
+        )
+        .await
+        .unwrap();
+    }
+
+    // Verify that the correct tasks were submitted
+    let tasks = project_manager.task_manager.list_tasks(10).await.unwrap();
+    assert_eq!(tasks.len(), 2, "Should have submitted 2 rescan tasks");
+
+    // Verify task types are FullIndex
+    for task in &tasks {
+      assert_eq!(
+        task.task_type,
+        crate::models::TaskType::FullIndex,
+        "Rescan tasks should be FullIndex type"
+      );
+      assert_eq!(
+        task.status,
+        crate::models::TaskStatus::Pending,
+        "Rescan tasks should be pending"
+      );
+    }
+
+    // Verify the tasks are for the correct projects
+    let mut task_project_ids: Vec<Uuid> = tasks.iter().map(|t| t.project_id).collect();
+    task_project_ids.sort();
+    let mut expected_project_ids = vec![project1.id, project2.id];
+    expected_project_ids.sort();
+
+    assert_eq!(
+      task_project_ids, expected_project_ids,
+      "Tasks should be submitted for the correct projects"
+    );
+  }
+
+  #[tokio::test]
+  async fn test_rescanning_interval_calculations() {
+    let (project_manager, temp_dir) = create_test_project_manager().await;
+
+    let test_project_dir = temp_dir.path().join("interval_test");
+    std::fs::create_dir(&test_project_dir).unwrap();
+
+    // Test different rescan intervals
+    let intervals = vec![
+      (std::time::Duration::from_secs(60), "1 minute"),
+      (std::time::Duration::from_secs(3600), "1 hour"),
+      (std::time::Duration::from_secs(86400), "1 day"),
+      (std::time::Duration::from_secs(604800), "1 week"),
+    ];
+
+    for (interval, description) in intervals {
+      let now = chrono::Utc::now();
+      let last_indexed_at = now.naive_utc()
+        - chrono::Duration::from_std(interval).unwrap()
+        - chrono::Duration::minutes(1);
+
+      let mut project = Project::new(
+        format!("Test Project {}", description),
+        test_project_dir.to_str().unwrap().to_string(),
+        None,
+      )
+      .unwrap()
+      .with_rescan_interval(Some(interval));
+      project.last_indexed_at = Some(last_indexed_at);
+
+      // Insert project
+      let table = project_manager.project_table.write().await;
+      table
+        .add(project.clone().into_arrow().unwrap())
+        .execute()
+        .await
+        .unwrap();
+      drop(table);
+
+      // Query for projects requiring rescan using the same logic as ProjectManager
+      let table = project_manager.project_table.read().await;
+      let now_str = now.to_rfc3339();
+      let filter = format!(
+        "status = 'Active' AND rescan_interval IS NOT NULL AND (last_indexed_at IS NULL OR (last_indexed_at + rescan_interval) <= timestamp '{}')",
+        now_str
+      );
+
+      let mut stream = table.query().only_if(&filter).execute().await.unwrap();
+      let mut found_project = false;
+
+      while let Some(batch) = stream.try_next().await.unwrap() {
+        for i in 0..batch.num_rows() {
+          let found = Project::from_record_batch(&batch, i).unwrap();
+          if found.id == project.id {
+            found_project = true;
+            break;
+          }
+        }
+      }
+      drop(table);
+
+      assert!(
+        found_project,
+        "Project with {} interval should be found for rescanning",
+        description
+      );
+
+      // Clean up for next iteration
+      let table = project_manager.project_table.write().await;
+      table
+        .delete(&format!("id = '{}'", project.id))
+        .await
+        .unwrap();
+      drop(table);
+    }
+  }
+
+  #[tokio::test]
+  async fn test_rescanning_edge_cases() {
+    let (project_manager, temp_dir) = create_test_project_manager().await;
+
+    let test_project_dir = temp_dir.path().join("edge_test");
+    std::fs::create_dir(&test_project_dir).unwrap();
+
+    // Test Case 1: Project with PendingDeletion status (should be ignored)
+    let mut project_pending_deletion = Project::new(
+      "Pending Deletion Project".to_string(),
+      test_project_dir.to_str().unwrap().to_string(),
+      None,
+    )
+    .unwrap()
+    .with_rescan_interval(Some(std::time::Duration::from_secs(60)));
+    project_pending_deletion.status = ProjectStatus::PendingDeletion;
+    project_pending_deletion.deletion_requested_at = Some(chrono::Utc::now().naive_utc());
+
+    // Test Case 2: Project with Deleted status (should be ignored)
+    let mut project_deleted = Project::new(
+      "Deleted Project".to_string(),
+      test_project_dir.to_str().unwrap().to_string(),
+      None,
+    )
+    .unwrap()
+    .with_rescan_interval(Some(std::time::Duration::from_secs(60)));
+    project_deleted.status = ProjectStatus::Deleted;
+
+    // Test Case 3: Active project with NULL rescan_interval (should be ignored)
+    let project_no_interval = Project::new(
+      "No Interval Project".to_string(),
+      test_project_dir.to_str().unwrap().to_string(),
+      None,
+    )
+    .unwrap(); // rescan_interval is None by default
+
+    // Test Case 4: Active project with very large interval (should be ignored)
+    let mut project_large_interval = Project::new(
+      "Large Interval Project".to_string(),
+      test_project_dir.to_str().unwrap().to_string(),
+      None,
+    )
+    .unwrap()
+    .with_rescan_interval(Some(std::time::Duration::from_secs(365 * 24 * 3600))); // 1 year
+    project_large_interval.last_indexed_at =
+      Some(chrono::Utc::now().naive_utc() - chrono::Duration::hours(1));
+
+    // Insert all projects
+    let table = project_manager.project_table.write().await;
+    for project in [
+      &project_pending_deletion,
+      &project_deleted,
+      &project_no_interval,
+      &project_large_interval,
+    ] {
+      table
+        .add(project.clone().into_arrow().unwrap())
+        .execute()
+        .await
+        .unwrap();
+    }
+    drop(table);
+
+    // Manually find projects needing rescan, mimicking rescan_worker
+    let projects_to_rescan = project_manager
+      .find_projects_needing_rescan(chrono::Utc::now())
+      .await
+      .unwrap();
+
+    // Verify no tasks were submitted (because no projects should need rescanning)
+    assert_eq!(
+      projects_to_rescan.len(),
+      0,
+      "No projects should need rescanning for edge cases"
+    );
+    let tasks = project_manager.task_manager.list_tasks(10).await.unwrap();
+    assert_eq!(
+      tasks.len(),
+      0,
+      "No rescan tasks should be submitted for edge cases"
+    );
   }
 }
