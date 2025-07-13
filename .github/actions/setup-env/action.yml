@@ -79,15 +79,10 @@ runs:
     - name: Download Qwen3 ONNX model for testing
       if: runner.os == 'Linux'
       run: |
-        # Install huggingface-hub CLI if not available
-        if ! command -v huggingface-cli &> /dev/null; then
-          echo "Installing huggingface-hub..."
-          uv pip install --python .venv huggingface-hub[cli]
-        fi
 
         # Download the Qwen3 ONNX model to ensure complete files are available
         echo "Downloading Qwen3 ONNX model..."
-        huggingface-cli download onnx-community/Qwen3-Embedding-0.6B-ONNX
+        uvx --from 'huggingface_hub[cli]' huggingface-cli download onnx-community/Qwen3-Embedding-0.6B-ONNX
         echo "Qwen3 model download completed"
       shell: bash
 
