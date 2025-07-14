@@ -9,6 +9,7 @@ mod models;
 mod pipeline;
 mod project_manager;
 mod reqwestx;
+mod rescan_worker;
 mod sinks;
 mod task_manager;
 

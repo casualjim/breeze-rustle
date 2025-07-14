@@ -14,6 +14,7 @@ use lancedb::rerankers::rrf;
 use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
 use tracing::info;
+use uuid::Uuid;
 
 use crate::embeddings::EmbeddingProvider;
 use chunks::search_chunks;
@@ -104,7 +105,7 @@ async fn build_hybrid_query(
 ) -> Result<lancedb::query::VectorQuery> {
   let mut query_builder = table
     .query()
-    .only_if("project_id != '00000000-0000-0000-0000-000000000000'");
+    .only_if(format!("project_id != '{}'", Uuid::nil()));
 
   // Add project filter if provided
   if let Some(pid) = project_id {

@@ -33,6 +33,7 @@ impl BreezeService {
       name,
       directory,
       description,
+      rescan_interval,
     }: CreateProjectRequest,
   ) -> Result<CallToolResult, McpError> {
     info!("Creating project: {} at {}", name, directory);
@@ -40,7 +41,7 @@ impl BreezeService {
     match self
       .indexer
       .project_manager()
-      .create_project(name, directory, description)
+      .create_project(name, directory, description, rescan_interval.map(|v| *v))
       .await
     {
       Ok(project) => Ok(CallToolResult::success(vec![Content::text(format!(
@@ -156,6 +157,7 @@ impl BreezeService {
       project_id,
       name,
       description,
+      rescan_interval,
     }: UpdateProjectByIdRequest,
   ) -> Result<CallToolResult, McpError> {
     info!("Updating project: {}", project_id);
@@ -173,7 +175,7 @@ impl BreezeService {
     match self
       .indexer
       .project_manager()
-      .update_project(project_uuid, name, description)
+      .update_project(project_uuid, name, description, rescan_interval.map(|v| *v))
       .await
     {
       Ok(Some(project)) => Ok(CallToolResult::success(vec![Content::text(format!(

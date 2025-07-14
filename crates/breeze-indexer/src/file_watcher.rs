@@ -8,9 +8,10 @@ use notify::{
   event::{CreateKind, DataChange, ModifyKind},
 };
 use notify_debouncer_full::{DebounceEventResult, Debouncer, FileIdMap};
+use sysinfo::{Pid, System};
 use tokio::sync::RwLock;
 use tokio_util::sync::CancellationToken;
-use tracing::{error, info};
+use tracing::{debug, error, info};
 use uuid::Uuid;
 
 use crate::{IndexerError, task_manager::TaskManager};
@@ -45,12 +46,12 @@ impl ProjectWatcher {
     let project_id_clone = project_id;
     let project_path_clone = project_path_buf.clone();
 
-    // Create debouncer with 1 second timeout
-    let poll_interval = if cfg!(test) {
-      Duration::from_millis(100)
-    } else {
-      Duration::from_secs(3600) // 1 hour
-    };
+    // // Create debouncer with 1 second timeout
+    // let poll_interval = if cfg!(test) {
+    //   Duration::from_millis(100)
+    // } else {
+    //   Duration::from_secs(3600) // 1 hour
+    // };
 
     let debounce_timeout = if cfg!(test) {
       Duration::from_millis(500) // Much faster for tests
@@ -64,9 +65,15 @@ impl ProjectWatcher {
       Duration::from_secs(2)
     };
 
-    let config = Config::default()
-      .with_poll_interval(poll_interval)
-      .with_compare_contents(true);
+    let config = Config::default();
+    // .with_poll_interval(poll_interval)
+    // .with_compare_contents(true);
+
+    // Added logging for diagnosis
+    // debug!(
+    //   "Watcher config: poll_interval={:?}, compare_contents=false",
+    //   poll_interval
+    // );
 
     let mut debouncer =
       notify_debouncer_full::new_debouncer_opt(
@@ -166,6 +173,17 @@ impl ProjectWatcher {
     // Start watching
     debouncer.watch(project_path, RecursiveMode::Recursive)?;
 
+    // Added logging to monitor open files - requires sysinfo crate
+    // Note: Add sysinfo to Cargo.toml dependencies for this to work
+    let system = System::new_all();
+    let pid = std::process::id();
+    if let Some(process) = system.process(Pid::from_u32(pid)) {
+      debug!(
+        "Open files after watch setup: {}",
+        process.open_files().unwrap_or_default()
+      );
+    }
+
     Ok(Self {
       project_id,
 
@@ -183,6 +201,16 @@ impl ProjectWatcher {
   pub async fn wait_for_shutdown(&self, shutdown: CancellationToken) {
     shutdown.cancelled().await;
     info!("File watcher shutting down for project {}", self.project_id);
+
+    // Added logging for shutdown FD check
+    let system = System::new_all();
+    let pid = std::process::id();
+    if let Some(process) = system.process(Pid::from_u32(pid)) {
+      debug!(
+        "Open files at shutdown: {}",
+        process.open_files().unwrap_or_default()
+      );
+    }
   }
 }
 
@@ -228,12 +256,18 @@ mod tests {
     let (_temp_dir_config, config) = Config::test();
     let embedding_provider = create_embedding_provider(&config).await.unwrap();
 
+    let project_table = crate::models::Project::ensure_table(&connection, "test_projects")
+      .await
+      .unwrap();
+    let project_table = Arc::new(RwLock::new(project_table));
+
     let bulk_indexer = BulkIndexer::new(
       Arc::new(config),
       Arc::from(embedding_provider),
       384,
       code_table.clone(),
       chunk_table,
+      project_table,
     );
 
     let project_table = crate::models::Project::ensure_table(&connection, "test_projects")

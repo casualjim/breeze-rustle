@@ -150,7 +150,12 @@ async fn create_project(
   match state
     .indexer
     .project_manager()
-    .create_project(req.name, req.directory, req.description)
+    .create_project(
+      req.name,
+      req.directory,
+      req.description,
+      req.rescan_interval.map(|v| *v),
+    )
     .await
   {
     Ok(project) => {
@@ -190,7 +195,12 @@ async fn update_project(
   match state
     .indexer
     .project_manager()
-    .update_project(id, req.name, req.description)
+    .update_project(
+      id,
+      req.name,
+      req.description,
+      req.rescan_interval.map(|v| *v),
+    )
     .await
   {
     Ok(Some(project)) => Json(Into::<Project>::into(project)).into_response(),

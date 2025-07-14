@@ -105,23 +105,14 @@ pub async fn run(
 
   let indexer_arc = Arc::new(indexer);
 
-  // Disabled automatic file watching to prevent excessive file handle usage
-  // File watching can be enabled per-project as needed
-  // if let Err(e) = indexer_arc.start_all_project_watchers().await {
-  //   error!("Failed to start file watchers: {}", e);
-  //   // Don't fail server startup if watchers fail
-  // }
+  // Start file watchers for all existing projects
+  // Start all indexer components
+  if let Err(e) = indexer_arc.start().await {
+    error!("Failed to start indexer: {}", e);
+    // Handle error appropriately, maybe return?
+  }
 
-  // Spawn the task worker
-  let worker_shutdown = shutdown_token.clone().unwrap_or_default();
-  let worker_task_manager = indexer_arc.task_manager();
-  let _worker_handle = tokio::spawn(async move {
-    if let Err(e) = worker_task_manager.run_worker(worker_shutdown).await {
-      error!("Task worker error: {}", e);
-    }
-  });
-
-  let state = AppState::new(indexer_arc).await;
+  let state = AppState::new(indexer_arc.clone()).await;
 
   let metrics = metrics_layer();
 
@@ -135,7 +126,11 @@ pub async fn run(
   // );
 
   let handle = Handle::new();
-  tokio::spawn(graceful_shutdown(handle.clone(), shutdown_token.clone()));
+  tokio::spawn(graceful_shutdown(
+    handle.clone(),
+    shutdown_token.clone(),
+    indexer_arc.clone(),
+  ));
 
   // let session_layer = SessionManagerLayer::new(session_store)
   //   .with_secure(true)
@@ -239,6 +234,7 @@ pub async fn run(
     tokio::spawn(graceful_shutdown(
       redirect_handle.clone(),
       shutdown_token.clone(),
+      indexer_arc.clone(),
     ));
     // Spawn a server to redirect http requests to https
     tokio::spawn(redirect_http_to_https(
@@ -389,7 +385,12 @@ async fn redirect_http_to_https(ports: Ports, listener: TcpListener, handle: Han
 async fn graceful_shutdown(
   handle: Handle,
   external_token: Option<tokio_util::sync::CancellationToken>,
+  indexer_arc: Arc<breeze_indexer::Indexer>,
 ) {
+  indexer_arc.stop();
+  // Stop the indexer
+  // indexer_arc.stop(); // This needs to be passed in or accessed differently
+
   match external_token {
     Some(token) => {
       // Wait only for the external token - signals are handled elsewhere
