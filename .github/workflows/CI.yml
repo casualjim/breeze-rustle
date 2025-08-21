@@ -18,32 +18,50 @@ permissions:
   contents: read
 
 jobs:
-  test:
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest] # windows-latest
-        python-version: ["3.12"]
-        # python-version: ["3.12"]
+  test-rust:
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
       - name: Setup build environment
         uses: ./.github/actions/setup-env
         with:
-          python-version: ${{ matrix.python-version }}
+          python-version: "3.12"
 
       - name: Run Rust tests
+        env:
+          RUSTFLAGS: -C debuginfo=0
         run: |
           cargo nextest run --features local-embeddings --no-fail-fast --build-jobs 3
 
+  test-python:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup build environment
+        uses: ./.github/actions/setup-env
+        with:
+          python-version: "3.12"
+
       - name: Run Python tests
         run: |
-          cd crates/breeze-py && uv run --active pytest -v
+          cd crates/breeze-py && maturin develop && uv run --active pytest -v
+
+  test-node:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup build environment
+        uses: ./.github/actions/setup-env
+        with:
+          python-version: "3.12"
+
       - name: Install Node.js dependencies
         run: |
           cd crates/breeze-napi && npm install
+
       - name: Run Node.js tests
         run: |
           cd crates/breeze-napi && npm run test:all
@@ -51,7 +69,7 @@ jobs:
 
   linux:
     runs-on: ${{ matrix.platform.runner }}
-    needs: test
+    needs: [test-rust, test-python, test-node]
     strategy:
       matrix:
         platform:
@@ -198,7 +216,7 @@ jobs:
 
   macos:
     runs-on: ${{ matrix.platform.runner }}
-    needs: test
+    needs: [test-rust, test-python, test-node]
     strategy:
       matrix:
         platform:
@@ -237,7 +255,7 @@ jobs:
 
   sdist:
     runs-on: ubuntu-latest
-    needs: test
+    needs: [test-rust, test-python, test-node]
     steps:
       - uses: actions/checkout@v4
 
@@ -257,7 +275,7 @@ jobs:
 
   build-node:
     runs-on: ${{ matrix.settings.host }}
-    needs: test
+    needs: [test-rust, test-python, test-node]
     strategy:
       fail-fast: false
       matrix:

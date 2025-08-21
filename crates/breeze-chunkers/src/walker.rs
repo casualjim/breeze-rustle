@@ -16,6 +16,7 @@ use std::{
 };
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
+use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info};
 
 /// Default ignore patterns embedded from extra-ignores file
@@ -50,6 +51,7 @@ pub struct WalkOptions {
   pub max_file_size: Option<u64>,
   pub large_file_threads: usize,
   pub existing_hashes: std::collections::BTreeMap<PathBuf, [u8; 32]>,
+  pub cancel_token: Option<CancellationToken>,
 }
 
 impl Default for WalkOptions {
@@ -61,6 +63,7 @@ impl Default for WalkOptions {
       max_file_size: Some(5 * 1024 * 1024), // 5MB default
       large_file_threads: 4,
       existing_hashes: std::collections::BTreeMap::new(),
+      cancel_token: None,
     }
   }
 }
@@ -72,6 +75,7 @@ pub fn walk_project(
 ) -> impl Stream<Item = Result<ProjectChunk, ChunkError>> {
   let path = path.as_ref().to_owned();
   let max_file_size = options.max_file_size;
+  let cancel_token = options.cancel_token.clone();
 
   // Create a channel for streaming results
   let (tx, rx) = mpsc::channel::<Result<ProjectChunk, ChunkError>>(options.max_parallel * 2);
@@ -99,6 +103,13 @@ pub fn walk_project(
       }
     };
 
+    if let Some(cancel) = &cancel_token {
+      if cancel.is_cancelled() {
+        debug!("walk_project cancelled before processing files");
+        return;
+      }
+    }
+
     if file_entries.is_empty() {
       debug!("No files found to process");
       return;
@@ -112,12 +123,19 @@ pub fn walk_project(
         file_entries.iter().map(|(path, _)| path.clone()).collect();
       let tx_clone = tx.clone();
       let existing_hashes = options.existing_hashes.clone();
+      let cancel_clone = cancel_token.clone();
 
       // Emit delete chunks in a separate task to avoid blocking
       tokio::spawn(async move {
         let mut deleted_count = 0;
 
         for (existing_path, _) in existing_hashes {
+          if let Some(cancel) = &cancel_clone {
+            if cancel.is_cancelled() {
+              debug!("walk_project deletion emission cancelled");
+              break;
+            }
+          }
           if !collected_paths.contains(&existing_path) {
             // This file was in the index but no longer exists
             deleted_count += 1;
@@ -167,6 +185,7 @@ pub fn walk_project(
       options.large_file_threads,
       options.max_parallel,
       Arc::new(options.existing_hashes),
+      cancel_token,
     )
     .await;
   });
@@ -285,6 +304,7 @@ where
 {
   let project_root = project_root.as_ref().to_owned();
   let max_file_size = options.max_file_size;
+  let cancel_token = options.cancel_token.clone();
 
   // Create a channel for streaming results
   let (tx, rx) = mpsc::channel::<Result<ProjectChunk, ChunkError>>(options.max_parallel * 2);
@@ -308,6 +328,12 @@ where
     let mut files = Box::pin(files);
 
     while let Some(path) = files.next().await {
+      if let Some(cancel) = &cancel_token {
+        if cancel.is_cancelled() {
+          debug!("walk_files cancelled before file collection complete");
+          break;
+        }
+      }
       // First check if file exists
       match tokio::fs::metadata(&path).await {
         Ok(meta) => {
@@ -368,6 +394,7 @@ where
       options.large_file_threads,
       options.max_parallel,
       Arc::new(options.existing_hashes),
+      cancel_token,
     )
     .await;
   });
@@ -424,6 +451,7 @@ async fn process_with_dual_pools(
   large_file_threads: usize,
   small_file_threads: usize,
   existing_hashes: Arc<std::collections::BTreeMap<PathBuf, [u8; 32]>>,
+  cancel_token: Option<CancellationToken>,
 ) {
   use std::collections::VecDeque;
   use std::sync::Mutex;
@@ -452,6 +480,7 @@ async fn process_with_dual_pools(
     let existing_hashes = existing_hashes.clone();
     let skipped_files = skipped_files.clone();
     let skipped_size = skipped_size.clone();
+    let cancel_token = cancel_token.clone();
 
     let handle = tokio::spawn(async move {
       debug!("Large file worker {} started", i);
@@ -459,6 +488,12 @@ async fn process_with_dual_pools(
       let mut total_size_processed = 0u64;
 
       loop {
+        if let Some(cancel) = &cancel_token {
+          if cancel.is_cancelled() {
+            debug!("Large file worker {} cancelled", i);
+            break;
+          }
+        }
         // Take from the front (largest files)
         let work_item = {
           let mut queue = work_queue.lock().unwrap();
@@ -526,6 +561,7 @@ async fn process_with_dual_pools(
     let existing_hashes = existing_hashes.clone();
     let skipped_files = skipped_files.clone();
     let skipped_size = skipped_size.clone();
+    let cancel_token = cancel_token.clone();
 
     let handle = tokio::spawn(async move {
       debug!("Small file worker {} started", i);
@@ -533,6 +569,12 @@ async fn process_with_dual_pools(
       let mut total_size_processed = 0u64;
 
       loop {
+        if let Some(cancel) = &cancel_token {
+          if cancel.is_cancelled() {
+            debug!("Small file worker {} cancelled", i);
+            break;
+          }
+        }
         // Take from the back (smallest files)
         let work_item = {
           let mut queue = work_queue.lock().unwrap();
@@ -974,6 +1016,7 @@ python -m pytest tests/
         max_file_size: None,
         large_file_threads: 2,
         existing_hashes: std::collections::BTreeMap::new(),
+        cancel_token: None,
       },
     );
 
@@ -1032,6 +1075,7 @@ python -m pytest tests/
         max_file_size: None,
         large_file_threads: 2,
         existing_hashes: std::collections::BTreeMap::new(),
+        cancel_token: None,
       },
     );
 
@@ -1077,6 +1121,7 @@ python -m pytest tests/
         max_file_size: None,
         large_file_threads: 2,
         existing_hashes: std::collections::BTreeMap::new(),
+        cancel_token: None,
       },
     );
 
@@ -1104,6 +1149,7 @@ python -m pytest tests/
           max_file_size: None,
           large_file_threads: 2,
           existing_hashes: std::collections::BTreeMap::new(),
+          cancel_token: None,
         },
       );
 

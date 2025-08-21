@@ -4,7 +4,7 @@
     "": {
       "name": "breeze-rustle",
       "dependencies": {
-        "@kumos/tree-sitter-parsers": "^0.1.4",
+        "@kumos/tree-sitter-parsers": "latest",
       },
     },
   },

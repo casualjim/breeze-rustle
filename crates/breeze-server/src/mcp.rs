@@ -62,10 +62,16 @@ impl BreezeService {
       )
       .await
     {
-      Ok(project) => Ok(CallToolResult::success(vec![Content::text(format!(
-        "Successfully created project '{}' with ID: {}",
-        project.name, project.id
-      ))])),
+      Ok(project) => match self.indexer.index_project(project.id).await {
+        Ok(_) => Ok(CallToolResult::success(vec![Content::text(format!(
+          "Successfully created project '{}' with ID: {}",
+          project.name, project.id
+        ))])),
+        Err(e) => Ok(CallToolResult::error(vec![Content::text(format!(
+          "Failed to create project: {}",
+          e
+        ))])),
+      },
       Err(e) => Ok(CallToolResult::error(vec![Content::text(format!(
         "Failed to create project: {}",
         e

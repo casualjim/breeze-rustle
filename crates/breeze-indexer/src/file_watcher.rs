@@ -18,8 +18,9 @@ use crate::{IndexerError, task_manager::TaskManager};
 /// Manages file watching for a project
 pub struct ProjectWatcher {
   project_id: Uuid,
-
   _debouncer: Arc<RwLock<Debouncer<notify::RecommendedWatcher, FileIdMap>>>,
+  // Internal cancellation for background tasks spawned by the watcher
+  cancel: CancellationToken,
 }
 
 impl ProjectWatcher {
@@ -38,13 +39,6 @@ impl ProjectWatcher {
     let project_id_clone = project_id;
     let project_path_clone = project_path_buf.clone();
 
-    // // Create debouncer with 1 second timeout
-    // let poll_interval = if cfg!(test) {
-    //   Duration::from_millis(100)
-    // } else {
-    //   Duration::from_secs(3600) // 1 hour
-    // };
-
     let debounce_timeout = if cfg!(test) {
       Duration::from_millis(500) // Much faster for tests
     } else {
@@ -58,14 +52,6 @@ impl ProjectWatcher {
     };
 
     let config = Config::default();
-    // .with_poll_interval(poll_interval)
-    // .with_compare_contents(true);
-
-    // Added logging for diagnosis
-    // debug!(
-    //   "Watcher config: poll_interval={:?}, compare_contents=false",
-    //   poll_interval
-    // );
 
     let (event_sender, event_receiver) = flume::unbounded();
 
@@ -113,28 +99,6 @@ impl ProjectWatcher {
                         path: path.clone(),
                         operation: crate::models::FileOperation::Delete,
                       });
-                      // let docs = docs.read().await;
-                      // let result = docs
-                      //   .query()
-                      //   .only_if(format!(
-                      //     "file_path = '{}' and project_id = '{}'",
-                      //     path.display(),
-                      //     project_id
-                      //   ))
-                      //   .limit(1)
-                      //   .execute()
-                      //   .await;
-
-                      // if let Ok(mut stream) = result {
-                      //   if let Some(_) = stream.next().await {
-                      //     debug!(project_id = %project_id, "Scheduling delete for: {:?}", path);
-                      //     // If the file exists in the index, mark it for deletion
-                      //     changes.insert(crate::models::FileChange {
-                      //       path: path.clone(),
-                      //       operation: crate::models::FileOperation::Delete,
-                      //     });
-                      //   }
-                      // }
                     }
                     _ => {} // Ignore other event types
                   }
@@ -175,28 +139,36 @@ impl ProjectWatcher {
     // Added logging to monitor open files - requires sysinfo crate
     // Note: Add sysinfo to Cargo.toml dependencies for this to work
 
+    let watcher_cancel = CancellationToken::new();
+
     tokio::spawn({
       let project_id = project_id.clone();
       let system = System::new_all();
       let pid = std::process::id();
+      let cancel = watcher_cancel.clone();
       async move {
+        let mut interval = tokio::time::interval(Duration::from_secs(60));
         loop {
-          if let Some(process) = system.process(Pid::from_u32(pid)) {
-            debug!(
-              "Open files after watch setup: {}, watcher project = {}",
-              process.open_files().unwrap_or_default(),
-              project_id
-            );
+          tokio::select! {
+            _ = cancel.cancelled() => break,
+            _ = interval.tick() => {
+              if let Some(process) = system.process(Pid::from_u32(pid)) {
+                debug!(
+                  "Open files after watch setup: {}, watcher project = {}",
+                  process.open_files().unwrap_or_default(),
+                  project_id
+                );
+              }
+            }
           }
-          tokio::time::sleep(Duration::from_secs(60)).await; // Log every minute
         }
       }
     });
 
     Ok(Self {
       project_id,
-
       _debouncer: Arc::new(RwLock::new(debouncer)),
+      cancel: watcher_cancel,
     })
   }
 
@@ -210,6 +182,9 @@ impl ProjectWatcher {
   pub async fn wait_for_shutdown(&self, shutdown: CancellationToken) {
     shutdown.cancelled().await;
     info!("File watcher shutting down for project {}", self.project_id);
+
+    // stop internal background tasks
+    self.cancel.cancel();
 
     // Added logging for shutdown FD check
     let system = System::new_all();

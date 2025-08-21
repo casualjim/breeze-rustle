@@ -40,11 +40,32 @@ impl ProjectManager {
       return Err(IndexerError::PathNotAbsolute(path.display().to_string()));
     }
 
-    // Try to canonicalize for consistent lookups
-    let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    // If the full path doesn't exist (e.g., a file inside a dir),
+    // canonicalize the nearest existing ancestor and append the tail
+    let mut existing_ancestor = Some(path);
+    while let Some(p) = existing_ancestor {
+      if p.exists() {
+        break;
+      }
+      existing_ancestor = p.parent();
+    }
+
+    let normalized = if let Some(ancestor) = existing_ancestor {
+      // Canonicalize the ancestor (this resolves symlinks like /var -> /private/var on macOS)
+      let ancestor_canon = ancestor
+        .canonicalize()
+        .unwrap_or_else(|_| ancestor.to_path_buf());
+      // Append the remaining components (if any)
+      let tail = path.strip_prefix(ancestor).unwrap_or(path);
+      ancestor_canon.join(tail)
+    } else {
+      // Should not happen for absolute paths (at least '/' exists),
+      // but fall back to the original path just in case
+      path.to_path_buf()
+    };
 
     // Convert to string and remove trailing slash
-    let mut path_str = canonical.to_string_lossy().to_string();
+    let mut path_str = normalized.to_string_lossy().to_string();
     if path_str.ends_with('/') && path_str.len() > 1 {
       path_str.pop();
     }
@@ -59,21 +80,29 @@ impl ProjectManager {
   ) -> Result<Option<Project>, IndexerError> {
     let canonical_path = Self::canonicalize_path(path)?;
 
+    // Fetch all projects and find the longest directory that is a prefix of the provided path
     let table = self.project_table.read().await;
+    let mut stream = table.query().execute().await?;
 
-    let mut stream = table
-      .query()
-      .only_if(format!("directory = '{}'", canonical_path.replace("'", "''")).as_str())
-      .limit(1)
-      .execute()
-      .await?;
-
-    if let Some(batch) = stream.try_next().await? {
-      let project = Project::from_record_batch(&batch, 0)?;
-      Ok(Some(project))
-    } else {
-      Ok(None)
+    let mut projects: Vec<Project> = Vec::new();
+    while let Some(batch) = stream.try_next().await? {
+      for i in 0..batch.num_rows() {
+        projects.push(Project::from_record_batch(&batch, i)?);
+      }
     }
+
+    // Sort by directory length descending to prefer the most specific (deepest) path
+    projects.sort_by(|a, b| b.directory.len().cmp(&a.directory.len()));
+
+    let needle = Path::new(&canonical_path);
+    for project in projects.into_iter() {
+      let proj_path = Path::new(&project.directory);
+      if needle.starts_with(proj_path) {
+        return Ok(Some(project));
+      }
+    }
+
+    Ok(None)
   }
 
   /// Create a new project
@@ -88,7 +117,7 @@ impl ProjectManager {
     let canonical_directory = Self::canonicalize_path(&directory)?;
 
     // Check if a project already exists for this directory
-    if let Some(existing) = self.find_by_path(&canonical_directory).await? {
+    if let Some(existing) = self.get_by_directory(&canonical_directory).await? {
       return Err(IndexerError::ProjectAlreadyExists {
         directory: canonical_directory,
         existing_id: existing.id,
@@ -281,12 +310,18 @@ impl ProjectManager {
   }
 
   /// Check if a directory is already associated with a project
-  pub async fn find_by_directory(&self, directory: &str) -> Result<Option<Project>, IndexerError> {
+  pub async fn get_by_directory<P: AsRef<Path>>(
+    &self,
+    directory: P,
+  ) -> Result<Option<Project>, IndexerError> {
+    // Normalize the input directory to match stored canonical form
+    let canonical_dir = Self::canonicalize_path(directory)?;
+
     let table = self.project_table.read().await;
 
     let mut stream = table
       .query()
-      .only_if(format!("directory = '{}'", directory.replace("'", "''")).as_str())
+      .only_if(format!("directory = '{}'", canonical_dir.replace("'", "''")).as_str())
       .limit(1)
       .execute()
       .await?;
@@ -615,7 +650,7 @@ mod tests {
 
     // Find by directory
     let found = project_manager
-      .find_by_path(&dir_path)
+      .get_by_directory(&dir_path)
       .await
       .unwrap()
       .unwrap();
@@ -625,7 +660,10 @@ mod tests {
     assert_eq!(found.directory, project.directory);
 
     // Try non-existent directory
-    let not_found = project_manager.find_by_path("/non/existent").await.unwrap();
+    let not_found = project_manager
+      .get_by_directory("/non/existent")
+      .await
+      .unwrap();
     assert!(not_found.is_none());
   }
 
@@ -1064,5 +1102,93 @@ mod tests {
       0,
       "No rescan tasks should be submitted for edge cases"
     );
+  }
+
+  #[tokio::test]
+  async fn test_find_by_path_longest_prefix() {
+    let (project_manager, temp_dir) = create_test_project_manager().await;
+
+    // Create a small directory tree
+    let root = temp_dir.path().join("prefix_root");
+    std::fs::create_dir(&root).unwrap();
+    let dir_a = root.join("a");
+    std::fs::create_dir(&dir_a).unwrap();
+    let dir_ab = dir_a.join("b");
+    std::fs::create_dir(&dir_ab).unwrap();
+
+    // Create two projects, one nested inside the other
+    let proj_a = project_manager
+      .create_project(
+        "Proj A".to_string(),
+        dir_a.to_str().unwrap().to_string(),
+        None,
+        None,
+      )
+      .await
+      .unwrap();
+    let proj_ab = project_manager
+      .create_project(
+        "Proj AB".to_string(),
+        dir_ab.to_str().unwrap().to_string(),
+        None,
+        None,
+      )
+      .await
+      .unwrap();
+
+    // A deeper path under the more specific project directory
+    let deep_path = dir_ab.join("c").join("file.txt");
+    let found = project_manager
+      .find_by_path(&deep_path)
+      .await
+      .unwrap()
+      .expect("should find a project");
+
+    // Should choose the longest matching prefix (proj_ab)
+    assert_eq!(found.id, proj_ab.id);
+    assert_ne!(found.id, proj_a.id);
+  }
+
+  #[tokio::test]
+  async fn test_find_by_path_no_match() {
+    let (project_manager, temp_dir) = create_test_project_manager().await;
+
+    // Create one project
+    let dir_a = temp_dir.path().join("some_project");
+    std::fs::create_dir(&dir_a).unwrap();
+    project_manager
+      .create_project(
+        "Some Project".to_string(),
+        dir_a.to_str().unwrap().to_string(),
+        None,
+        None,
+      )
+      .await
+      .unwrap();
+
+    // Query with an absolute path outside any project roots
+    let unrelated = temp_dir.path().join("unrelated").join("path");
+    // no need to create; path just needs to be absolute
+    let result = project_manager.find_by_path(&unrelated).await.unwrap();
+    assert!(result.is_none());
+  }
+
+  #[tokio::test]
+  async fn test_find_by_path_requires_absolute() {
+    let (project_manager, _temp_dir) = create_test_project_manager().await;
+
+    // Relative path should error
+    let rel = Path::new("relative/path");
+    let err = project_manager
+      .find_by_path(rel)
+      .await
+      .err()
+      .expect("expected error");
+    match err {
+      IndexerError::PathNotAbsolute(msg) => {
+        assert!(msg.contains("relative/path"));
+      }
+      other => panic!("unexpected error: {other:?}"),
+    }
   }
 }

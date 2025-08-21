@@ -91,8 +91,12 @@ pub async fn run(
   let https_port = args.https_port;
 
   // Get TLS config if needed (before moving indexer)
+  // Keep the ACME background handle so we can abort it on shutdown
+  let mut acme_handle: Option<JoinHandle<()>> = None;
   let tls_config_result = if tls_enabled {
-    Some(make_tls_config(&args).await?)
+    let (config, jh) = make_tls_config(&args).await?;
+    acme_handle = Some(jh);
+    Some((config, ()))
   } else {
     None
   };
@@ -212,7 +216,7 @@ pub async fn run(
   // this will enable us to keep application running during recompile: systemfd --no-pid -s http::8080 -s https::8443 -- cargo watch -x run
   let mut listenfd = ListenFd::from_env();
 
-  if let Some((config, _jh)) = tls_config_result {
+  if let Some((config, _)) = tls_config_result {
     // TLS is enabled - set up both HTTP (for redirect) and HTTPS listeners
 
     let http_listener = listenfd.take_tcp_listener(0)?.unwrap_or_else(|| {
@@ -271,6 +275,13 @@ pub async fn run(
       .handle(handle.clone())
       .serve(app.into_make_service_with_connect_info::<SocketAddr>());
     server.await?;
+  }
+
+  // Ensure ACME background task (if any) is stopped
+  if let Some(jh) = acme_handle.take() {
+    jh.abort();
+    let _ = jh.await; // ignore JoinError on abort
+    debug!("ACME background task aborted");
   }
 
   debug!("Server run function completing");
@@ -425,14 +436,22 @@ async fn graceful_shutdown(
   indexer_arc.stop();
 
   info!("waiting for connections to close");
+  let max_wait = Duration::from_secs(15);
+  let start = std::time::Instant::now();
   handle.graceful_shutdown(Some(Duration::from_secs(10)));
   loop {
     let count = handle.connection_count();
     if count == 0 {
       break;
     }
-    debug!("alive connections count={count}",);
-    sleep(Duration::from_secs(1)).await;
+    if start.elapsed() > max_wait {
+      // Force shutdown to avoid hanging indefinitely on long-lived connections
+      error!(remaining = count, "forcing shutdown after timeout");
+      handle.shutdown();
+      break;
+    }
+    debug!("alive connections count={count}");
+    sleep(Duration::from_millis(500)).await;
   }
   debug!("graceful shutdown complete");
 }

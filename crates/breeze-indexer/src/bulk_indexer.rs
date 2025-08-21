@@ -159,6 +159,7 @@ impl BulkIndexer {
       max_file_size: self.config.max_file_size,
       large_file_threads: self.config.large_file_threads.unwrap_or(4),
       existing_hashes,
+      cancel_token: cancel_token.clone(),
     };
 
     let chunk_stream = walk_project(project_path.to_path_buf(), walk_options);
@@ -350,6 +351,7 @@ impl BulkIndexer {
       max_file_size: self.config.max_file_size,
       large_file_threads: self.config.large_file_threads.unwrap_or(4),
       existing_hashes,
+      cancel_token: cancel_token.clone(),
     };
 
     // Use the walk_files function from chunkers

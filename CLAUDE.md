@@ -50,14 +50,14 @@ The project also includes:
 ### Building
 
 ```bash
-just build
+mise build
 ```
 
 ### Testing
 
 ```bash
 # Run Rust tests
-just test
+mise test
 ```
 
 ## Architecture
@@ -81,7 +81,7 @@ The project is a Rust workspace with multiple crates:
    - Case-insensitive API with lowercase normalization
 
 4. **Build System**:
-   - Uses `just` for task running
+   - Uses `mise` for task running
    - `maturin` handles Python packaging
    - Grammars compiled via cc crate in build.rs
 

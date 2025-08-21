@@ -33,8 +33,7 @@ chunk_overlap = 0.1
 [indexer.limits]
 file_size = "5M"  # 5M - files larger than this are skipped
 # Optional: Override the automatic chunk size calculation
-# max_chunk_size = 512  # Maximum tokens per chunk
-max_chunk_size = 4096  # Maximum tokens per chunk
+max_chunk_size = 512  # Maximum tokens per chunk (ends up around 50 LOC usually)
 
 [indexer.workers]
 small_file = 8   # Number of files to process concurrently
@@ -86,7 +85,7 @@ max_concurrent_requests = 10
 max_tokens_per_request = 64_000
 
 # runpodctl create pod \
-#  --gpuType 'NVIDIA GeForce RTX 3090' \
+#  --gpuType 'NVIDIA A40' \
 #  --imageName vllm/vllm-openai:latest \
 #  --volumeSize 30 \
 #  --containerDiskSize 10 \
@@ -107,7 +106,7 @@ tokenizer = "hf:Qwen/Qwen3-Embedding-0.6B"
 requests_per_minute = 10
 tokens_per_minute = 1_000_000
 max_concurrent_requests = 5
-max_tokens_per_request = 128_000
+max_tokens_per_request = 100_000
 max_batch_size = 150
 
 [embeddings.voyage]

@@ -465,6 +465,7 @@ async fn async_main() {
             max_parallel,
             max_file_size,
             large_file_threads: 4,
+            ..Default::default()
           },
         );
 
@@ -590,6 +591,72 @@ async fn async_main() {
         config.server.ports.http, config.server.ports.https
       );
 
+      // Additional startup configuration details
+      // Max file size (configured)
+      if let Some(size) = config.indexer.limits.file_size.as_deref() {
+        info!("Max file size: {} bytes", size);
+      } else {
+        info!("Max file size: 5MB");
+      }
+
+      // Max chunk size (configured)
+      match config.indexer.limits.max_chunk_size {
+        Some(sz) => info!("Max chunk size (configured): {} tokens", sz),
+        None => info!("Max chunk size (configured): not set"),
+      }
+
+      // Embedding provider/model/dimensions (configured)
+      let provider_name = config.embeddings.provider.clone();
+      let (model_name, embedding_dim) = match provider_name.as_str() {
+        "local" => {
+          let model = config
+            .embeddings
+            .local
+            .as_ref()
+            .map(|l| l.model.clone())
+            .unwrap_or_else(|| "(default) BAAI/bge-small-en-v1.5".to_string());
+          let dim = config
+            .embeddings
+            .local
+            .as_ref()
+            .and_then(|l| l.embedding_dim)
+            .map(|d| d.to_string())
+            .unwrap_or_else(|| "unknown".to_string());
+          (model, dim)
+        }
+        "voyage" => {
+          let model = config
+            .embeddings
+            .voyage
+            .as_ref()
+            .map(|v| v.model.clone())
+            .unwrap_or_else(|| "(unset)".to_string());
+          let dim = config
+            .embeddings
+            .voyage
+            .as_ref()
+            .and_then(|v| v.embedding_dim)
+            .map(|d| d.to_string())
+            .unwrap_or_else(|| "unknown".to_string());
+          (model, dim)
+        }
+        other => {
+          // OpenAI-like (custom) provider
+          if let Some(p) = config.embeddings.providers.get(other) {
+            let dim = p
+              .embedding_dim
+              .map(|d| d.to_string())
+              .unwrap_or_else(|| "unknown".to_string());
+            (p.model.clone(), dim)
+          } else {
+            ("(unset)".to_string(), "unknown".to_string())
+          }
+        }
+      };
+      info!("Embedding provider: {}", provider_name);
+      info!("Embedding model: {}", model_name);
+      info!("Embedding dimensions: {}", embedding_dim);
+
       // Convert indexer config
       let indexer_config = match config.to_indexer_config() {
         Ok(cfg) => cfg,
@@ -598,6 +665,10 @@ async fn async_main() {
           std::process::exit(1);
         }
       };
+
+      // Log effective (optimal) chunk size based on provider/tier
+      let effective_chunk = indexer_config.optimal_chunk_size();
+      info!("Max chunk size (effective): {} tokens", effective_chunk);
 
       // Create server config from breeze config
       let server_config = breeze_server::Config {

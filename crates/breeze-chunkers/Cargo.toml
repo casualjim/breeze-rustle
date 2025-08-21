@@ -27,11 +27,12 @@ memchr = "2.7.5"
 serde.workspace = true
 
 text-splitter = { workspace = true }
-thiserror = "2.0"
+thiserror.workspace = true
 tiktoken-rs = { workspace = true }
 tokenizers.workspace = true
 tokio.workspace = true
 tokio-stream.workspace = true
+tokio-util.workspace = true
 tracing.workspace = true
 tree-sitter.workspace = true
 tree-sitter-language.workspace = true

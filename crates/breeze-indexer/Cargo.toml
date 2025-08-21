@@ -77,7 +77,7 @@ small_ctor = "0.1.2"
 strum = { version = "0.27.1", features = ["derive"] }
 sysinfo = "0.37.0"
 tempfile = "3"
-thiserror = "2.0"
+thiserror.workspace = true
 
 # Tokenizer support
 tiktoken-rs.workspace = true

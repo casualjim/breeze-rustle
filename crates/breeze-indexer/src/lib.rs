@@ -9,7 +9,7 @@ mod models;
 mod pipeline;
 mod project_manager;
 mod reqwestx;
-mod rescan_worker;
+// mod rescan_worker;
 mod sinks;
 mod task_manager;
 
@@ -73,4 +73,3 @@ pub fn ensure_ort_initialized() -> Result<(), Box<dyn std::error::Error>> {
 pub fn ensure_ort_initialized() -> Result<(), Box<dyn std::error::Error>> {
   Err("Local embeddings support not enabled. Enable the 'local-embeddings' feature to use local embedding models.".into())
 }
-

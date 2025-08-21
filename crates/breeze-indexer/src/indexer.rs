@@ -4,7 +4,6 @@ use lancedb::Table;
 use std::collections::BTreeSet;
 use std::path::Path;
 use std::sync::Arc;
-use std::time::Duration;
 use tokio::sync::RwLock;
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info};
@@ -18,7 +17,6 @@ use crate::{
   hybrid_search,
   models::{CodeDocument, FileChange, FileOperation, Project},
   project_manager::ProjectManager,
-  rescan_worker,
   task_manager::TaskManager,
 };
 
@@ -360,13 +358,13 @@ impl Indexer {
     });
 
     // Start rescan worker
-    let rescan_shutdown = self.shutdown_token.clone();
-    rescan_worker::start_rescan_worker(
-      self.project_manager.clone(),
-      self.task_manager.clone(),
-      Duration::from_secs(300), // Rescan every 5 minutes
-      rescan_shutdown,
-    );
+    // let rescan_shutdown = self.shutdown_token.clone();
+    // rescan_worker::start_rescan_worker(
+    //   self.project_manager.clone(),
+    //   self.task_manager.clone(),
+    //   Duration::from_secs(300), // Rescan every 5 minutes
+    //   rescan_shutdown,
+    // );
 
     Ok(())
   }

@@ -26,6 +26,9 @@ The easiest way to get the required tools is to use: [mise](https://mise.jdx.dev
 git clone https://github.com/casualjim/breeze-rustle
 cd breeze-rustle
 
+bun install 
+# npm install
+
 # Install dependencies and build
 mise build
 ```
@@ -49,17 +52,15 @@ Note: This will take a long time because we have many tree-sitter parsers to lin
 # Initialize configuration
 breeze init
 
-# Index a codebase
-breeze index <path>
-
-# Search indexed code
-breeze search <query>
-
 # Start the API server
 breeze serve
 
-# Debug chunking
-breeze debug chunk-directory <path>
+# Index a codebase
+breeze project create <name> <path>
+
+# Search indexed code
+breeze search --project PROJECT_ROOT <query>
+
 ```
 
 ### Configuration
