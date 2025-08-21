@@ -1,3 +1,5 @@
+use std::any::TypeId;
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use breeze_indexer::Indexer;
@@ -12,9 +14,55 @@ use rmcp::transport::streamable_http_server::{
   StreamableHttpService, session::local::LocalSessionManager,
 };
 use rmcp::{ErrorData, RoleServer, ServerHandler, model::*, service::RequestContext, tool};
+use schemars::JsonSchema;
+use schemars::generate::SchemaSettings;
+use schemars::transform::AddNullable;
 use tracing::info;
 
 use crate::types::*;
+
+/// A shortcut for generating a JSON schema for a type.
+pub fn schema_for_type<T: JsonSchema>() -> JsonObject {
+  let settings = SchemaSettings::draft07().with_transform(AddNullable::default());
+  let generator = settings.into_generator();
+  let schema = generator.into_root_schema_for::<T>();
+  let object = serde_json::to_value(schema).expect("failed to serialize schema");
+  match object {
+    serde_json::Value::Object(mut object) => {
+      // Remove meta-schema URL to prevent draft meta-schema validation
+      object.remove("$schema");
+      object
+    }
+    _ => panic!(
+      "Schema serialization produced non-object value: expected JSON object but got {:?}",
+      object
+    ),
+  }
+}
+
+/// Call [`schema_for_type`] with a cache
+pub fn cached_schema_for_type<T: JsonSchema + std::any::Any>() -> Arc<JsonObject> {
+  thread_local! {
+      static CACHE_FOR_TYPE: std::sync::RwLock<HashMap<TypeId, Arc<JsonObject>>> = Default::default();
+  };
+  CACHE_FOR_TYPE.with(|cache| {
+    if let Some(x) = cache
+      .read()
+      .expect("schema cache lock poisoned")
+      .get(&TypeId::of::<T>())
+    {
+      x.clone()
+    } else {
+      let schema = schema_for_type::<T>();
+      let schema = Arc::new(schema);
+      cache
+        .write()
+        .expect("schema cache lock poisoned")
+        .insert(TypeId::of::<T>(), schema.clone());
+      schema
+    }
+  })
+}
 
 #[derive(Clone)]
 pub struct BreezeService {
@@ -31,15 +79,14 @@ impl BreezeService {
     }
   }
 
-  #[tool(description = "Create a new project for indexing")]
+  #[tool(description = "Create a new project for indexing", input_schema = cached_schema_for_type::<CreateProject>())]
   async fn create_project(
     &self,
-    Parameters(CreateProjectRequest {
+    Parameters(CreateProject {
       name,
       path,
       description,
-      rescan_interval,
-    }): Parameters<CreateProjectRequest>,
+    }): Parameters<CreateProject>,
   ) -> Result<CallToolResult, ErrorData> {
     let project_path = std::path::PathBuf::from(path);
     let name = name.unwrap_or_else(|| {
@@ -58,7 +105,7 @@ impl BreezeService {
         name,
         project_path.to_string_lossy().to_string(),
         description,
-        rescan_interval.map(|v| *v),
+        None,
       )
       .await
     {
@@ -79,30 +126,40 @@ impl BreezeService {
     }
   }
 
-  #[tool(description = "Search code using semantic understanding")]
+  #[tool(description = "Search code using semantic understanding. Provide an absolute project path in the 'path' field to bound the search (e.g., /Users/alice/workspace/myproj). Relative paths are not accepted.", input_schema = cached_schema_for_type::<SimpleSearchRequest>())]
   async fn search_code(
     &self,
     Parameters(search_req): Parameters<SimpleSearchRequest>,
   ) -> Result<CallToolResult, ErrorData> {
-    let limit = search_req.limit.unwrap_or(10);
+    let limit: usize = match search_req.limit {
+      Some(l) if l >= 0 => l as usize,
+      _ => 10,
+    };
 
+    let search_req_path = search_req.path.filter(|v| v.trim().is_empty());
     info!("Searching for '{}' with limit {}", search_req.query, limit);
+
+    let project_id = match search_req_path {
+      Some(path) => {
+        if let Ok(Some(project)) = self.indexer.project_manager().find_by_path(&path).await {
+          Some(project.id)
+        } else {
+          None
+        }
+      }
+      None => None,
+    };
 
     let options = SearchOptions {
       file_limit: limit,
       chunks_per_file: 3,
       granularity: IndexerSearchGranularity::Chunk,
-
       ..Default::default()
     };
 
     match self
       .indexer
-      .search(
-        &search_req.query,
-        options,
-        None, /*search_req.project_id*/
-      )
+      .search(&search_req.query, options, project_id)
       .await
     {
       Ok(results) => Ok(CallToolResult::success(vec![Content::json(results)?])),

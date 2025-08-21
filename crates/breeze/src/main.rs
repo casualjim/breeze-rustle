@@ -265,14 +265,15 @@ async fn async_main() {
       scope_depth,
       has_definitions,
       has_references,
-      project_id,
+      path,
     } => {
       info!("Starting search for: \"{}\"", query);
 
       match breeze::App::new(config, shutdown_token.clone()).await {
         Ok(app) => {
           let req = SearchRequest {
-            project_id,
+            project_id: None, // No project ID for CLI search
+            path: path.map(|p| p.display().to_string()),
             query,
             limit,
             chunks_per_file,

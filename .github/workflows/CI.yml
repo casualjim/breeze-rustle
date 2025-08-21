@@ -59,7 +59,7 @@ jobs:
           set -euo pipefail
           cd crates/breeze-py
           uv sync --active
-          maturin develop
+          uv run --active maturin develop
           uv run --active pytest -v
 
   test-node:
@@ -401,3 +401,119 @@ jobs:
           draft: false
           prerelease: false
           generate_release_notes: true
+
+  docker-publish:
+    name: Publish Docker image to GHCR
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: [linux]
+    permissions:
+      contents: read
+      packages: write
+    env:
+      IMAGE_NAME: ghcr.io/casualjim/breeze
+      ORT_VERSION: "1.22.0" # default; override by editing here if bumping
+      ORT_FLAVOR: "cpu"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup build environment
+        uses: ./.github/actions/setup-env
+        with:
+          python-version: "3.12"
+
+      - name: Download Linux breeze artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: breeze-binary-linux-*
+          merge-multiple: true
+          path: docker-input
+
+      - name: Prepare dist/ layout from artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist/linux-amd64 dist/linux-arm64
+          # Expand the uploaded tarballs: names like breeze-<target>-unknown-linux-gnu.tar.xz
+          for f in docker-input/*.tar.xz; do
+            echo "Extracting $f"
+            # derive target 'x86_64' or 'aarch64' from filename
+            base=$(basename "$f")
+            if [[ "$base" == *x86_64-unknown-linux-gnu* ]]; then archdir="linux-amd64"; else archdir="linux-arm64"; fi
+            tar -xJf "$f" -C "."
+            # Expect a 'breeze' binary in the current directory after extraction
+            test -f breeze
+            mv breeze "dist/${archdir}/breeze"
+            chmod +x "dist/${archdir}/breeze"
+          done
+
+      - name: Fetch ONNX Runtime libs (outside Docker)
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist/linux-amd64/ort/lib dist/linux-arm64/ort/lib
+          # Map docker arch to ORT archive arch names
+          declare -A map
+          map[linux-amd64]=x64
+          map[linux-arm64]=aarch64
+          for archdir in linux-amd64 linux-arm64; do
+            ort_arch="${map[$archdir]}"
+            url="https://github.com/microsoft/onnxruntime/releases/download/v${ORT_VERSION}/onnxruntime-linux-${ort_arch}-${ORT_VERSION}.tgz"
+            echo "Downloading ORT ${ORT_VERSION} for ${archdir} from ${url}"
+            curl -fsSL "$url" -o ort.tgz
+            tar -xzf ort.tgz
+            rm -f ort.tgz
+            srcdir="onnxruntime-linux-${ort_arch}-${ORT_VERSION}/lib"
+            test -d "$srcdir"
+            cp -a "$srcdir/." "dist/${archdir}/ort/lib/"
+            rm -rf "onnxruntime-linux-${ort_arch}-${ORT_VERSION}"
+          done
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64,amd64
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Docker metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: |
+            ${{ env.IMAGE_NAME }}
+          tags: |
+            type=semver,pattern={{version}},value=${{ github.ref_name }}
+            type=semver,pattern={{major}}.{{minor}},value=${{ github.ref_name }}
+            type=semver,pattern={{major}},value=${{ github.ref_name }}
+            type=raw,value=latest
+            type=raw,value=stable
+
+      - name: Build and push multi-arch image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          provenance: false
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            VERSION=${{ github.ref_name }}
+            VCS_REF=${{ github.sha }}
+            REPO_URL=https://github.com/${{ github.repository }}
+            ORT_VERSION=${{ env.ORT_VERSION }}
+            ORT_FLAVOR=${{ env.ORT_FLAVOR }}
+
+      - name: Verify manifest
+        run: |
+          docker buildx imagetools inspect ${{ env.IMAGE_NAME }}:${{ github.ref_name }}

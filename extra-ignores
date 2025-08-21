@@ -23,6 +23,8 @@ Gemfile.lock
 pnpm-lock.yaml
 go.sum
 mix.lock
+uv.lock
+
 
 # Build/cache artifacts
 node_modules/

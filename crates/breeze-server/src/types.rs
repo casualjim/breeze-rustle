@@ -18,6 +18,24 @@ pub struct CreateProjectRequest {
   pub rescan_interval: Option<HumanDuration>,
 }
 
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[schemars(
+  title = "CreateProject",
+  description = "Create a new project for indexing. Provide the absolute path to the project root."
+)]
+pub struct CreateProject {
+  #[schemars(
+    description = "Absolute filesystem path to the project root (e.g., /Users/alice/workspace/myproj)"
+  )]
+  pub path: String,
+  #[schemars(
+    description = "Optional display name for the project; defaults to the directory name if omitted"
+  )]
+  pub name: Option<String>,
+  #[schemars(description = "Optional human-friendly description of the project")]
+  pub description: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct Project {
   pub id: Uuid,
@@ -63,6 +81,7 @@ pub struct IndexFileRequest {
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
 pub struct SearchRequest {
   pub project_id: Option<Uuid>,
+  pub path: Option<String>,
   pub query: String,
   pub limit: Option<usize>,
   pub chunks_per_file: Option<usize>,
@@ -79,13 +98,25 @@ pub struct SearchRequest {
 }
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[schemars(
+  title = "SimpleSearchRequest",
+  description = "Search code using semantic understanding, bounded to a project directory."
+)]
 pub struct SimpleSearchRequest {
   /// The path to search within
+  #[schemars(
+    description = "Absolute project path used to bound the search. Provide the full filesystem path (e.g., /Users/alice/workspace/myproj). Relative paths are not accepted."
+  )]
   pub path: Option<String>,
   /// The search query
+  #[schemars(description = "The semantic search query text")]
   pub query: String,
   /// The maximum number of results to return
-  pub limit: Option<usize>,
+  #[schemars(
+    description = "Maximum number of files to return (default 10). Must be positive if provided.",
+    range(min = 1)
+  )]
+  pub limit: Option<isize>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
