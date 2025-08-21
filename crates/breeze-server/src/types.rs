@@ -80,9 +80,11 @@ pub struct SearchRequest {
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
 pub struct SimpleSearchRequest {
-  pub project_id: Option<Uuid>,
+  /// The path to search within
   pub path: Option<String>,
+  /// The search query
   pub query: String,
+  /// The maximum number of results to return
   pub limit: Option<usize>,
 }
 

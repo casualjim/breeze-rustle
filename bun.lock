@@ -1,0 +1,30 @@
+{
+  "lockfileVersion": 1,
+  "workspaces": {
+    "": {
+      "name": "breeze-rustle",
+      "dependencies": {
+        "@kumos/tree-sitter-parsers": "^0.1.4",
+      },
+    },
+  },
+  "packages": {
+    "@kumos/tree-sitter-parsers": ["@kumos/tree-sitter-parsers@0.1.4", "", { "optionalDependencies": { "@kumos/tree-sitter-parsers-darwin-arm64": "0.1.4", "@kumos/tree-sitter-parsers-darwin-x64": "0.1.4", "@kumos/tree-sitter-parsers-linux-arm64": "0.1.4", "@kumos/tree-sitter-parsers-linux-arm64-musl": "0.1.4", "@kumos/tree-sitter-parsers-linux-x64": "0.1.4", "@kumos/tree-sitter-parsers-linux-x64-musl": "0.1.4", "@kumos/tree-sitter-parsers-win32-arm64": "0.1.4", "@kumos/tree-sitter-parsers-win32-x64": "0.1.4" }, "bin": { "tree-sitter-parsers-path": "bin/tree-sitter-parsers-path.js" } }, "sha512-jXT5DXGiHo7EPdtIrVPSKnPTa+qNWJiPE8KDUcyDR9dzVCwLlGKTV+j5GXioz+MVBrEzOp0c61H/+tn3WPiBrw=="],
+
+    "@kumos/tree-sitter-parsers-darwin-arm64": ["@kumos/tree-sitter-parsers-darwin-arm64@0.1.4", "", { "os": "darwin", "cpu": "arm64" }, "sha512-lCYlGjfI2f7bU6HAl0y3aQjqZc6YFKcKSy7QwgNn8AG/W/VTpeY5WFwfOixBY7DBH9wmdJUt00/PQL+uGFffUw=="],
+
+    "@kumos/tree-sitter-parsers-darwin-x64": ["@kumos/tree-sitter-parsers-darwin-x64@0.1.4", "", { "os": "darwin", "cpu": "x64" }, "sha512-jHSdPYudZARZBpLXXRJ71IpCA8W43JSBjl3pxG00ECqSnmPP3rGBLegRP+MLJQsZnQYYmqzAH+u8XoNQRc/+Kw=="],
+
+    "@kumos/tree-sitter-parsers-linux-arm64": ["@kumos/tree-sitter-parsers-linux-arm64@0.1.4", "", { "os": "linux", "cpu": "arm64" }, "sha512-lHT49SfrRouN7/uKAYQ5pcIg9WV3+UBWzkMRrAKCW/AeH50yV1xgVHn/LVcMaitjdxeHH9ylzwsuQ09z4EnsaA=="],
+
+    "@kumos/tree-sitter-parsers-linux-arm64-musl": ["@kumos/tree-sitter-parsers-linux-arm64-musl@0.1.4", "", { "os": "linux", "cpu": "arm64" }, "sha512-uSnAtxhiQyYbWvtKLQVFBrZ3qCjC+z6hYTYNpYIznvF0RF+i42pSboVTC7xSCMvBZxsdTWcDJGsaGtQR8A5Z5A=="],
+
+    "@kumos/tree-sitter-parsers-linux-x64": ["@kumos/tree-sitter-parsers-linux-x64@0.1.4", "", { "os": "linux", "cpu": "x64" }, "sha512-X2i38O/ed6CpjNCXvAdaldXWQ9QReQ78IqbAZPhNJrj6v3QswDkl1glihg7v4O+LjKYw9aHlBnVs1dugGzoINA=="],
+
+    "@kumos/tree-sitter-parsers-linux-x64-musl": ["@kumos/tree-sitter-parsers-linux-x64-musl@0.1.4", "", { "os": "linux", "cpu": "x64" }, "sha512-j5C5Mw45DWaoHlpfzv+x3RxaSumn10GqEIgfzeyuG7/S40ZfmI/vTCCL377uu0PiPekhAPTvum3ptkkKypccXg=="],
+
+    "@kumos/tree-sitter-parsers-win32-arm64": ["@kumos/tree-sitter-parsers-win32-arm64@0.1.4", "", { "os": "win32", "cpu": "arm64" }, "sha512-NJVZrC5C7zu1XhbA+yaFrTjagUNhaY4Ujb5zMZpy8NoumsfjCH2WKPiPjDCfuMebMkXuEZhdwdDQ0KQOSpXVmw=="],
+
+    "@kumos/tree-sitter-parsers-win32-x64": ["@kumos/tree-sitter-parsers-win32-x64@0.1.4", "", { "os": "win32", "cpu": "x64" }, "sha512-yDgr6DTymlrkLhRcDmgeD5CGKt5HcUzRgbk6fSbxScACDZsaf/TmbRqmttfuMw8DLdHl4ZUZJ7v+y6GWXfs8Gw=="],
+  }
+}

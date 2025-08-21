@@ -4,8 +4,8 @@ use breeze_indexer::Indexer;
 use breeze_indexer::SearchGranularity as IndexerSearchGranularity;
 use breeze_indexer::SearchOptions;
 
-use rmcp::handler::server::tool::Parameters;
 use rmcp::handler::server::tool::ToolRouter;
+use rmcp::handler::server::wrapper::Parameters;
 use rmcp::tool_handler;
 use rmcp::tool_router;
 use rmcp::transport::streamable_http_server::{
@@ -92,7 +92,11 @@ impl BreezeService {
 
     match self
       .indexer
-      .search(&search_req.query, options, search_req.project_id)
+      .search(
+        &search_req.query,
+        options,
+        None, /*search_req.project_id*/
+      )
       .await
     {
       Ok(results) => Ok(CallToolResult::success(vec![Content::json(results)?])),

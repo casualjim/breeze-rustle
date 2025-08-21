@@ -1253,21 +1253,6 @@ fn main() {
     );
   }
 
-  // Tests to demonstrate inconsistencies between walker and CandidateMatcher
-
-  async fn get_walker_files(path: &Path, max_file_size: Option<u64>) -> Vec<String> {
-    let mut files = Vec::new();
-
-    let stream = collect_files_with_sizes(path, max_file_size).await.unwrap();
-    for (file_path, _size) in stream.into_iter() {
-      // Use absolute path to match matcher behavior
-      files.push(file_path.to_string_lossy().to_string());
-    }
-    // Sort for consistent comparison
-    files.sort();
-    files
-  }
-
   #[tokio::test]
   async fn test_eof_chunk_expected_chunks() {
     let temp_dir = TempDir::new().unwrap();
