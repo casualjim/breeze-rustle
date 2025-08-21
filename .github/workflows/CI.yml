@@ -14,14 +14,21 @@ on:
   pull_request:
   workflow_dispatch:
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 
 jobs:
   test-rust:
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
 
       - name: Setup build environment
         uses: ./.github/actions/setup-env
@@ -36,8 +43,11 @@ jobs:
 
   test-python:
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
 
       - name: Setup build environment
         uses: ./.github/actions/setup-env
@@ -46,12 +56,19 @@ jobs:
 
       - name: Run Python tests
         run: |
-          cd crates/breeze-py && maturin develop && uv run --active pytest -v
+          set -euo pipefail
+          cd crates/breeze-py
+          uv sync --active
+          maturin develop
+          uv run --active pytest -v
 
   test-node:
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
 
       - name: Setup build environment
         uses: ./.github/actions/setup-env

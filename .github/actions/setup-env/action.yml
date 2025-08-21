@@ -1,5 +1,7 @@
 name: 'Setup Build Environment'
 description: 'Sets up the complete build environment for breeze-rustle'
+# Policy: This composite action is intentionally comprehensive and must not be split into
+# "lighter variants". All jobs should use this action as-is.
 inputs:
   python-version:
     description: 'Python version to use'

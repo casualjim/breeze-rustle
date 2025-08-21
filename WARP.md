@@ -1,1 +1,1 @@
-CLAUDE.md
+/Users/ivan/github/casualjim/breeze-rustle/AGENTS.md
