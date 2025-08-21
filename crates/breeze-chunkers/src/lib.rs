@@ -6,11 +6,11 @@
 //! to break code into semantically meaningful chunks while preserving context.
 
 mod chunker;
-mod dir;
+// mod dir;
 mod grammar_loader;
 mod languages;
 mod metadata_extractor;
-mod pathutil;
+// mod pathutil;
 
 #[cfg(feature = "perfprofiling")]
 pub mod performance;
@@ -29,7 +29,7 @@ use crate::chunker::InnerChunker;
 pub use crate::types::{
   Chunk, ChunkError, ChunkMetadata, FileMetadata, ProjectChunk, SemanticChunk,
 };
-pub use crate::walker::{CandidateMatcher, WalkOptions, walk_files, walk_project};
+pub use crate::walker::{WalkOptions, walk_files, walk_project, walker_includes_path};
 
 /// Tokenizer type for chunk size calculation
 #[derive(Clone, serde::Serialize, serde::Deserialize)]

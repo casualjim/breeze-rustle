@@ -1,47 +1,65 @@
-use std::path::PathBuf;
 use std::sync::Arc;
 
 use breeze_indexer::Indexer;
 use breeze_indexer::SearchGranularity as IndexerSearchGranularity;
 use breeze_indexer::SearchOptions;
 
+use rmcp::handler::server::tool::Parameters;
+use rmcp::handler::server::tool::ToolRouter;
+use rmcp::tool_handler;
+use rmcp::tool_router;
 use rmcp::transport::streamable_http_server::{
   StreamableHttpService, session::local::LocalSessionManager,
 };
-use rmcp::{Error as McpError, RoleServer, ServerHandler, model::*, service::RequestContext, tool};
-use serde_json::json;
+use rmcp::{ErrorData, RoleServer, ServerHandler, model::*, service::RequestContext, tool};
 use tracing::info;
-use uuid::Uuid;
 
 use crate::types::*;
 
 #[derive(Clone)]
 pub struct BreezeService {
   indexer: Arc<Indexer>,
+  tool_router: ToolRouter<BreezeService>,
 }
 
-#[tool(tool_box)]
+#[tool_router]
 impl BreezeService {
   pub fn new(indexer: Arc<Indexer>) -> Self {
-    Self { indexer }
+    Self {
+      indexer,
+      tool_router: Self::tool_router(),
+    }
   }
 
   #[tool(description = "Create a new project for indexing")]
   async fn create_project(
     &self,
-    #[tool(aggr)] CreateProjectRequest {
+    Parameters(CreateProjectRequest {
       name,
-      directory,
+      path,
       description,
       rescan_interval,
-    }: CreateProjectRequest,
-  ) -> Result<CallToolResult, McpError> {
-    info!("Creating project: {} at {}", name, directory);
+    }): Parameters<CreateProjectRequest>,
+  ) -> Result<CallToolResult, ErrorData> {
+    let project_path = std::path::PathBuf::from(path);
+    let name = name.unwrap_or_else(|| {
+      project_path
+        .file_name()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .to_string()
+    });
+    info!("Creating project: {} at {}", name, project_path.display());
 
     match self
       .indexer
       .project_manager()
-      .create_project(name, directory, description, rescan_interval.map(|v| *v))
+      .create_project(
+        name,
+        project_path.to_string_lossy().to_string(),
+        description,
+        rescan_interval.map(|v| *v),
+      )
       .await
     {
       Ok(project) => Ok(CallToolResult::success(vec![Content::text(format!(
@@ -58,29 +76,25 @@ impl BreezeService {
   #[tool(description = "Search code using semantic understanding")]
   async fn search_code(
     &self,
-    #[tool(aggr)] search_req: SearchRequest,
-  ) -> Result<CallToolResult, McpError> {
+    Parameters(search_req): Parameters<SimpleSearchRequest>,
+  ) -> Result<CallToolResult, ErrorData> {
     let limit = search_req.limit.unwrap_or(10);
 
     info!("Searching for '{}' with limit {}", search_req.query, limit);
 
     let options = SearchOptions {
       file_limit: limit,
-      chunks_per_file: search_req.chunks_per_file.unwrap_or(3),
-      languages: search_req.languages,
-      granularity: match search_req.granularity {
-        Some(SearchGranularity::Chunk) => IndexerSearchGranularity::Chunk,
-        _ => IndexerSearchGranularity::Document,
-      },
-      node_types: search_req.node_types,
-      node_name_pattern: search_req.node_name_pattern,
-      parent_context_pattern: search_req.parent_context_pattern,
-      scope_depth: search_req.scope_depth,
-      has_definitions: search_req.has_definitions,
-      has_references: search_req.has_references,
+      chunks_per_file: 3,
+      granularity: IndexerSearchGranularity::Chunk,
+
+      ..Default::default()
     };
 
-    match self.indexer.search(&search_req.query, options).await {
+    match self
+      .indexer
+      .search(&search_req.query, options, search_req.project_id)
+      .await
+    {
       Ok(results) => Ok(CallToolResult::success(vec![Content::json(results)?])),
       Err(e) => Ok(CallToolResult::error(vec![Content::text(format!(
         "Search failed: {}",
@@ -88,157 +102,14 @@ impl BreezeService {
       ))])),
     }
   }
-
-  #[tool(description = "Index a project directory for semantic code search")]
-  async fn index_project(
-    &self,
-    #[tool(aggr)] IndexProjectByIdRequest { project_id }: IndexProjectByIdRequest,
-  ) -> Result<CallToolResult, McpError> {
-    info!("Indexing project: {}", project_id);
-
-    let project_uuid = match Uuid::parse_str(&project_id) {
-      Ok(uuid) => uuid,
-      Err(e) => {
-        return Ok(CallToolResult::error(vec![Content::text(format!(
-          "Invalid project ID: {}",
-          e
-        ))]));
-      }
-    };
-
-    match self.indexer.index_project(project_uuid).await {
-      Ok(task_id) => Ok(CallToolResult::success(vec![Content::text(format!(
-        "Successfully submitted indexing task for project: {}. Task ID: {}",
-        project_id, task_id
-      ))])),
-      Err(e) => Ok(CallToolResult::error(vec![Content::text(format!(
-        "Failed to submit indexing task: {}",
-        e
-      ))])),
-    }
-  }
-
-  #[tool(description = "Index a single file for semantic code search")]
-  async fn index_file(
-    &self,
-    #[tool(aggr)] IndexFileByProjectRequest { project_id, path }: IndexFileByProjectRequest,
-  ) -> Result<CallToolResult, McpError> {
-    info!("Indexing file: {} for project: {}", path, project_id);
-
-    let project_uuid = match Uuid::parse_str(&project_id) {
-      Ok(uuid) => uuid,
-      Err(e) => {
-        return Ok(CallToolResult::error(vec![Content::text(format!(
-          "Invalid project ID: {}",
-          e
-        ))]));
-      }
-    };
-
-    let file_path = PathBuf::from(&path);
-
-    match self.indexer.index_file(project_uuid, &file_path).await {
-      Ok(id) => Ok(CallToolResult::success(vec![Content::json(json!({
-        "message": format!("Scheduled indexing of file task_id={id} path={path}"),
-        "task_id": id,
-        "project_id": project_uuid.to_string(),
-      }))?])),
-      Err(e) => Ok(CallToolResult::error(vec![Content::text(format!(
-        "Indexing failed: {}",
-        e
-      ))])),
-    }
-  }
-
-  #[tool(description = "Update an existing project")]
-  async fn update_project(
-    &self,
-    #[tool(aggr)] UpdateProjectByIdRequest {
-      project_id,
-      name,
-      description,
-      rescan_interval,
-    }: UpdateProjectByIdRequest,
-  ) -> Result<CallToolResult, McpError> {
-    info!("Updating project: {}", project_id);
-
-    let project_uuid = match Uuid::parse_str(&project_id) {
-      Ok(uuid) => uuid,
-      Err(e) => {
-        return Ok(CallToolResult::error(vec![Content::text(format!(
-          "Invalid project ID: {}",
-          e
-        ))]));
-      }
-    };
-
-    match self
-      .indexer
-      .project_manager()
-      .update_project(project_uuid, name, description, rescan_interval.map(|v| *v))
-      .await
-    {
-      Ok(Some(project)) => Ok(CallToolResult::success(vec![Content::text(format!(
-        "Successfully updated project '{}' ({})",
-        project.name, project.id
-      ))])),
-      Ok(None) => Ok(CallToolResult::error(vec![Content::text(format!(
-        "Project not found: {}",
-        project_id
-      ))])),
-      Err(e) => Ok(CallToolResult::error(vec![Content::text(format!(
-        "Failed to update project: {}",
-        e
-      ))])),
-    }
-  }
-
-  #[tool(description = "Delete a project and all associated data")]
-  async fn delete_project(
-    &self,
-    #[tool(aggr)] DeleteProjectRequest { project_id }: DeleteProjectRequest,
-  ) -> Result<CallToolResult, McpError> {
-    info!("Deleting project: {}", project_id);
-
-    let project_uuid = match Uuid::parse_str(&project_id) {
-      Ok(uuid) => uuid,
-      Err(e) => {
-        return Ok(CallToolResult::error(vec![Content::text(format!(
-          "Invalid project ID: {}",
-          e
-        ))]));
-      }
-    };
-
-    match self
-      .indexer
-      .project_manager()
-      .delete_project(project_uuid)
-      .await
-    {
-      Ok(true) => Ok(CallToolResult::success(vec![Content::text(format!(
-        "Successfully deleted project: {}",
-        project_id
-      ))])),
-      Ok(false) => Ok(CallToolResult::error(vec![Content::text(format!(
-        "Project not found: {}",
-        project_id
-      ))])),
-      Err(e) => Ok(CallToolResult::error(vec![Content::text(format!(
-        "Failed to delete project: {}",
-        e
-      ))])),
-    }
-  }
 }
 
-#[tool(tool_box)]
+#[tool_handler]
 impl ServerHandler for BreezeService {
   fn get_info(&self) -> ServerInfo {
     ServerInfo {
             protocol_version: ProtocolVersion::LATEST,
             capabilities: ServerCapabilities::builder()
-                .enable_logging()
                 .enable_prompts()
                 .enable_resources()
                 .enable_prompts_list_changed()
@@ -258,7 +129,7 @@ impl ServerHandler for BreezeService {
     &self,
     _request: InitializeRequestParam,
     context: RequestContext<RoleServer>,
-  ) -> Result<InitializeResult, McpError> {
+  ) -> Result<InitializeResult, rmcp::ErrorData> {
     if let Some(http_request_part) = context.extensions.get::<axum::http::request::Parts>() {
       let initialize_headers = &http_request_part.headers;
       let initialize_uri = &http_request_part.uri;

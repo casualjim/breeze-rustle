@@ -1,19 +1,17 @@
 use crate::{
   Tokenizer,
   chunker::InnerChunker,
-  dir::{Ignore, IgnoreBuilder},
   languages::get_language,
   types::{Chunk, ChunkError, ProjectChunk},
 };
 use blake3::Hasher;
 use futures::{Stream, StreamExt};
-use ignore::{DirEntry, WalkBuilder, types::TypesBuilder};
+use ignore::{DirEntry, WalkBuilder, overrides::OverrideBuilder};
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::{
   collections::BTreeSet,
-  os::unix::fs::MetadataExt,
   path::{Path, PathBuf},
 };
 use tokio::sync::mpsc;
@@ -41,44 +39,6 @@ fn get_default_ignore_file() -> &'static std::path::PathBuf {
 
     ignore_path
   })
-}
-
-/// Check if an entry should be traversed (for directories) or processed (for files)
-fn should_process_entry(entry: &DirEntry) -> bool {
-  // Always traverse directories
-  if entry.file_type().is_some_and(|ft| ft.is_dir()) {
-    return true;
-  }
-
-  // For files, apply our filtering logic
-  if !entry.file_type().is_some_and(|ft| ft.is_file()) {
-    return false;
-  }
-
-  let path = entry.path();
-
-  // Skip empty files
-  if let Ok(metadata) = entry.metadata() {
-    if metadata.len() == 0 {
-      debug!("Skipping empty file: {}", path.display());
-      return false;
-    }
-  }
-
-  // Skip binary files
-  let is_text_file = if let Ok(Some(file_type)) = infer::get_from_path(path) {
-    file_type.matcher_type() == infer::MatcherType::Text
-  } else {
-    // If infer can't determine, check with hyperpolyglot
-    hyperpolyglot::detect(path).is_ok()
-  };
-
-  if !is_text_file {
-    debug!("Skipping binary file: {}", path.display());
-    return false;
-  }
-
-  true
 }
 
 /// Options for walking a project directory
@@ -214,6 +174,106 @@ pub fn walk_project(
   ReceiverStream::new(rx)
 }
 
+/// Check if an entry should be traversed (for directories) or processed (for files)
+fn should_process_entry(entry: &DirEntry) -> bool {
+  // Always traverse directories
+  if entry.file_type().is_some_and(|ft| ft.is_dir()) {
+    return true;
+  }
+
+  // For files, apply our filtering logic
+  if !entry.file_type().is_some_and(|ft| ft.is_file()) {
+    return false;
+  }
+
+  let path = entry.path();
+
+  // Skip empty files
+  if let Ok(metadata) = entry.metadata() {
+    if metadata.len() == 0 {
+      debug!("Skipping empty file: {}", path.display());
+      return false;
+    }
+  }
+
+  // Skip binary files
+  let is_text_file = if let Ok(Some(file_type)) = infer::get_from_path(path) {
+    file_type.matcher_type() == infer::MatcherType::Text
+  } else {
+    // If infer can't determine, check with hyperpolyglot
+    hyperpolyglot::detect(path).is_ok()
+  };
+
+  if !is_text_file {
+    debug!("Skipping binary file: {}", path.display());
+    return false;
+  }
+
+  true
+}
+
+/// Decide if a single path would be included by the walker, using the same
+/// ignore/VCS pruning semantics. This is intended for file watcher events.
+pub fn walker_includes_path(
+  project_root: impl AsRef<Path>,
+  path: impl AsRef<Path>,
+  max_file_size: Option<u64>,
+) -> bool {
+  let project_root = project_root.as_ref();
+  let path = path.as_ref();
+
+  // If the path is outside the project, exclude it
+  if let Ok(abs) = std::fs::canonicalize(path) {
+    if let Ok(root) = std::fs::canonicalize(project_root) {
+      if !abs.starts_with(&root) {
+        return false;
+      }
+    }
+  }
+
+  // Build an override that only includes the specific path, so the walker
+  // applies ignore and VCS pruning but we don't traverse the entire tree.
+  let mut ob = OverrideBuilder::new(project_root);
+  // Use a relative pattern if possible for portability
+  let candidate = match path.strip_prefix(project_root) {
+    Ok(rel) => rel,
+    Err(_) => path,
+  };
+  // Override expects Unix-style separators in patterns; Path display is fine
+  ob.add(&candidate.to_string_lossy()).ok();
+  let overrides = match ob.build() {
+    Ok(o) => o,
+    Err(_) => return false,
+  };
+
+  let mut builder = WalkBuilder::new(project_root);
+
+  // Default and custom ignores, matching walk_project
+  let default_ignore = get_default_ignore_file();
+  if default_ignore.exists() {
+    builder.add_ignore(default_ignore);
+  }
+  builder
+    .overrides(overrides)
+    .max_filesize(max_file_size)
+    .add_custom_ignore_filename(".breezeignore");
+
+  // Build the iterator and check whether our file appears
+  for entry in builder.build() {
+    if let Ok(ent) = entry {
+      let p = ent.path();
+      if p == path {
+        // Only include files; directories are always traversable in walker
+        if let Some(ft) = ent.file_type() {
+          return ft.is_file();
+        }
+        return false;
+      }
+    }
+  }
+  false
+}
+
 /// Process a stream of file paths with options
 pub fn walk_files<S>(
   files: S,
@@ -243,19 +303,6 @@ where
   };
 
   tokio::spawn(async move {
-    // Create CandidateMatcher for consistent file matching
-    let matcher = match CandidateMatcher::new(&project_root, max_file_size) {
-      Ok(m) => m,
-      Err(e) => {
-        let _ = tx
-          .send(Err(ChunkError::IoError(std::io::Error::other(
-            e.to_string(),
-          ))))
-          .await;
-        return;
-      }
-    };
-
     // Phase 1: Collect files from stream with their sizes
     let mut file_entries = Vec::new();
     let mut files = Box::pin(files);
@@ -264,8 +311,8 @@ where
       // First check if file exists
       match tokio::fs::metadata(&path).await {
         Ok(meta) => {
-          // File exists, check if it should be processed
-          if matcher.matches(&path) {
+          // File exists, check if walker would include this file (inherit ignores/VCS pruning)
+          if walker_includes_path(&project_root, &path, max_file_size) {
             let size = meta.len();
             file_entries.push((path, size));
           }
@@ -328,107 +375,6 @@ where
   ReceiverStream::new(rx)
 }
 
-pub struct CandidateMatcher {
-  ig: Ignore,
-  max_file_size: u64,
-}
-
-impl CandidateMatcher {
-  pub fn new(
-    project_path: &Path,
-    max_file_size: Option<u64>,
-  ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
-    let mut types = TypesBuilder::new();
-    types.add_defaults();
-    let mut builder = IgnoreBuilder::new();
-    builder.types(types.build()?);
-
-    // Add our default ignore patterns
-    let default_ignore = get_default_ignore_file();
-    if default_ignore.exists() {
-      builder.add_ignore_from_path(default_ignore);
-    }
-
-    builder.add_custom_ignore_filename(".breezeignore");
-
-    let mut ig = builder.build();
-
-    // First add parents to establish the full directory hierarchy
-    if let (parent_ig, None) = ig.add_parents(project_path) {
-      ig = parent_ig;
-    }
-
-    // Then add the target directory as a child
-    if let (child_ig, None) = ig.add_child(project_path) {
-      ig = child_ig;
-    }
-
-    Ok(Self {
-      ig,
-      max_file_size: max_file_size.unwrap_or(5 * 1024 * 1024),
-    })
-  }
-
-  pub fn matches(&self, path: &Path) -> bool {
-    // Use symlink_metadata to avoid following symlinks (matching walker behavior)
-    let meta = match std::fs::symlink_metadata(path) {
-      Ok(m) => m,
-      Err(_) => return false,
-    };
-
-    // Skip symlinks (matching walker behavior)
-    if meta.is_symlink() {
-      return false;
-    }
-
-    // process ignores
-    if self.ig.matched_dir_entry((path, &meta)).is_ignore() {
-      debug!("Ignoring path: {}", path.display());
-      return false;
-    }
-
-    // Always traverse directories
-    if meta.is_dir() {
-      return true;
-    }
-
-    // For files, apply our filtering logic
-    if !meta.is_file() {
-      return false;
-    }
-
-    // Skip empty files
-    if meta.size() == 0 {
-      debug!("Skipping empty file: {}", path.display());
-      return false;
-    }
-
-    // Skip binary files
-    let is_text_file = if let Ok(Some(file_type)) = infer::get_from_path(path) {
-      file_type.matcher_type() == infer::MatcherType::Text
-    } else {
-      // If infer can't determine, check with hyperpolyglot
-      hyperpolyglot::detect(path).is_ok()
-    };
-
-    if !is_text_file {
-      debug!("Skipping binary file: {}", path.display());
-      return false;
-    }
-
-    if meta.size() >= self.max_file_size {
-      debug!(
-        "Ignoring large file: {} (size: {} bytes)",
-        path.display(),
-        meta.len()
-      );
-      return false;
-    }
-
-    true
-  }
-}
-
 /// Collect all files with their sizes (without reading content)
 async fn collect_files_with_sizes(
   path: &Path,
@@ -447,6 +393,7 @@ async fn collect_files_with_sizes(
       builder.add_ignore(default_ignore);
     }
 
+    // Filter entries using the same logic we use downstream (no binary/empty files)
     builder
       .max_filesize(max_file_size)
       .filter_entry(should_process_entry)
@@ -1319,295 +1266,6 @@ fn main() {
     // Sort for consistent comparison
     files.sort();
     files
-  }
-
-  async fn get_candidate_matcher_files(path: &Path, max_file_size: Option<u64>) -> Vec<String> {
-    let matcher = CandidateMatcher::new(path, max_file_size).unwrap();
-    let mut files = Vec::new();
-
-    // Walk all files recursively
-    fn walk_dir(dir: &Path, matcher: &CandidateMatcher, files: &mut Vec<String>) {
-      if let Ok(entries) = fs::read_dir(dir) {
-        for entry in entries.flatten() {
-          let path = entry.path();
-          if matcher.matches(&path) {
-            if path.is_file() {
-              // Use absolute path to match walker behavior
-              files.push(path.to_string_lossy().to_string());
-            } else if path.is_dir() {
-              walk_dir(&path, matcher, files);
-            }
-          }
-        }
-      }
-    }
-
-    walk_dir(path, &matcher, &mut files);
-    files.sort();
-    files
-  }
-
-  #[tokio::test]
-  async fn test_consistency_hidden_files() {
-    let temp_dir = TempDir::new().unwrap();
-    let path = temp_dir.path();
-
-    // Create test files
-    fs::write(path.join(".hidden_file"), "hidden content").unwrap();
-    fs::write(path.join("visible.txt"), "visible content").unwrap();
-    fs::create_dir_all(path.join(".hidden_dir")).unwrap();
-    fs::write(path.join(".hidden_dir/file.txt"), "content").unwrap();
-
-    let walker_files = get_walker_files(path, None).await;
-    let matcher_files = get_candidate_matcher_files(path, None).await;
-
-    println!("\nHidden files test:");
-    println!("Walker files: {:?}", walker_files);
-    println!("Matcher files: {:?}", matcher_files);
-
-    // Check for inconsistencies with hidden files
-    let walker_has_hidden = walker_files.iter().any(|f| f.starts_with('.'));
-    let matcher_has_hidden = matcher_files.iter().any(|f| f.starts_with('.'));
-
-    assert_eq!(
-      walker_has_hidden, matcher_has_hidden,
-      "INCONSISTENCY: Walker includes hidden files: {}, Matcher includes hidden files: {}",
-      walker_has_hidden, matcher_has_hidden
-    );
-  }
-
-  #[tokio::test]
-  async fn test_consistency_gitignore_without_git() {
-    let temp_dir = TempDir::new().unwrap();
-    let path = temp_dir.path();
-
-    // Create .gitignore without .git directory
-    fs::write(path.join(".gitignore"), "ignored.txt\n*.log").unwrap();
-    fs::write(path.join("ignored.txt"), "should be ignored").unwrap();
-    fs::write(path.join("test.log"), "log file").unwrap();
-    fs::write(path.join("keep.txt"), "should be kept").unwrap();
-
-    let walker_files = get_walker_files(path, None).await;
-    let matcher_files = get_candidate_matcher_files(path, None).await;
-
-    println!("\nGitignore without .git test:");
-    println!("Walker files: {:?}", walker_files);
-    println!("Matcher files: {:?}", matcher_files);
-
-    // The walker uses WalkBuilder which respects .gitignore even without .git by default
-    // The CandidateMatcher uses Ignore with require_git: true by default
-    // This should show an inconsistency
-
-    let walker_ignores = !walker_files.contains(&"ignored.txt".to_string());
-    let matcher_ignores = !matcher_files.contains(&"ignored.txt".to_string());
-
-    assert_eq!(
-      walker_ignores, matcher_ignores,
-      "INCONSISTENCY: Walker respects .gitignore without .git: {}, Matcher respects .gitignore without .git: {}",
-      walker_ignores, matcher_ignores
-    );
-  }
-
-  #[tokio::test]
-  async fn test_consistency_default_ignores() {
-    let temp_dir = TempDir::new().unwrap();
-    let path = temp_dir.path();
-
-    // Create files that should be ignored by extra-ignores
-    fs::create_dir_all(path.join("__pycache__")).unwrap();
-    fs::write(path.join("__pycache__/module.pyc"), "bytecode").unwrap();
-    fs::write(path.join(".DS_Store"), "mac file").unwrap();
-    fs::write(path.join("Thumbs.db"), "windows file").unwrap();
-    fs::write(path.join("valid.py"), "print('hello')").unwrap();
-
-    let walker_files = get_walker_files(path, None).await;
-    let matcher_files = get_candidate_matcher_files(path, None).await;
-
-    println!("\nDefault ignores test:");
-    println!("Walker files: {:?}", walker_files);
-    println!("Matcher files: {:?}", matcher_files);
-
-    // Check if both ignore the same default patterns
-    assert!(
-      !walker_files.contains(&"__pycache__/module.pyc".to_string()),
-      "Walker should ignore __pycache__ files"
-    );
-    assert!(
-      !matcher_files.contains(&"__pycache__/module.pyc".to_string()),
-      "Matcher should ignore __pycache__ files"
-    );
-  }
-
-  #[tokio::test]
-  async fn test_consistency_file_size_edge_cases() {
-    let temp_dir = TempDir::new().unwrap();
-    let path = temp_dir.path();
-
-    // Create files at the size boundary
-    let five_mb = 5 * 1024 * 1024;
-    fs::write(path.join("exactly_5mb.txt"), "a".repeat(five_mb)).unwrap();
-    fs::write(path.join("just_under_5mb.txt"), "a".repeat(five_mb - 1)).unwrap();
-    fs::write(path.join("just_over_5mb.txt"), "a".repeat(five_mb + 1)).unwrap();
-
-    let walker_files = get_walker_files(path, Some(five_mb as u64)).await;
-    let matcher_files = get_candidate_matcher_files(path, Some(five_mb as u64)).await;
-
-    println!("\nFile size edge cases test:");
-    println!("Walker files: {:?}", walker_files);
-    println!("Matcher files: {:?}", matcher_files);
-
-    // Check if they handle the boundary the same way
-    let walker_exact = walker_files.contains(&"exactly_5mb.txt".to_string());
-    let matcher_exact = matcher_files.contains(&"exactly_5mb.txt".to_string());
-
-    assert_eq!(
-      walker_exact, matcher_exact,
-      "INCONSISTENCY at boundary: Walker includes exactly_5mb.txt: {}, Matcher includes: {}",
-      walker_exact, matcher_exact
-    );
-
-    // Also check that both exclude the over-sized file
-    assert!(
-      !walker_files.contains(&"just_over_5mb.txt".to_string()),
-      "Walker should exclude files over the size limit"
-    );
-    assert!(
-      !matcher_files.contains(&"just_over_5mb.txt".to_string()),
-      "Matcher should exclude files over the size limit"
-    );
-  }
-
-  #[tokio::test]
-  async fn test_consistency_symlinks() {
-    let temp_dir = TempDir::new().unwrap();
-    let path = temp_dir.path();
-
-    fs::write(path.join("real_file.txt"), "content").unwrap();
-
-    #[cfg(unix)]
-    {
-      use std::os::unix::fs::symlink;
-      if symlink(path.join("real_file.txt"), path.join("link_file.txt")).is_ok() {
-        let walker_files = get_walker_files(path, None).await;
-        let matcher_files = get_candidate_matcher_files(path, None).await;
-
-        println!("\nSymlink test:");
-        println!("Walker files: {:?}", walker_files);
-        println!("Matcher files: {:?}", matcher_files);
-
-        // Check if they handle symlinks the same way
-        let walker_has_link = walker_files.contains(&"link_file.txt".to_string());
-        let matcher_has_link = matcher_files.contains(&"link_file.txt".to_string());
-
-        assert_eq!(
-          walker_has_link, matcher_has_link,
-          "INCONSISTENCY: Walker includes symlink: {}, Matcher includes symlink: {}",
-          walker_has_link, matcher_has_link
-        );
-      }
-    }
-  }
-
-  #[tokio::test]
-  async fn test_consistency_breezeignore_precedence() {
-    let temp_dir = TempDir::new().unwrap();
-    let path = temp_dir.path();
-
-    // Create both .gitignore and .breezeignore with conflicting rules
-    fs::create_dir_all(path.join(".git")).unwrap();
-    fs::write(path.join(".gitignore"), "*.txt").unwrap();
-    fs::write(path.join(".breezeignore"), "!important.txt").unwrap();
-    fs::write(path.join("regular.txt"), "content").unwrap();
-    fs::write(path.join("important.txt"), "important content").unwrap();
-
-    let walker_files = get_walker_files(path, None).await;
-    let matcher_files = get_candidate_matcher_files(path, None).await;
-
-    println!("\nBreezeignore precedence test:");
-    println!("Walker files: {:?}", walker_files);
-    println!("Matcher files: {:?}", matcher_files);
-
-    // Check if they handle precedence the same way
-    let walker_only: Vec<_> = walker_files
-      .iter()
-      .filter(|f| !matcher_files.contains(f))
-      .collect();
-    let matcher_only: Vec<_> = matcher_files
-      .iter()
-      .filter(|f| !walker_files.contains(f))
-      .collect();
-
-    assert!(
-      walker_only.is_empty() && matcher_only.is_empty(),
-      "INCONSISTENCY in ignore precedence - Walker only: {:?}, Matcher only: {:?}",
-      walker_only,
-      matcher_only
-    );
-  }
-
-  #[tokio::test]
-  async fn test_consistency_complete_comparison() {
-    let temp_dir = create_test_project().await;
-    let path = temp_dir.path();
-
-    // Add some edge case files
-    fs::write(path.join(".hidden"), "hidden").unwrap();
-    fs::create_dir_all(path.join("empty_dir")).unwrap();
-
-    let walker_files = get_walker_files(path, Some(5 * 1024 * 1024)).await;
-    let matcher_files = get_candidate_matcher_files(path, Some(5 * 1024 * 1024)).await;
-
-    println!("\n=== Complete Comparison ===");
-    println!("Walker found {} files", walker_files.len());
-    println!("Matcher found {} files", matcher_files.len());
-
-    let walker_only: Vec<_> = walker_files
-      .iter()
-      .filter(|f| !matcher_files.contains(f))
-      .collect();
-
-    let matcher_only: Vec<_> = matcher_files
-      .iter()
-      .filter(|f| !walker_files.contains(f))
-      .collect();
-
-    if !walker_only.is_empty() {
-      println!("\nFiles only found by walker:");
-      for f in &walker_only {
-        println!("  - {}", f);
-      }
-    }
-
-    if !matcher_only.is_empty() {
-      println!("\nFiles only found by matcher:");
-      for f in &matcher_only {
-        println!("  - {}", f);
-      }
-    }
-
-    // KNOWN INCONSISTENCY: Binary file filtering
-    // The walker's filter_entry with should_process_entry doesn't seem to filter out binary files
-    // from the walk results, even though it checks for them. This means binary files like test.bin
-    // appear in the walker's file list but not in the matcher's list.
-    //
-    // This inconsistency is acceptable because:
-    // 1. The actual walk_project function applies the same binary check again in process_file
-    // 2. Binary files are ultimately skipped during chunk processing
-    // 3. The walker approach allows for better error reporting (we can report which binary files were skipped)
-    //
-    // For now, we'll filter out known binary files from the comparison
-    let walker_only_filtered: Vec<_> = walker_only
-      .iter()
-      .filter(|f| !f.ends_with(".bin"))
-      .collect();
-
-    assert!(
-      walker_only_filtered.is_empty() && matcher_only.is_empty(),
-      "Found {} inconsistencies (excluding binary files) - Walker only: {:?}, Matcher only: {:?}",
-      walker_only_filtered.len() + matcher_only.len(),
-      walker_only_filtered,
-      matcher_only
-    );
   }
 
   #[tokio::test]

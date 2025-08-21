@@ -145,14 +145,22 @@ async fn create_project(
   State(state): State<AppState>,
   Json(req): Json<CreateProjectRequest>,
 ) -> impl IntoApiResponse {
-  info!(name = %req.name, directory = %req.directory, "Creating project");
+  let project_path = std::path::PathBuf::from(req.path);
+  let name = req.name.unwrap_or_else(|| {
+    project_path
+      .file_name()
+      .unwrap_or_default()
+      .to_string_lossy()
+      .to_string()
+  });
+  info!(name = %name, directory = %project_path.display(), "Creating project");
 
   match state
     .indexer
     .project_manager()
     .create_project(
-      req.name,
-      req.directory,
+      name,
+      project_path.to_string_lossy().to_string(),
       req.description,
       req.rescan_interval.map(|v| *v),
     )
@@ -292,7 +300,11 @@ async fn search(
     has_references: req.has_references,
   };
 
-  match state.indexer.search(&req.query, options).await {
+  match state
+    .indexer
+    .search(&req.query, options, req.project_id)
+    .await
+  {
     Ok(results) => {
       info!(results = results.len(), "Search completed");
       Json(

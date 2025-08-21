@@ -64,7 +64,7 @@ intel-mkl-src = { version = "0.8.1", optional = true }
 lancedb.workspace = true
 ndarray = "0.16.1"
 notify = "8.0"
-notify-debouncer-full = "0.5"
+notify-debouncer-full = { version = "0.6", features = ["flume"]}
 num_cpus.workspace = true
 
 pin-project-lite.workspace = true
@@ -75,7 +75,7 @@ serde.workspace = true
 serde_json.workspace = true
 small_ctor = "0.1.2"
 strum = { version = "0.27.1", features = ["derive"] }
-sysinfo = "0.36.0"
+sysinfo = "0.37.0"
 tempfile = "3"
 thiserror = "2.0"
 
@@ -90,6 +90,6 @@ typed-builder = "0.21"
 uuid.workspace = true
 
 [dev-dependencies]
-toml = "0.8"
+toml = "0.9"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 wiremock = "0.6"

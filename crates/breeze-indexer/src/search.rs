@@ -128,7 +128,7 @@ pub async fn hybrid_search(
   embedding_provider: Arc<dyn EmbeddingProvider>,
   query: &str,
   options: SearchOptions,
-  project_id: Option<String>,
+  project_id: Option<Uuid>,
 ) -> Result<Vec<SearchResult>> {
   info!(query = %query, options = ?options, "Performing hybrid search");
 
@@ -155,7 +155,7 @@ pub async fn hybrid_search(
         query,
         query_vector,
         &options,
-        project_id.as_deref(),
+        project_id.map(|id| id.to_string()).as_deref(),
       )
       .await
     }
@@ -166,7 +166,7 @@ pub async fn hybrid_search(
         query,
         query_vector,
         &options,
-        project_id.as_deref(),
+        project_id.map(|id| id.to_string()).as_deref(),
       )
       .await
     }

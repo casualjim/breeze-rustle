@@ -210,20 +210,11 @@ impl Project {
       })?
       .value(row);
 
-    let rescan_interval_array = batch
+    let rescan_interval = batch
       .column_by_name("rescan_interval")
       .and_then(|col| col.as_any().downcast_ref::<DurationMicrosecondArray>())
-      .ok_or_else(|| lancedb::Error::Runtime {
-        message: "Missing or invalid rescan_interval column".to_string(),
-      })?;
-
-    let rescan_interval = if rescan_interval_array.is_null(row) {
-      None
-    } else {
-      Some(Duration::from_micros(
-        rescan_interval_array.value(row) as u64
-      ))
-    };
+      .filter(|arr| arr.is_null(row))
+      .map(|arr| Duration::from_micros(arr.value(row) as u64));
 
     let last_indexed_at_array = batch
       .column_by_name("last_indexed_at")

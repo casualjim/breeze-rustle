@@ -1,3 +1,4 @@
+.git/
 # Large data files
 *.csv
 *.tsv

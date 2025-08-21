@@ -3,8 +3,8 @@ use breeze::app::SearchRequest;
 use breeze::cli::DebugCommands;
 use breeze::cli::{Cli, Commands, ProjectCommands, SearchGranularity, TaskCommands};
 use std::path::PathBuf;
+use syntastica::highlight;
 use syntastica::language_set::SupportedLanguage;
-use syntastica::{highlight, language_set};
 use tokio::signal;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info};
@@ -265,20 +265,24 @@ async fn async_main() {
       scope_depth,
       has_definitions,
       has_references,
+      project_id,
     } => {
       info!("Starting search for: \"{}\"", query);
 
       match breeze::App::new(config, shutdown_token.clone()).await {
         Ok(app) => {
           let req = SearchRequest {
+            project_id,
             query,
             limit,
             chunks_per_file,
             languages,
-            granularity: granularity.map(|g| match g {
-              SearchGranularity::Document => breeze_server::types::SearchGranularity::Document,
-              SearchGranularity::Chunk => breeze_server::types::SearchGranularity::Chunk,
-            }),
+            granularity: granularity
+              .map(|g| match g {
+                SearchGranularity::Document => breeze_server::types::SearchGranularity::Document,
+                SearchGranularity::Chunk => breeze_server::types::SearchGranularity::Chunk,
+              })
+              .or(Some(breeze_server::types::SearchGranularity::Chunk)),
             node_types,
             node_name_pattern,
             parent_context_pattern,
@@ -292,6 +296,10 @@ async fn async_main() {
               if results.is_empty() {
                 println!("No results found.");
               } else {
+                let theme = syntastica_themes::catppuccin::mocha();
+                let mut renderer = syntastica::renderer::TerminalRenderer::default();
+                let mut language_set = syntastica_parsers::LanguageSetImpl::default();
+                language_set.preload_all().unwrap();
                 println!("\nFound {} results:", results.len());
                 for (idx, result) in results.iter().enumerate() {
                   println!("\n[{}] {}", idx + 1, result.file_path);
@@ -312,11 +320,6 @@ async fn async_main() {
                       );
 
                       // Determine language from file extension
-                      let theme = syntastica_themes::catppuccin::mocha();
-                      let mut renderer = syntastica::renderer::TerminalRenderer::default();
-                      let mut language_set = syntastica_parsers::LanguageSetImpl::default();
-                      language_set.preload_all().unwrap();
-
                       let language = syntastica_parsers::Lang::for_name(
                         &chunk.language.to_lowercase(),
                         &mut language_set,
@@ -326,23 +329,22 @@ async fn async_main() {
                       if let Some(language) = language {
                         // Preload the language to ensure it's ready for highlighting
                         // language_set.preload(&[language]).unwrap();
-
                         let highlighted = highlight(
                           &chunk.content,
                           language,
                           &mut language_set,
                           &mut renderer,
-                          theme,
+                          theme.clone(),
                         )
                         .unwrap();
 
-                        // // Highlight content using syntastica
+                        // Highlight content using syntastica
                         // Print highlighted lines with indentation
                         for line in highlighted.lines() {
                           println!("      {}", line);
                         }
                       } else {
-                        println!("{}", &chunk.content[..30.min(chunk.content.len())]);
+                        println!("{}", &chunk.content);
                       }
                     }
                   }

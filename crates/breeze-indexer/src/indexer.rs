@@ -78,7 +78,7 @@ pub enum IndexerError {
 pub struct Indexer {
   config: Arc<Config>,
   embedding_provider: Arc<dyn EmbeddingProvider>,
-  table: Arc<RwLock<Table>>,
+  doc_table: Arc<RwLock<Table>>,
   chunk_table: Arc<RwLock<Table>>,
   task_manager: Arc<TaskManager>,
   project_manager: Arc<ProjectManager>,
@@ -152,7 +152,7 @@ impl Indexer {
     Ok(Self {
       config,
       embedding_provider,
-      table,
+      doc_table: table,
       chunk_table,
       task_manager,
       project_manager,
@@ -247,12 +247,11 @@ impl Indexer {
       )
       .await?;
 
-    // Disabled automatic file watching to prevent excessive file handle usage
     // File watching can be enabled per-project as needed
-    // if let Err(e) = self.start_file_watcher(project_id).await {
-    //   error!(project_id = %project_id, error = %e, "Failed to start file watcher");
-    //   // Don't fail the indexing task if watcher fails to start
-    // }
+    if let Err(e) = self.start_file_watcher(project_id).await {
+      error!(project_id = %project_id, error = %e, "Failed to start file watcher");
+      // Don't fail the indexing task if watcher fails to start
+    }
 
     Ok(task_id)
   }
@@ -310,6 +309,7 @@ impl Indexer {
         error!(project_id = %project.id, error = %e, "Failed to start file watcher");
         // Continue with other projects even if one fails
       }
+      info!(project_id = %project.id, "Started watcher for project");
     }
 
     Ok(())
@@ -326,18 +326,19 @@ impl Indexer {
     &self,
     query: &str,
     options: SearchOptions,
+    project_id: Option<Uuid>,
   ) -> Result<Vec<SearchResult>, IndexerError> {
     hybrid_search(
-      self.table.clone(),
+      self.doc_table.clone(),
       self.chunk_table.clone(),
       self.embedding_provider.clone(),
       query,
       options,
-      None, // No project filter in this method
+      project_id, // No project filter in this method
     )
     .await
     .map_err(|e| IndexerError::Search(e.to_string()))
-  } // This closing brace belongs to the `search` function
+  }
 
   /// Start the indexer
   pub async fn start(&self) -> Result<(), IndexerError> {
@@ -375,7 +376,7 @@ impl Indexer {
     self.stop_all_watchers();
     self.shutdown_token.cancel();
   }
-} // This closing brace belongs to the `impl Indexer` block
+}
 
 #[cfg(test)]
 mod tests {

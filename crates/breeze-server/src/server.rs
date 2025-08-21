@@ -387,10 +387,7 @@ async fn graceful_shutdown(
   external_token: Option<tokio_util::sync::CancellationToken>,
   indexer_arc: Arc<breeze_indexer::Indexer>,
 ) {
-  indexer_arc.stop();
-  // Stop the indexer
-  // indexer_arc.stop(); // This needs to be passed in or accessed differently
-
+  // Wait for shutdown signal first; do NOT stop the indexer preemptively, since it shares the shutdown token
   match external_token {
     Some(token) => {
       // Wait only for the external token - signals are handled elsewhere
@@ -422,6 +419,10 @@ async fn graceful_shutdown(
       }
     }
   }
+
+  // Now begin graceful shutdown
+  info!("Stopping indexer and beginning graceful shutdown");
+  indexer_arc.stop();
 
   info!("waiting for connections to close");
   handle.graceful_shutdown(Some(Duration::from_secs(10)));

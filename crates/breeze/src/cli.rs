@@ -1,5 +1,6 @@
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
+use uuid::Uuid;
 
 #[derive(Parser)]
 #[command(name = "breeze")]
@@ -68,6 +69,9 @@ pub enum Commands {
     /// Filter by references (comma-separated, chunk mode only)
     #[arg(long, value_delimiter = ',')]
     has_references: Option<Vec<String>>,
+
+    #[arg(long)]
+    project_id: Option<Uuid>,
   },
 
   /// Initialize configuration file

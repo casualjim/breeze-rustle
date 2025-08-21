@@ -1091,7 +1091,6 @@ async fn embedder_task(
   // Simple structure to hold regular chunks and EOF chunks separately
   struct PendingBatch {
     regular_chunks: Vec<PipelineProjectChunk>,
-    eof_chunks: Vec<PipelineProjectChunk>,
   }
 
   // Keep batches in order - BTreeMap maintains key order
@@ -1113,11 +1112,28 @@ async fn embedder_task(
             let (eof_chunks, regular_chunks): (Vec<_>, Vec<_>) = batch.chunks.into_iter()
               .partition(|pc| matches!(pc.chunk, PipelineChunk::EndOfFile { .. }));
 
-            // Store this batch
-            pending_batches.insert(batch_id, PendingBatch {
-              regular_chunks,
-              eof_chunks,
-            });
+            // Immediately forward EOF markers to unblock document builder,
+            // mirroring remote worker behavior.
+            for eof_chunk in eof_chunks {
+              if let PipelineChunk::EndOfFile { file_path, content, content_hash, expected_chunks } = eof_chunk.chunk {
+                stats.files_embedded.fetch_add(1, Ordering::Relaxed);
+                let eof = EmbeddedChunkWithFile::EndOfFile {
+                  batch_id,
+                  file_path,
+                  content,
+                  content_hash,
+                  expected_chunks,
+                };
+                if embedded_tx.send(eof).await.is_err() {
+                  // Receiver dropped - expected during shutdown
+                  debug!("EOF receiver dropped - stopping");
+                  return;
+                }
+              }
+            }
+
+            // Store only regular chunks for later embedding
+            pending_batches.insert(batch_id, PendingBatch { regular_chunks });
 
             // Check if we have enough chunks to process
             let mut chunk_count = 0;
@@ -1164,28 +1180,11 @@ async fn embedder_task(
                 )
                 .await;
 
-                // Send EOF chunks if this batch is complete
-                for eof_chunk in embedding_batch.eof_chunks {
-                  if let PipelineChunk::EndOfFile { file_path, content, content_hash, expected_chunks } = eof_chunk.chunk {
-                    stats.files_embedded.fetch_add(1, Ordering::Relaxed);
-                    let eof = EmbeddedChunkWithFile::EndOfFile {
-                      batch_id: embedding_batch.batch_id,
-                      file_path,
-                      content,
-                      content_hash,
-                      expected_chunks,
-                    };
-                    if embedded_tx.send(eof).await.is_err() {
-                      // Receiver dropped - expected during shutdown
-                      debug!("EOF receiver dropped - stopping");
-                      return;
-                    }
-                  }
-                }
+                // No deferred EOF forwarding here; EOFs are sent immediately on receipt
               }
 
               // Clean up empty batches
-              pending_batches.retain(|_, pb| !pb.regular_chunks.is_empty() || !pb.eof_chunks.is_empty());
+              pending_batches.retain(|_, pb| !pb.regular_chunks.is_empty());
             }
           }
           None => {
@@ -1215,45 +1214,6 @@ async fn embedder_task(
                     &embedded_tx,
                     &stats,
                   ).await;
-
-                  // Send EOF chunks
-                  for eof_chunk in embedding_batch.eof_chunks {
-                    if let PipelineChunk::EndOfFile { file_path, content, content_hash, expected_chunks } = eof_chunk.chunk {
-                            let eof = EmbeddedChunkWithFile::EndOfFile {
-                        batch_id: embedding_batch.batch_id,
-                        file_path,
-                        content,
-                        content_hash,
-                        expected_chunks,
-                      };
-                      if embedded_tx.send(eof).await.is_err() {
-                        // Receiver dropped - expected during shutdown
-                        debug!("EOF receiver dropped - stopping");
-                        return;
-                      }
-                    }
-                  }
-                }
-              }
-
-              // Send any remaining EOF chunks
-              for (bid, pending_batch) in pending_batches {
-                for eof_chunk in pending_batch.eof_chunks {
-                  if let PipelineChunk::EndOfFile { file_path, content, content_hash, expected_chunks } = eof_chunk.chunk {
-                    stats.files_embedded.fetch_add(1, Ordering::Relaxed);
-                    let eof = EmbeddedChunkWithFile::EndOfFile {
-                      batch_id: bid,
-                      file_path,
-                      content,
-                      content_hash,
-                      expected_chunks,
-                    };
-                    if embedded_tx.send(eof).await.is_err() {
-                      // Receiver dropped - expected during shutdown
-                      debug!("Final EOF receiver dropped - stopping");
-                      return;
-                    }
-                  }
                 }
               }
             }
@@ -1489,7 +1449,7 @@ async fn delete_handler_task(
             match table_guard.delete(&delete_expr).await {
               Ok(_) => {
                 delete_count += 1;
-                info!("Successfully deleted document: {}", file_path.display());
+                debug!("Successfully deleted document: {}", file_path.display());
               }
               Err(e) => {
                 error!("Failed to delete document {}: {}", file_path.display(), e);

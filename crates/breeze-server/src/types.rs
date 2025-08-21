@@ -12,8 +12,8 @@ use crate::duration::HumanDuration;
 // Shared request types
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
 pub struct CreateProjectRequest {
-  pub name: String,
-  pub directory: String,
+  pub path: String,
+  pub name: Option<String>,
   pub description: Option<String>,
   pub rescan_interval: Option<HumanDuration>,
 }
@@ -62,6 +62,7 @@ pub struct IndexFileRequest {
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
 pub struct SearchRequest {
+  pub project_id: Option<Uuid>,
   pub query: String,
   pub limit: Option<usize>,
   pub chunks_per_file: Option<usize>,
@@ -75,6 +76,14 @@ pub struct SearchRequest {
   pub scope_depth: Option<(usize, usize)>,
   pub has_definitions: Option<Vec<String>>,
   pub has_references: Option<Vec<String>>,
+}
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+pub struct SimpleSearchRequest {
+  pub project_id: Option<Uuid>,
+  pub path: Option<String>,
+  pub query: String,
+  pub limit: Option<usize>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

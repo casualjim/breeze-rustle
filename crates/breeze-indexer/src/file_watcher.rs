@@ -2,12 +2,11 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
-use breeze_chunkers::CandidateMatcher;
 use notify::{
   Config, EventKind, RecursiveMode,
   event::{CreateKind, DataChange, ModifyKind},
 };
-use notify_debouncer_full::{DebounceEventResult, Debouncer, FileIdMap};
+use notify_debouncer_full::{Debouncer, FileIdMap};
 use sysinfo::{Pid, System};
 use tokio::sync::RwLock;
 use tokio_util::sync::CancellationToken;
@@ -34,13 +33,6 @@ impl ProjectWatcher {
     let project_path = project_path.as_ref();
     let project_path_buf = project_path.to_path_buf();
 
-    // Create candidate matcher
-    let candidate_matcher = Arc::new(
-      CandidateMatcher::new(project_path, max_file_size)
-        .map_err(|e| IndexerError::Config(e.to_string()))?,
-    );
-    let candidate_matcher_clone = candidate_matcher.clone();
-
     // Clone references for the event handler
     let task_manager_clone = task_manager.clone();
     let project_id_clone = project_id;
@@ -56,7 +48,7 @@ impl ProjectWatcher {
     let debounce_timeout = if cfg!(test) {
       Duration::from_millis(500) // Much faster for tests
     } else {
-      Duration::from_secs(30)
+      Duration::from_secs(5)
     };
 
     let tick_interval = if cfg!(test) {
@@ -75,41 +67,74 @@ impl ProjectWatcher {
     //   poll_interval
     // );
 
-    let mut debouncer =
-      notify_debouncer_full::new_debouncer_opt(
-        debounce_timeout,
-        Some(tick_interval),
-        move |result: DebounceEventResult| {
+    let (event_sender, event_receiver) = flume::unbounded();
+
+    let mut debouncer = notify_debouncer_full::new_debouncer_opt(
+      debounce_timeout,
+      Some(tick_interval),
+      event_sender,
+      notify_debouncer_full::FileIdMap::new(),
+      config,
+    )?;
+
+    tokio::spawn({
+      let task_manager = task_manager_clone.clone();
+      let project_id = project_id_clone;
+      let project_path = project_path_clone.clone();
+
+      async move {
+        while let Ok(result) = event_receiver.recv_async().await {
           match result {
             Ok(events) => {
-              let candidate_matcher = candidate_matcher_clone.clone();
-              let task_manager = task_manager_clone.clone();
-              let project_id = project_id_clone;
-              let project_path = project_path_clone.clone();
-
               // Collect all file changes
               let mut changes = std::collections::BTreeSet::new();
 
               for event in events {
                 // Check all paths in the event
                 for path in &event.event.paths {
+                  if !breeze_chunkers::walker_includes_path(&project_path, path, max_file_size) {
+                    continue;
+                  }
                   match &event.event.kind {
                     EventKind::Create(CreateKind::File)
                     | EventKind::Modify(ModifyKind::Data(DataChange::Content | DataChange::Size)) =>
                     {
                       // Check if this is a candidate for indexing
-                      if candidate_matcher.matches(path) {
-                        changes.insert(crate::models::FileChange {
-                          path: path.clone(),
-                          operation: crate::models::FileOperation::Update,
-                        });
-                      }
+                      // if breeze_chunkers::walker_includes_path(&project_path, path, max_file_size) {
+                      // debug!(project_id = %project_id, "File change detected: {:?}", path);
+                      changes.insert(crate::models::FileChange {
+                        path: path.clone(),
+                        operation: crate::models::FileOperation::Update,
+                      });
+                      // }
                     }
                     EventKind::Remove(_) => {
                       changes.insert(crate::models::FileChange {
                         path: path.clone(),
                         operation: crate::models::FileOperation::Delete,
                       });
+                      // let docs = docs.read().await;
+                      // let result = docs
+                      //   .query()
+                      //   .only_if(format!(
+                      //     "file_path = '{}' and project_id = '{}'",
+                      //     path.display(),
+                      //     project_id
+                      //   ))
+                      //   .limit(1)
+                      //   .execute()
+                      //   .await;
+
+                      // if let Ok(mut stream) = result {
+                      //   if let Some(_) = stream.next().await {
+                      //     debug!(project_id = %project_id, "Scheduling delete for: {:?}", path);
+                      //     // If the file exists in the index, mark it for deletion
+                      //     changes.insert(crate::models::FileChange {
+                      //       path: path.clone(),
+                      //       operation: crate::models::FileOperation::Delete,
+                      //     });
+                      //   }
+                      // }
                     }
                     _ => {} // Ignore other event types
                   }
@@ -117,45 +142,20 @@ impl ProjectWatcher {
               }
 
               if !changes.is_empty() {
-                // Process in a detached task since this callback is synchronous
-                let rt = tokio::runtime::Handle::try_current();
-                if let Ok(handle) = rt {
-                  handle.spawn(async move {
-                    match task_manager
-                      .submit_task(
-                        project_id,
-                        &project_path,
-                        crate::models::TaskType::PartialUpdate { changes },
-                      )
-                      .await
-                    {
-                      Ok(task_id) => {
-                        info!(task_id = %task_id, "Submitted partial update task for file changes");
-                      }
-                      Err(e) => {
-                        error!("Failed to submit partial update task: {}", e);
-                      }
-                    }
-                  });
-                } else {
-                  // Fallback: spawn a thread to run the async task
-                  std::thread::spawn(move || {
-                    let rt = tokio::runtime::Runtime::new().unwrap();
-                    rt.block_on(async {
-                    match task_manager.submit_task(
-                      project_id,
-                      &project_path,
-                      crate::models::TaskType::PartialUpdate { changes },
-                    ).await {
-                      Ok(task_id) => {
-                        info!(task_id = %task_id, "Submitted partial update task for file changes");
-                      }
-                      Err(e) => {
-                        error!("Failed to submit partial update task: {}", e);
-                      }
-                    }
-                  });
-                  });
+                match task_manager
+                  .submit_task(
+                    project_id,
+                    &project_path,
+                    crate::models::TaskType::PartialUpdate { changes },
+                  )
+                  .await
+                {
+                  Ok(task_id) => {
+                    info!(task_id = %task_id, "Submitted partial update task for file changes");
+                  }
+                  Err(e) => {
+                    error!("Failed to submit partial update task: {}", e);
+                  }
                 }
               }
             }
@@ -165,24 +165,33 @@ impl ProjectWatcher {
               }
             }
           }
-        },
-        notify_debouncer_full::FileIdMap::new(),
-        config,
-      )?;
+        }
+      }
+    });
 
     // Start watching
     debouncer.watch(project_path, RecursiveMode::Recursive)?;
 
     // Added logging to monitor open files - requires sysinfo crate
     // Note: Add sysinfo to Cargo.toml dependencies for this to work
-    let system = System::new_all();
-    let pid = std::process::id();
-    if let Some(process) = system.process(Pid::from_u32(pid)) {
-      debug!(
-        "Open files after watch setup: {}",
-        process.open_files().unwrap_or_default()
-      );
-    }
+
+    tokio::spawn({
+      let project_id = project_id.clone();
+      let system = System::new_all();
+      let pid = std::process::id();
+      async move {
+        loop {
+          if let Some(process) = system.process(Pid::from_u32(pid)) {
+            debug!(
+              "Open files after watch setup: {}, watcher project = {}",
+              process.open_files().unwrap_or_default(),
+              project_id
+            );
+          }
+          tokio::time::sleep(Duration::from_secs(60)).await; // Log every minute
+        }
+      }
+    });
 
     Ok(Self {
       project_id,
@@ -216,6 +225,7 @@ impl ProjectWatcher {
 
 #[cfg(test)]
 mod tests {
+
   use super::*;
   use crate::Config;
   use crate::bulk_indexer::BulkIndexer;

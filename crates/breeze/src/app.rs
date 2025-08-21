@@ -39,8 +39,8 @@ impl App {
     description: Option<String>,
   ) -> Result<Project, Box<dyn std::error::Error>> {
     let req = CreateProjectRequest {
-      name,
-      directory,
+      name: Some(name),
+      path: directory,
       description,
       rescan_interval: None, // Default to no rescan interval
     };

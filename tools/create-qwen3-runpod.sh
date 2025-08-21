@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
 runpodctl create pod \
-  --gpuType 'NVIDIA GeForce RTX 3090' \
+  --gpuType 'NVIDIA A40' \
   --imageName vllm/vllm-openai:latest \
   --volumeSize 30 \
   --containerDiskSize 10 \

@@ -191,6 +191,7 @@ impl ApiClient {
             // Wrap the response body to hold permit until consumed
             let body_bytes = read_body_with_permit(response, request_permit).await?;
             let result = serde_json::from_slice(&body_bytes)?;
+            debug!("Request to {} succeeded with status {}", url, status);
             return Ok(result);
           } else if should_retry(status.as_u16()) && retries < self.config.max_retries {
             // Release permit for retry
