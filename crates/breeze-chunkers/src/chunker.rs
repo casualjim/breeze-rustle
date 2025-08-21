@@ -1,10 +1,6 @@
 use crate::{Tokenizer, languages::*, metadata_extractor::extract_metadata_from_tree, types::*};
 use text_splitter::{ChunkConfig, ChunkSizer, CodeSplitter, TextSplitter};
 
-// Type aliases to simplify complex return types
-type ParseResult<'a> = Result<(tree_sitter::Tree, Vec<(usize, &'a str)>, Vec<usize>), ChunkError>;
-type MatchesResult<'a> = Result<(Vec<(usize, &'a str)>, Vec<usize>), ChunkError>;
-
 // Concrete chunk sizer enum to avoid trait object issues
 #[derive(Clone)]
 pub enum ConcreteSizer {
@@ -85,10 +81,48 @@ impl InnerChunker {
     let chunker = self.clone();
 
     async_stream::try_stream! {
-        let (tree, chunks, line_offsets) = chunker.setup_code_chunking(&content, &language)?;
+        // Prepare tree-sitter language
+        let language_fn = get_language(&language)
+          .ok_or_else(|| ChunkError::UnsupportedLanguage(language.clone()))?;
+        let ts_language: tree_sitter::Language = language_fn.into();
 
-        // Only do the actual chunk yielding inside the stream
-        for (idx, (offset, chunk_text)) in chunks.into_iter().enumerate() {
+        // Parse the content once upfront with timing
+        #[cfg(feature = "perfprofiling")]
+        let file_size = content.len() as u64;
+
+        #[cfg(feature = "perfprofiling")]
+        let parse_start = std::time::Instant::now();
+        let mut parser = tree_sitter::Parser::new();
+        parser
+          .set_language(&ts_language)
+          .map_err(|e| ChunkError::ParseError(format!("Failed to set language: {:?}", e)))?;
+        let tree = parser
+          .parse(&content, None)
+          .ok_or_else(|| ChunkError::ParseError("Failed to parse content".to_string()))?;
+        #[cfg(feature = "perfprofiling")]
+        let parse_duration = parse_start.elapsed();
+
+        #[cfg(feature = "perfprofiling")]
+        crate::performance::get_tracker().record(
+          language.clone(),
+          file_size,
+          parse_duration,
+          "parser",
+        );
+
+        // Prepare splitter and line offsets
+        #[cfg(feature = "perfprofiling")]
+        let chunk_start = std::time::Instant::now();
+        let config = ChunkConfig::new(chunker.max_chunk_size).with_sizer(&chunker.chunk_sizer);
+        let splitter = CodeSplitter::new(ts_language.clone(), config)
+          .map_err(|e| ChunkError::ParseError(format!("Failed to create splitter: {}", e)))?;
+
+        let line_offsets: Vec<usize> = std::iter::once(0)
+          .chain(content.match_indices('\n').map(|(i, _)| i + 1))
+          .collect();
+
+        // Iterate splitter results directly to stream chunks progressively
+        for (idx, (offset, chunk_text)) in splitter.chunk_indices(&content).enumerate() {
             // Binary search for line numbers (convert to 1-based)
             let start_line = line_offsets.binary_search(&offset).unwrap_or_else(|i| i) + 1;
             let end_offset = offset + chunk_text.len();
@@ -103,11 +137,9 @@ impl InnerChunker {
                 &language,
             ) {
                 Ok(mut meta) => {
-                    // If no node name was extracted, use a default
                     if meta.node_name.is_none() {
                         meta.node_name = file_path.as_ref().map(|_p| format!("chunk_{}", idx + 1));
                     }
-                    // Add file path as parent context if not already set
                     if meta.parent_context.is_none() && file_path.is_some() {
                         meta.parent_context = file_path.clone();
                     }
@@ -115,7 +147,6 @@ impl InnerChunker {
                 }
                 Err(e) => {
                     tracing::warn!("Failed to extract metadata: {}", e);
-                    // Fallback metadata if extraction fails
                     ChunkMetadata {
                         node_type: "code_chunk".to_string(),
                         node_name: file_path.as_ref().map(|_p| format!("chunk_{}", idx + 1)),
@@ -131,7 +162,7 @@ impl InnerChunker {
             // Extract tokens if using HuggingFace or Tiktoken tokenizer
             let tokens = match &chunker.chunk_sizer {
                 ConcreteSizer::HuggingFace(tokenizer) => {
-                  #[cfg(feature = "perfprofiling")]
+                    #[cfg(feature = "perfprofiling")]
                     let _timer = crate::performance::TokenizerTimer::new(
                         language.clone(),
                         chunk_text.len() as u64
@@ -146,7 +177,6 @@ impl InnerChunker {
                         language.clone(),
                         chunk_text.len() as u64
                     );
-                    // Tiktoken returns Vec<usize>, we need Vec<u32>
                     tiktoken.encode_ordinary(chunk_text)
                         .into()
                 }
@@ -163,71 +193,20 @@ impl InnerChunker {
                 metadata,
             });
         }
+
+        #[cfg(feature = "perfprofiling")]
+        {
+          let chunk_duration = chunk_start.elapsed();
+          crate::performance::get_tracker().record(
+            language.clone(),
+            file_size,
+            chunk_duration,
+            "chunking",
+          );
+        }
     }
   }
 
-  fn setup_code_chunking<'a>(&self, content: &'a str, language: &str) -> ParseResult<'a> {
-    // Get tree-sitter language
-    let language_fn = get_language(language)
-      .ok_or_else(|| ChunkError::UnsupportedLanguage(language.to_string()))?;
-    let ts_language: tree_sitter::Language = language_fn.into();
-
-    // Parse the content once upfront with timing
-    #[cfg(feature = "perfprofiling")]
-    let file_size = content.len() as u64;
-
-    // Time just the tree-sitter parsing
-    #[cfg(feature = "perfprofiling")]
-    let parse_start = std::time::Instant::now();
-    let mut parser = tree_sitter::Parser::new();
-    parser
-      .set_language(&ts_language)
-      .map_err(|e| ChunkError::ParseError(format!("Failed to set language: {:?}", e)))?;
-
-    let tree = parser
-      .parse(content, None)
-      .ok_or_else(|| ChunkError::ParseError("Failed to parse content".to_string()))?;
-    #[cfg(feature = "perfprofiling")]
-    let parse_duration = parse_start.elapsed();
-
-    // Record parser timing
-    #[cfg(feature = "perfprofiling")]
-    crate::performance::get_tracker().record(
-      language.to_string(),
-      file_size,
-      parse_duration,
-      "parser",
-    );
-
-    // Time the chunking/querying phase
-    #[cfg(feature = "perfprofiling")]
-    let chunk_start = std::time::Instant::now();
-    // Create config and splitter with our chunk sizer
-    let config = ChunkConfig::new(self.max_chunk_size).with_sizer(&self.chunk_sizer);
-    let splitter = CodeSplitter::new(ts_language.clone(), config)
-      .map_err(|e| ChunkError::ParseError(format!("Failed to create splitter: {}", e)))?;
-
-    // Get base chunks with indices
-    let chunks: Vec<_> = splitter.chunk_indices(content).collect();
-    #[cfg(feature = "perfprofiling")]
-    let chunk_duration = chunk_start.elapsed();
-
-    // Record chunking timing
-    #[cfg(feature = "perfprofiling")]
-    crate::performance::get_tracker().record(
-      language.to_string(),
-      file_size,
-      chunk_duration,
-      "chunking",
-    );
-
-    // Pre-calculate line offsets for efficient line number computation
-    let line_offsets: Vec<usize> = std::iter::once(0)
-      .chain(content.match_indices('\n').map(|(i, _)| i + 1))
-      .collect();
-
-    Ok((tree, chunks, line_offsets))
-  }
 
   pub fn chunk_text(
     &self,
@@ -237,10 +216,19 @@ impl InnerChunker {
     let chunker = self.clone();
 
     async_stream::try_stream! {
-        let (chunks, line_offsets) = chunker.setup_text_chunking(&content)?;
+        // Create config and text splitter with our chunk sizer
+        let config = ChunkConfig::new(chunker.max_chunk_size)
+          .with_sizer(&chunker.chunk_sizer)
+          .with_trim(false);
+        let splitter = TextSplitter::new(config);
 
-        // Only do the actual chunk yielding inside the stream
-        for (idx, (offset, chunk_text)) in chunks.into_iter().enumerate() {
+        // Pre-calculate line offsets for efficient line number computation
+        let line_offsets: Vec<usize> = std::iter::once(0)
+          .chain(content.match_indices('\n').map(|(i, _)| i + 1))
+          .collect();
+
+        // Iterate splitter results directly to stream chunks progressively
+        for (idx, (offset, chunk_text)) in splitter.chunk_indices(&content).enumerate() {
             // Binary search for line numbers (convert to 1-based)
             let start_line = line_offsets.binary_search(&offset).unwrap_or_else(|i| i) + 1;
             let end_offset = offset + chunk_text.len();
@@ -276,7 +264,7 @@ impl InnerChunker {
                 text: chunk_text.to_string(),
                 tokens,
                 start_byte: offset,
-                end_byte: offset + chunk_text.len(),
+                end_byte: end_offset,
                 start_line,
                 end_line,
                 metadata,
@@ -285,23 +273,7 @@ impl InnerChunker {
     }
   }
 
-  fn setup_text_chunking<'a>(&self, content: &'a str) -> MatchesResult<'a> {
-    // Create config and text splitter with our chunk sizer
-    let config = ChunkConfig::new(self.max_chunk_size)
-      .with_sizer(&self.chunk_sizer)
-      .with_trim(false);
-    let splitter = TextSplitter::new(config);
 
-    // Get base chunks with indices
-    let chunks: Vec<_> = splitter.chunk_indices(content).collect();
-
-    // Pre-calculate line offsets for efficient line number computation
-    let line_offsets: Vec<usize> = std::iter::once(0)
-      .chain(content.match_indices('\n').map(|(i, _)| i + 1))
-      .collect();
-
-    Ok((chunks, line_offsets))
-  }
 }
 
 #[cfg(test)]
@@ -310,6 +282,38 @@ mod tests {
   use crate::{Tokenizer, chunker::InnerChunker, types::Chunk};
   use futures::StreamExt;
 
+  #[tokio::test]
+  async fn test_streaming_time_to_first_chunk_code() {
+    let chunker = InnerChunker::new(20, Tokenizer::Characters).unwrap();
+    let mut content = String::new();
+    for i in 0..200 {
+      content.push_str(&format!("fn f{}() {{ println!(\"hi\"); }}\n", i));
+    }
+    let mut stream = Box::pin(chunker.chunk_code(content, "Rust".to_string(), None));
+    // Ensure we can pull the first chunk without consuming the whole stream
+    match stream.next().await {
+      Some(Ok(Chunk::Semantic(sc))) => {
+        assert!(!sc.text.is_empty());
+      }
+      other => panic!("Expected first semantic chunk, got {:?}", other),
+    }
+  }
+
+  #[tokio::test]
+  async fn test_streaming_time_to_first_chunk_text() {
+    let chunker = InnerChunker::new(30, Tokenizer::Characters).unwrap();
+    let mut content = String::new();
+    for _ in 0..500 {
+      content.push_str("lorem ipsum dolor sit amet, consectetur adipiscing elit.\n");
+    }
+    let mut stream = Box::pin(chunker.chunk_text(content, None));
+    match stream.next().await {
+      Some(Ok(Chunk::Text(sc))) => {
+        assert!(!sc.text.is_empty());
+      }
+      other => panic!("Expected first text chunk, got {:?}", other),
+    }
+  }
   #[tokio::test]
   async fn test_python_class_chunking() {
     let chunker = InnerChunker::new(300, Tokenizer::Characters).unwrap();

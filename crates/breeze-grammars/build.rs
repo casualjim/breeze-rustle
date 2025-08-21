@@ -45,49 +45,59 @@ fn get_target_parser_path() -> Result<PathBuf, String> {
     }
   };
 
-  // Try to find the platform-specific package in node_modules
-  let node_modules = find_node_modules()?;
-  let package_dir = node_modules.join(npm_package);
+  // Try to find the platform-specific package in node_modules (if present)
+  match find_node_modules() {
+    Ok(node_modules) => {
+      let package_dir = node_modules.join(npm_package);
+      if package_dir.exists() {
+        eprintln!("Found platform package at: {}", package_dir.display());
 
-  if package_dir.exists() {
-    eprintln!("Found platform package at: {}", package_dir.display());
+        // Construct expected filename based on target
+        let expected_filename = match target.as_str() {
+          "aarch64-apple-darwin" => "libtree-sitter-parsers-all-macos-aarch64.a",
+          "x86_64-apple-darwin" => "libtree-sitter-parsers-all-macos-x86_64.a",
+          "aarch64-unknown-linux-gnu" => "libtree-sitter-parsers-all-linux-aarch64-glibc.a",
+          "x86_64-unknown-linux-gnu" => "libtree-sitter-parsers-all-linux-x86_64-glibc.a",
+          "aarch64-unknown-linux-musl" => "libtree-sitter-parsers-all-linux-aarch64-musl.a",
+          "x86_64-unknown-linux-musl" => "libtree-sitter-parsers-all-linux-x86_64-musl.a",
+          "aarch64-pc-windows-msvc" => "libtree-sitter-parsers-all-windows-aarch64.a",
+          "x86_64-pc-windows-msvc" | "x86_64-pc-windows-gnu" => {
+            "libtree-sitter-parsers-all-windows-x86_64.a"
+          }
+          _ => {
+            return Err(format!(
+              "No parser library found in package: {}",
+              npm_package
+            ));
+          }
+        };
 
-    // Construct expected filename based on target
-    let expected_filename = match target.as_str() {
-      "aarch64-apple-darwin" => "libtree-sitter-parsers-all-macos-aarch64.a",
-      "x86_64-apple-darwin" => "libtree-sitter-parsers-all-macos-x86_64.a",
-      "aarch64-unknown-linux-gnu" => "libtree-sitter-parsers-all-linux-aarch64-glibc.a",
-      "x86_64-unknown-linux-gnu" => "libtree-sitter-parsers-all-linux-x86_64-glibc.a",
-      "aarch64-unknown-linux-musl" => "libtree-sitter-parsers-all-linux-aarch64-musl.a",
-      "x86_64-unknown-linux-musl" => "libtree-sitter-parsers-all-linux-x86_64-musl.a",
-      "aarch64-pc-windows-msvc" => "libtree-sitter-parsers-all-windows-aarch64.a",
-      "x86_64-pc-windows-msvc" | "x86_64-pc-windows-gnu" => {
-        "libtree-sitter-parsers-all-windows-x86_64.a"
-      }
-      _ => {
-        return Err(format!(
-          "No parser library found in package: {}",
+        let lib_path = package_dir.join(expected_filename);
+        if lib_path.exists() {
+          eprintln!("Found parser library: {}", lib_path.display());
+          return Ok(lib_path);
+        } else {
+          eprintln!(
+            "Expected library {} not found in package: {} — will try npx fallback",
+            expected_filename, npm_package
+          );
+        }
+      } else {
+        eprintln!(
+          "Platform package {} not present in node_modules — will try npx fallback",
           npm_package
-        ));
+        );
       }
-    };
-
-    let lib_path = package_dir.join(expected_filename);
-    if lib_path.exists() {
-      eprintln!("Found parser library: {}", lib_path.display());
-      return Ok(lib_path);
-    } else {
-      return Err(format!(
-        "Expected library {} not found in package: {}",
-        expected_filename, npm_package
-      ));
+    }
+    Err(_) => {
+      eprintln!("No node_modules found — will try npx fallback");
     }
   }
 
   // Fall back to npx
   eprintln!(
-    "Platform package {} not found, falling back to npx",
-    npm_package
+    "Falling back to npx to locate/download tree-sitter parsers for {}",
+    target
   );
   get_npm_parser_path()
 }
