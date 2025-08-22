@@ -140,23 +140,54 @@ pub(crate) async fn search_chunks(
   // Apply semantic filters
   chunk_query = apply_semantic_filters(chunk_query, options);
 
-  // Get more chunks than needed to allow for grouping by file
-  let max_chunks = options.file_limit * options.chunks_per_file;
-  let mut results = chunk_query.limit(max_chunks * 2).execute().await?;
+  // Flat chunk ranking: treat file_limit as number of chunks (no grouping by file)
+  let mut results = chunk_query.limit(options.file_limit).execute().await?;
 
-  // Collect all chunks
-  let all_chunks = collect_all_chunks(&mut results).await?;
+  // Collect and rank chunks
+  let mut all_chunks = collect_all_chunks(&mut results).await?;
+  all_chunks.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
 
-  // Group and rank by file
-  let file_chunks = group_chunks_by_file(all_chunks);
-  let ranked_files = rank_files_by_chunks(&file_chunks, options.chunks_per_file);
+  // Take top-N chunks
+  let now = chrono::Utc::now().naive_utc();
+  let search_results: Vec<SearchResult> = all_chunks
+    .into_iter()
+    .take(options.file_limit)
+    .map(|(chunk, score)| {
+      let file_path = chunk.file_path.clone();
+      let language = chunk.language.clone();
+      let chunk_result = ChunkResult {
+        content: chunk.content,
+        start_line: chunk.start_line,
+        end_line: chunk.end_line,
+        start_byte: chunk.start_byte,
+        end_byte: chunk.end_byte,
+        relevance_score: score,
+        node_type: chunk.node_type,
+        node_name: chunk.node_name,
+        language: chunk.language,
+        parent_context: chunk.parent_context,
+        scope_path: chunk.scope_path,
+        definitions: chunk.definitions,
+        references: chunk.references,
+      };
 
-  // Build search results
-  let file_ids: Vec<uuid::Uuid> = ranked_files.iter().map(|(id, _, _)| *id).collect();
-  let documents_table = documents_table.read().await;
-  let document_metadata = fetch_document_metadata(&documents_table, &file_ids).await?;
+      SearchResult {
+        id: chunk.file_id.to_string(),
+        file_path,
+        relevance_score: score,
+        chunk_count: 1,
+        chunks: vec![chunk_result],
+        // Minimal metadata; markdown output doesn't need these, keep simple
+        file_size: 0,
+        last_modified: now,
+        indexed_at: now,
+        languages: vec![language.clone()],
+        primary_language: Some(language),
+      }
+    })
+    .collect();
 
-  build_chunk_search_results(file_chunks, ranked_files, &document_metadata, options)
+  Ok(search_results)
 }
 
 /// Collect all chunks from query results

@@ -1,1 +1,1 @@
-/Users/ivan/github/casualjim/breeze-rustle/AGENTS.md
+/Users/ivan/github/casualjim/breeze.sessionbased/AGENTS.md

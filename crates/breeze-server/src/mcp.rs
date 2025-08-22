@@ -18,6 +18,9 @@ use schemars::JsonSchema;
 use schemars::generate::SchemaSettings;
 use schemars::transform::AddNullable;
 use tracing::info;
+use uuid::Uuid;
+use serde::Deserialize;
+use tokio::sync::RwLock;
 
 use crate::types::*;
 
@@ -68,6 +71,14 @@ pub fn cached_schema_for_type<T: JsonSchema + std::any::Any>() -> Arc<JsonObject
 pub struct BreezeService {
   indexer: Arc<Indexer>,
   tool_router: ToolRouter<BreezeService>,
+  // Per-session defaults: project scope and canonical root
+  session_project_id: Arc<RwLock<Option<Uuid>>>,
+  session_root: Arc<RwLock<Option<String>>>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+struct ProjectPathSet {
+  path: String,
 }
 
 #[tool_router]
@@ -76,6 +87,8 @@ impl BreezeService {
     Self {
       indexer,
       tool_router: Self::tool_router(),
+      session_project_id: Arc::new(RwLock::new(None)),
+      session_root: Arc::new(RwLock::new(None)),
     }
   }
 
@@ -136,19 +149,37 @@ impl BreezeService {
       _ => 10,
     };
 
-    let search_req_path = search_req.path.filter(|v| v.trim().is_empty());
+    // Keep non-empty path only
+    let req_path = search_req
+      .path
+      .as_ref()
+      .and_then(|p| (!p.trim().is_empty()).then_some(p.as_str()));
+
     info!("Searching for '{}' with limit {}", search_req.query, limit);
 
-    let project_id = match search_req_path {
-      Some(path) => {
-        if let Ok(Some(project)) = self.indexer.project_manager().find_by_path(&path).await {
-          Some(project.id)
-        } else {
-          None
+    // Prefer explicit path (absolute or relative resolved via session_root); else use session project
+    let project_id: Option<Uuid> = if let Some(_p) = req_path {
+      let abs = match self.resolve_path_abs(req_path).await {
+        Ok(v) => v,
+        Err(e) => return Ok(CallToolResult::error(vec![Content::text(e)])),
+      };
+      if let Some(abs) = abs {
+        match self.indexer.project_manager().find_by_path(&abs).await {
+          Ok(Some(project)) => Some(project.id),
+          _ => None,
         }
+      } else {
+        None
       }
-      None => None,
+    } else {
+      self.get_session_project().await
     };
+
+    if req_path.is_none() && project_id.is_none() {
+      return Ok(CallToolResult::error(vec![Content::text(
+        "No path provided and no session project set. Call project_path.set first.",
+      )]));
+    }
 
     let options = SearchOptions {
       file_limit: limit,
@@ -162,13 +193,138 @@ impl BreezeService {
       .search(&search_req.query, options, project_id)
       .await
     {
-      Ok(results) => Ok(CallToolResult::success(vec![Content::json(results)?])),
+      Ok(results) => {
+        if results.is_empty() {
+          return Ok(CallToolResult::success(vec![Content::text("No results found.".to_string())]));
+        }
+        let mut report = String::new();
+        // Normalize relevance by top score to make it intuitive (percentage-like)
+        let max_score = results.iter().map(|r| r.relevance_score).fold(0.0f32, f32::max);
+        for r in results {
+          use std::fmt::Write as _;
+          let rel_norm = if max_score > 0.0 { (r.relevance_score / max_score) as f64 } else { 0.0 };
+          let rel_pct = rel_norm * 100.0;
+          let _ = writeln!(report, "## {}\n", r.file_path);
+          let _ = writeln!(report, "Relevance: {:.1}%\n", rel_pct);
+
+          for ch in r.chunks {
+            let lang = if ch.language.trim().is_empty() { "" } else { ch.language.as_str() };
+            // Fenced code block
+            let _ = writeln!(report, "```{}\n{}\n```\n", lang, ch.content);
+          }
+        }
+        Ok(CallToolResult::success(vec![Content::text(report)]))
+      }
       Err(e) => Ok(CallToolResult::error(vec![Content::text(format!(
         "Search failed: {}",
         e
       ))])),
     }
   }
+
+  #[tool(description = "Set default project root and scope for this session", input_schema = cached_schema_for_type::<ProjectPathSet>())]
+  async fn set_project_path(
+    &self,
+    Parameters(ProjectPathSet { path }): Parameters<ProjectPathSet>,
+  ) -> Result<CallToolResult, ErrorData> {
+    // Resolve (supports relative via existing session root)
+    let abs = match self.resolve_path_abs(Some(&path)).await {
+      Ok(v) => v,
+      Err(e) => return Ok(CallToolResult::error(vec![Content::text(e)])),
+    };
+
+    let Some(abs) = abs else {
+      return Ok(CallToolResult::error(vec![Content::text("Empty resolved path")]));
+    };
+
+    // Validate directory exists
+    match std::fs::metadata(&abs) {
+      Ok(md) if md.is_dir() => {}
+      _ => {
+        return Ok(CallToolResult::error(vec![Content::text(
+          "Path does not exist or is not a directory",
+        )]));
+      }
+    }
+
+    // Find project by path and store both id and canonical root (from DB)
+    match self.indexer.project_manager().find_by_path(&abs).await {
+      Ok(Some(project)) => {
+        *self.session_project_id.write().await = Some(project.id);
+        *self.session_root.write().await = Some(project.directory.clone());
+        Ok(CallToolResult::success(vec![Content::json(serde_json::json!({
+          "project_id": project.id,
+          "project_root": project.directory
+        }))?]))
+      }
+      Ok(None) => Ok(CallToolResult::error(vec![Content::text(
+        "No indexed project covers that path",
+      )])),
+      Err(e) => Ok(CallToolResult::error(vec![Content::text(format!(
+        "Failed to resolve project: {}",
+        e
+      ))])),
+    }
+  }
+
+  #[tool(description = "Get current session project root")]
+  async fn get_project_path(&self) -> Result<CallToolResult, ErrorData> {
+    Ok(CallToolResult::success(vec![Content::json(serde_json::json!({
+      "project_id": self.get_session_project().await,
+      "project_root": self.session_root.read().await.clone()
+    }))?]))
+  }
+}
+
+impl BreezeService {
+  // Internal helpers for session state and path resolution
+  async fn get_session_project(&self) -> Option<Uuid> {
+    self.session_project_id.read().await.clone()
+  }
+
+  async fn resolve_path_abs(&self, maybe_path: Option<&str>) -> Result<Option<String>, String> {
+    // If an explicit path is provided
+    if let Some(p) = maybe_path {
+      let path = std::path::Path::new(p);
+      if path.is_absolute() {
+        return canonicalize_nearest_ancestor(path).map(Some).map_err(|e| e.to_string());
+      }
+      // Relative path requires session_root
+      let base = self
+        .session_root
+        .read()
+        .await
+        .clone()
+        .ok_or_else(|| "No session root set; call project_path.set first".to_string())?;
+      let joined = std::path::Path::new(&base).join(path);
+      return canonicalize_nearest_ancestor(&joined).map(Some).map_err(|e| e.to_string());
+    }
+
+    // No path provided: return session_root (already canonical)
+    Ok(self.session_root.read().await.clone())
+  }
+}
+
+fn canonicalize_nearest_ancestor(p: &std::path::Path) -> std::io::Result<String> {
+  let mut ancestor = Some(p);
+  while let Some(a) = ancestor {
+    if a.exists() {
+      break;
+    }
+    ancestor = a.parent();
+  }
+  let normalized = if let Some(a) = ancestor {
+    let ac = a.canonicalize().unwrap_or_else(|_| a.to_path_buf());
+    let tail = p.strip_prefix(a).unwrap_or(p);
+    ac.join(tail)
+  } else {
+    p.to_path_buf()
+  };
+  let mut s = normalized.to_string_lossy().to_string();
+  if s.ends_with('/') && s.len() > 1 {
+    s.pop();
+  }
+  Ok(s)
 }
 
 #[tool_handler]
