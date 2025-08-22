@@ -1377,7 +1377,16 @@ async fn replace_sink_task(
 
     // Destructure to avoid borrowing issues and to keep IDs for pruning
     let crate::pipeline::ReplaceFileChunks { project_id, file_path, chunks } = msg;
+    let chunk_count = chunks.len();
     let ids: Vec<String> = chunks.iter().map(|c| format!("'{}'", c.id)).collect();
+
+    // Log start of replace operation
+    debug!(
+      file = %file_path,
+      project = %project_id,
+      chunk_count,
+      "replace_file_chunks: upsert starting"
+    );
 
     let stream = async_stream::stream! {
       for chunk in chunks.into_iter() {
@@ -1406,7 +1415,7 @@ async fn replace_sink_task(
     }
     drop(table_guard);
 
-    // Prune stale rows: delete where same (project_id, file_path) and id NOT IN new ids
+    // Compute how many stale rows will be pruned (for logging)
     let id_list = if ids.is_empty() {
       String::new()
     } else {
@@ -1415,8 +1424,7 @@ async fn replace_sink_task(
 
     let escaped_path = file_path.replace("'", "''");
 
-    let table_guard_w = table.write().await;
-    let delete_expr = if id_list.is_empty() {
+    let count_expr = if id_list.is_empty() {
       format!("project_id = '{}' AND file_path = '{}'", project_id, escaped_path)
     } else {
       format!(
@@ -1425,11 +1433,29 @@ async fn replace_sink_task(
       )
     };
 
+    let stale_count = {
+      let table_guard_r = table.read().await;
+      table_guard_r
+        .count_rows(Some(count_expr.clone()))
+        .await
+        .map_err(|e| IndexerError::Database(e.to_string()))? as usize
+    };
+
+    // Prune stale rows: delete where same (project_id, file_path) and id NOT IN new ids
+    let table_guard_w = table.write().await;
     table_guard_w
-      .delete(&delete_expr)
+      .delete(&count_expr)
       .await
       .map_err(|e| IndexerError::Database(e.to_string()))?;
     drop(table_guard_w);
+
+    debug!(
+      file = %file_path,
+      project = %project_id,
+      upserted = chunk_count,
+      pruned = stale_count,
+      "replace_file_chunks: upsert complete, prune complete"
+    );
   }
 
   Ok(())
@@ -3057,5 +3083,115 @@ def goodbye():
     // The key assertion: we should see "Flushing document batch" logs multiple times
     // during processing, not just at the end. This can be verified by examining logs.
     Ok(())
+  }
+
+  #[tokio::test]
+  async fn test_replace_sink_add_then_prune_gapless() {
+    use crate::models::CodeChunk;
+
+    let (_temp_dir, _config) = Config::test();
+    let embedding_dim = 16; // keep small for test
+
+    // Create LanceDB connection and chunk table
+    let temp_db = tempfile::tempdir().unwrap();
+    let connection = lancedb::connect(temp_db.path().to_str().unwrap())
+      .execute()
+      .await
+      .unwrap();
+
+    let chunk_table =
+      crate::models::CodeChunk::ensure_table(&connection, "test_chunks_wi02", embedding_dim)
+        .await
+        .unwrap();
+
+    let table = Arc::new(RwLock::new(chunk_table));
+
+    // Channel for replace sink
+    let (tx, rx) = mpsc::channel(8);
+    let handle = tokio::spawn(replace_sink_task(rx, table.clone(), embedding_dim));
+
+    let project_id = Uuid::now_v7();
+    let file_path = "wi02.rs".to_string();
+
+    // Helper to build a chunk
+    let mk_chunk = |content: &str| -> CodeChunk {
+      CodeChunk::builder()
+        .file_id(Uuid::now_v7())
+        .project_id(project_id)
+        .file_path(file_path.clone())
+        .content(content.to_string())
+        .embedding(vec![0.0; embedding_dim])
+        .start_byte(0)
+        .end_byte(content.len())
+        .start_line(1)
+        .end_line(1)
+        .build()
+    };
+
+    // First replace with 3 chunks
+    let c1 = mk_chunk("one");
+    let c2 = mk_chunk("two");
+    let c3 = mk_chunk("three");
+    let first_ids: std::collections::BTreeSet<String> = [c1.id, c2.id, c3.id]
+      .into_iter()
+      .map(|u| u.to_string())
+      .collect();
+
+    tx.send(crate::pipeline::ReplaceFileChunks {
+      project_id,
+      file_path: file_path.clone(),
+      chunks: vec![c1, c2, c3],
+    })
+    .await
+    .unwrap();
+
+    // Second replace with 2 chunks (drop one)
+    let n1 = mk_chunk("one");
+    let n2 = mk_chunk("two");
+    let second_ids: std::collections::BTreeSet<String> = [n1.id, n2.id]
+      .into_iter()
+      .map(|u| u.to_string())
+      .collect();
+
+    tx.send(crate::pipeline::ReplaceFileChunks {
+      project_id,
+      file_path: file_path.clone(),
+      chunks: vec![n1, n2],
+    })
+    .await
+    .unwrap();
+
+    drop(tx); // close channel to let sink exit
+    handle.await.unwrap().unwrap();
+
+    // Query final set for (project_id, file_path)
+    let table_r = table.read().await;
+    let mut q = table_r
+      .query()
+      .only_if(format!("project_id = '{}' AND file_path = '{}' AND id != '{}'",
+                       project_id,
+                       file_path.replace("'", "''"),
+                       Uuid::nil()));
+
+    let mut rows = q.execute().await.unwrap();
+    let mut final_ids = std::collections::BTreeSet::new();
+    while let Some(batch) = rows.try_next().await.unwrap() {
+      if let Some(id_col) = batch.column_by_name("id") {
+        let id_col = id_col.as_any().downcast_ref::<arrow::array::StringArray>().unwrap();
+        for i in 0..batch.num_rows() {
+          final_ids.insert(id_col.value(i).to_string());
+        }
+      }
+    }
+
+    // Final ids must match second_ids exactly
+    assert_eq!(final_ids, second_ids, "Final chunk ID set must match second replace set");
+
+    // And must not be empty (no blackout window left the set empty at the end)
+    assert!(!final_ids.is_empty());
+
+    // Ensure at least one id from the first set was pruned
+    let pruned: Vec<_> = first_ids.difference(&second_ids).collect();
+    assert!(!pruned.is_empty(), "Expected some stale ids to be pruned");
   }
 }
