@@ -1,6 +1,9 @@
 pub mod app;
 pub mod cli;
 pub mod config;
+pub mod handlers;
+pub mod tables;
+pub mod format;
 mod logging;
 
 pub use app::App;

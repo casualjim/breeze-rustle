@@ -112,9 +112,12 @@ pub enum ProjectCommands {
   },
   /// List all projects
   List {
-    /// Output mode: table, json, tsv, or block
+    /// Output mode: table, json, or tsv
     #[arg(long = "output", value_enum, default_value_t = OutputMode::Table)]
     output: OutputMode,
+    /// Suppress header row in table/tsv outputs
+    #[arg(long = "no-headers", default_value_t = false)]
+    no_headers: bool,
     /// Comma-separated list of columns (default: id,name,directory,description)
     #[arg(long = "columns", value_delimiter = ',')]
     columns: Option<Vec<String>>,
@@ -159,9 +162,12 @@ pub enum TaskCommands {
     /// Maximum number of tasks to show
     #[arg(short, long, default_value = "20")]
     limit: Option<usize>,
-    /// Output mode: table, json, tsv, or block
+    /// Output mode: table, json, or tsv
     #[arg(long = "output", value_enum, default_value_t = OutputMode::Table)]
     output: OutputMode,
+    /// Suppress header row in table/tsv outputs
+    #[arg(long = "no-headers", default_value_t = false)]
+    no_headers: bool,
     /// Comma-separated list of columns (default: id,project,status,created,files)
     #[arg(long = "columns", value_delimiter = ',')]
     columns: Option<Vec<String>>,
@@ -179,7 +185,6 @@ pub enum OutputMode {
   Table,
   Json,
   Tsv,
-  Block,
 }
 
 fn parse_scope_depth(s: &str) -> Result<(usize, usize), String> {
