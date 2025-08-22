@@ -9,6 +9,8 @@ use tokio::signal;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info};
 
+mod tables;
+
 /// Create a cancellation token that triggers on Ctrl+C or SIGTERM
 fn create_shutdown_token() -> (CancellationToken, tokio::task::JoinHandle<()>) {
   let token = CancellationToken::new();
@@ -115,18 +117,28 @@ async fn async_main() {
             }
           }
         }
-        ProjectCommands::List => match app.list_projects().await {
+        ProjectCommands::List { output, columns } => match app.list_projects().await {
           Ok(projects) => {
             if projects.is_empty() {
               println!("No projects found.");
             } else {
-              println!("Projects:");
-              for project in projects {
-                println!("\n  ID: {}", project.id);
-                println!("  Name: {}", project.name);
-                println!("  Directory: {}", project.directory);
-                if let Some(desc) = &project.description {
-                  println!("  Description: {}", desc);
+              use tables::RenderMode;
+              use breeze::cli::OutputMode;
+              match output {
+                OutputMode::Json => {
+                  println!("{}", serde_json::to_string_pretty(&projects).unwrap());
+                }
+                OutputMode::Tsv => {
+                  let s = tables::projects_render(&projects, columns.as_deref().unwrap_or(&[]), RenderMode::Tsv);
+                  print!("{}", s);
+                }
+                OutputMode::Block => {
+                  let s = tables::projects_render(&projects, columns.as_deref().unwrap_or(&[]), RenderMode::Block);
+                  print!("{}", s);
+                }
+                OutputMode::Table => {
+                  let s = tables::projects_render(&projects, columns.as_deref().unwrap_or(&[]), RenderMode::Table);
+                  println!("{}", s);
                 }
               }
             }
@@ -224,19 +236,28 @@ async fn async_main() {
             std::process::exit(1);
           }
         },
-        TaskCommands::List { limit } => match app.list_tasks(limit).await {
+        TaskCommands::List { limit, output, columns } => match app.list_tasks(limit).await {
           Ok(tasks) => {
             if tasks.is_empty() {
               println!("No tasks found.");
             } else {
-              println!("Tasks:");
-              for task in tasks {
-                println!("\n  ID: {}", task.id);
-                println!("  Project: {}", task.project_id);
-                println!("  Status: {}", task.status);
-                println!("  Created: {}", task.created_at);
-                if let Some(files) = task.files_indexed {
-                  println!("  Files indexed: {}", files);
+              use tables::RenderMode;
+              use breeze::cli::OutputMode;
+              match output {
+                OutputMode::Json => {
+                  println!("{}", serde_json::to_string_pretty(&tasks).unwrap());
+                }
+                OutputMode::Tsv => {
+                  let s = tables::tasks_render(&tasks, columns.as_deref().unwrap_or(&[]), RenderMode::Tsv);
+                  print!("{}", s);
+                }
+                OutputMode::Block => {
+                  let s = tables::tasks_render(&tasks, columns.as_deref().unwrap_or(&[]), RenderMode::Block);
+                  print!("{}", s);
+                }
+                OutputMode::Table => {
+                  let s = tables::tasks_render(&tasks, columns.as_deref().unwrap_or(&[]), RenderMode::Table);
+                  println!("{}", s);
                 }
               }
             }

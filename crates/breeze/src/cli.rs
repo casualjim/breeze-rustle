@@ -111,7 +111,14 @@ pub enum ProjectCommands {
     description: Option<String>,
   },
   /// List all projects
-  List,
+  List {
+    /// Output mode: table, json, tsv, or block
+    #[arg(long = "output", value_enum, default_value_t = OutputMode::Table)]
+    output: OutputMode,
+    /// Comma-separated list of columns (default: id,name,directory,description)
+    #[arg(long = "columns", value_delimiter = ',')]
+    columns: Option<Vec<String>>,
+  },
   /// Show project details
   Show {
     /// Project ID
@@ -152,6 +159,12 @@ pub enum TaskCommands {
     /// Maximum number of tasks to show
     #[arg(short, long, default_value = "20")]
     limit: Option<usize>,
+    /// Output mode: table, json, tsv, or block
+    #[arg(long = "output", value_enum, default_value_t = OutputMode::Table)]
+    output: OutputMode,
+    /// Comma-separated list of columns (default: id,project,status,created,files)
+    #[arg(long = "columns", value_delimiter = ',')]
+    columns: Option<Vec<String>>,
   },
 }
 
@@ -159,6 +172,14 @@ pub enum TaskCommands {
 pub enum SearchGranularity {
   Document,
   Chunk,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+pub enum OutputMode {
+  Table,
+  Json,
+  Tsv,
+  Block,
 }
 
 fn parse_scope_depth(s: &str) -> Result<(usize, usize), String> {
