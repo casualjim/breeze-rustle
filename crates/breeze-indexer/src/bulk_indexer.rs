@@ -1375,9 +1375,12 @@ async fn replace_sink_task(
     let converter = BufferedRecordBatchConverter::<crate::models::CodeChunk>::default()
       .with_schema(Arc::new(crate::models::CodeChunk::schema(embedding_dim)));
 
-    let chunks = msg.chunks;
+    // Destructure to avoid borrowing issues and to keep IDs for pruning
+    let crate::pipeline::ReplaceFileChunks { project_id, file_path, chunks } = msg;
+    let ids: Vec<String> = chunks.iter().map(|c| format!("'{}'", c.id)).collect();
+
     let stream = async_stream::stream! {
-      for chunk in chunks {
+      for chunk in chunks.into_iter() {
         yield chunk;
       }
     };
@@ -1404,26 +1407,17 @@ async fn replace_sink_task(
     drop(table_guard);
 
     // Prune stale rows: delete where same (project_id, file_path) and id NOT IN new ids
-    let ids: Vec<String> = chunks
-      .iter()
-      .map(|c| format!("'{}'", c.id))
-      .collect();
     let id_list = if ids.is_empty() {
-      // If empty, we clear all rows for this file
-      String::from("NULL") // special case will not be used
+      String::new()
     } else {
       ids.join(",")
     };
 
-    let escaped_path = msg.file_path.replace("'", "''");
-    let project_id = msg.project_id;
+    let escaped_path = file_path.replace("'", "''");
 
     let table_guard_w = table.write().await;
-    let delete_expr = if ids.is_empty() {
-      format!(
-        "project_id = '{}' AND file_path = '{}'",
-        project_id, escaped_path
-      )
+    let delete_expr = if id_list.is_empty() {
+      format!("project_id = '{}' AND file_path = '{}'", project_id, escaped_path)
     } else {
       format!(
         "project_id = '{}' AND file_path = '{}' AND id NOT IN ({})",
@@ -1717,7 +1711,7 @@ mod tests {
     let embedding_dim = 384;
     let (embedded_tx, embedded_rx) = mpsc::channel(1000);
     let (doc_tx, mut doc_rx) = mpsc::channel(1000);
-    let (chunk_tx, _chunk_rx) = mpsc::channel(1000);
+    let (chunks_replace_tx, _chunks_replace_rx) = mpsc::channel(1000);
     let stats = IndexingStats::new();
     let cancel_token = CancellationToken::new();
 
@@ -1729,7 +1723,7 @@ mod tests {
         project_id: Uuid::now_v7(),
         embedded_rx,
         doc_tx,
-        chunk_tx,
+        chunks_replace_tx,
         embedding_dim,
         stats: stats_clone,
         cancel_token: cancel_clone,
@@ -2555,7 +2549,7 @@ def goodbye():
     let embedding_dim = 384;
     let (embedded_tx, embedded_rx) = mpsc::channel(100);
     let (doc_tx, mut doc_rx) = mpsc::channel(100);
-    let (chunk_tx, _chunk_rx) = mpsc::channel(100);
+    let (chunks_replace_tx, _chunks_replace_rx) = mpsc::channel(100);
     let stats = IndexingStats::new();
     let cancel_token = CancellationToken::new();
     let project_id = Uuid::now_v7();
@@ -2566,7 +2560,7 @@ def goodbye():
         project_id,
         embedded_rx,
         doc_tx,
-        chunk_tx,
+        chunks_replace_tx,
         embedding_dim,
         stats,
         cancel_token,

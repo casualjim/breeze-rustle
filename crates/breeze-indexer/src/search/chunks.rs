@@ -73,7 +73,6 @@ fn apply_semantic_filters(
   query
 }
 
-
 /// Search chunks directly and group by file
 pub(crate) async fn search_chunks(
   _documents_table: Arc<RwLock<Table>>,
@@ -183,4 +182,3 @@ where
 
   Ok(all_chunks)
 }
-

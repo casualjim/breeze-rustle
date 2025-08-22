@@ -431,7 +431,7 @@ pub(crate) async fn document_builder_task(
     project_id,
     mut embedded_rx,
     doc_tx,
-    chunk_tx,
+    chunks_replace_tx,
     embedding_dim,
     stats,
     cancel_token,

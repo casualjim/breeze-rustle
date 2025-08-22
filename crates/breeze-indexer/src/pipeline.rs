@@ -50,7 +50,6 @@ pub struct ReplaceFileChunks {
 }
 
 pub type ReplaceFileChunksSender = mpsc::Sender<ReplaceFileChunks>;
-pub type ReplaceFileChunksReceiver = mpsc::Receiver<ReplaceFileChunks>;
 
 /// A project chunk that's been filtered for the pipeline
 #[derive(Debug, Clone)]
