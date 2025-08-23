@@ -7,6 +7,7 @@ use std::time::Instant;
 use breeze_chunkers::{Chunk, Tokenizer, WalkOptions, walk_project};
 use futures_util::{StreamExt, TryStreamExt};
 use lancedb::Table;
+use lancedb::arrow::IntoArrow;
 use lancedb::query::{ExecutableQuery, QueryBase};
 use tokio::sync::{RwLock, mpsc};
 use tokio_util::sync::CancellationToken;
@@ -1370,10 +1371,6 @@ async fn replace_sink_task(
 
   // We will upsert then prune per message (WI-02 semantics)
   while let Some(msg) = replace_rx.recv().await {
-    // Build a single RecordBatch from the provided chunks
-    let converter = BufferedRecordBatchConverter::<crate::models::CodeChunk>::default()
-      .with_schema(Arc::new(crate::models::CodeChunk::schema(embedding_dim)));
-
     // Destructure to avoid borrowing issues and to keep IDs for pruning
     let crate::pipeline::ReplaceFileChunks {
       project_id,
@@ -1391,21 +1388,27 @@ async fn replace_sink_task(
       "replace_file_chunks: upsert starting"
     );
 
-    let stream = async_stream::stream! {
-      for chunk in chunks.into_iter() {
-        yield chunk;
+    // Build a single RecordBatch by concatenating all chunk batches (no buffering/streaming)
+    let mut all_batches: Vec<arrow::record_batch::RecordBatch> = Vec::new();
+    for chunk in chunks.into_iter() {
+      let reader = chunk
+        .into_arrow()
+        .map_err(|e| IndexerError::Database(e.to_string()))?;
+      for batch_result in reader {
+        let batch = batch_result.map_err(|e| IndexerError::Database(e.to_string()))?;
+        all_batches.push(batch);
       }
-    };
-    let record_batches = converter.convert(Box::pin(stream));
+    }
 
-    // Upsert all chunks by id via merge_insert
-    let table_guard = table.read().await;
-    futures_util::pin_mut!(record_batches);
-    while let Some(batch_res) = record_batches.next().await {
-      let batch = batch_res.map_err(|e| IndexerError::Database(e.to_string()))?;
-      let schema = batch.schema();
+    if !all_batches.is_empty() {
+      let schema = Arc::new(crate::models::CodeChunk::schema(embedding_dim));
+      let single_batch = arrow::compute::concat_batches(&schema, &all_batches)
+        .map_err(|e| IndexerError::Database(e.to_string()))?;
+
+      // Upsert all chunks by id via merge_insert
+      let table_guard = table.read().await;
       let batch_iter =
-        arrow::record_batch::RecordBatchIterator::new(vec![Ok(batch)].into_iter(), schema);
+        arrow::record_batch::RecordBatchIterator::new(vec![Ok(single_batch)].into_iter(), schema);
       let mut merge = table_guard.merge_insert(&["id"]);
       merge.when_matched_update_all(None);
       merge.when_not_matched_insert_all();
@@ -1413,8 +1416,8 @@ async fn replace_sink_task(
         .execute(Box::new(batch_iter))
         .await
         .map_err(|e| IndexerError::Database(e.to_string()))?;
+      drop(table_guard);
     }
-    drop(table_guard);
 
     // Compute how many stale rows will be pruned (for logging)
     let id_list = if ids.is_empty() {
