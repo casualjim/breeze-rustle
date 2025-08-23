@@ -33,6 +33,13 @@ tls_key = "server.key"  # Path to the TLS private key
 file_size = "5M"  # 5M - files larger than this are skipped
 # Optional: Override the automatic chunk size calculation
 # max_chunk_size = 512  # Maximum tokens per chunk
+# Provider guidance example (for certain remote providers): ~3000 chars with 1000-char overlap (~33%)
+# You can approximate 3000 characters as ~750 tokens (≈ 4 chars/token)
+# If using that provider, consider:
+# [indexer]
+# chunk_overlap = 0.33
+# [indexer.limits]
+# max_chunk_size = 750
 
 [indexer.workers]
 small_file = 8   # Number of files to process concurrently
@@ -68,6 +75,25 @@ tokenizer = "characters"
 # requests_per_minute = 3000
 # tokens_per_minute = 1000000
 # max_concurrent_requests = 50
+
+# OpenAI-compatible provider example: Codestral embeddings
+[embeddings.mistral]
+model = "codestral-embed"
+api_base = "https://api.mistral.ai/v1"
+# api_key = "${MISTRAL_API_KEY}"
+# Model characteristics
+context_length = 8192
+embedding_dim = 1536
+max_batch_size = 64
+# Tokenizer for batching estimates (HuggingFace)
+tokenizer = "hf:mistralai/Codestral-22B-v0.1"
+# Rate limiting (adjust to account limits)
+requests_per_minute = 60
+tokens_per_minute = 1_000_000
+max_concurrent_requests = 10
+# Optional provider-specific output controls
+# output_dtype = "float"   # or "int8", "uint8", "binary", "ubinary"
+# output_dimension = 1024
 
 [embeddings.ollama]
 model = "nomic-embed-text:latest"  # Ollama model for embeddings

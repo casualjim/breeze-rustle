@@ -227,6 +227,10 @@ pub struct OpenAILikeConfigJs {
   pub tokens_per_minute: u32,
   pub max_concurrent_requests: Option<u32>,
   pub max_tokens_per_request: Option<u32>,
+  // optional OpenAI/provider-specific output controls
+  pub encoding_format: Option<String>,
+  pub output_dtype: Option<String>,
+  pub output_dimension: Option<u32>,
 }
 
 #[napi(object)]
@@ -387,6 +391,9 @@ impl Indexer {
             .map(|v| v as usize)
             .unwrap_or(50usize),
           max_tokens_per_request: entry.config.max_tokens_per_request.map(|v| v as usize),
+          encoding_format: entry.config.encoding_format,
+          output_dimension: entry.config.output_dimension.map(|v| v as usize),
+          output_dtype: entry.config.output_dtype,
         };
 
         map.insert(entry.name, cfg_entry);

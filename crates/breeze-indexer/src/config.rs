@@ -78,6 +78,18 @@ pub struct OpenAILikeConfig {
   /// Maximum tokens per request (defaults to context_length if not specified)
   #[serde(skip_serializing_if = "Option::is_none")]
   pub max_tokens_per_request: Option<usize>,
+
+  /// Optional OpenAI-specific encoding format (e.g., "float", "base64"). If None, omit from request.
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub encoding_format: Option<String>,
+
+  /// Optional provider-specific output data type (e.g., "float", "int8", "uint8", "binary", "ubinary"). If None, omit from request.
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub output_dtype: Option<String>,
+
+  /// Optional provider-specific output embedding dimension. If None, omit from request.
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub output_dimension: Option<usize>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

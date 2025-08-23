@@ -29,13 +29,13 @@ tls_key = "breeze.local.wagyu.icu+3-key.pem"  # Path to the TLS private key
 
 [indexer]
 # Optional: Number of overlapping tokens between chunks (helps preserve context)
-chunk_overlap = 0.1
+chunk_overlap = 0.2
 
 [indexer.limits]
 file_size = "5M"  # 5M - files larger than this are skipped
 # Optional: Override the automatic chunk size calculation
 # max_chunk_size = 1024  # Maximum tokens per chunk
-max_chunk_size = 4096  # Maximum tokens per chunk
+max_chunk_size = 768  # Maximum tokens per chunk
 
 [indexer.workers]
 small_file = 8   # Number of files to process concurrently
@@ -45,7 +45,7 @@ batch_size = 256 # Number of chunks to collect in a batch betfore sending to the
 [embeddings]
 # The selected embedding provider, from the providers defined below
 # provider = "local" | "openai" | "ollama"  | "llamacpp"| "voyage" | "cohere" | "my-provider" | ...
-provider = "qwen3"
+provider = "mistral"
 workers = 5 # Number of concurrent chunk batchers to use for the embedding provider
 
 [embeddings.local]
@@ -86,13 +86,13 @@ embedding_dim = 384
 # max_concurrent_requests = 5
 
 [embeddings.ollama]
-model = "nomic-embed-text"  # Ollama model for embeddings
+model = "hf.co/Qwen/Qwen3-Embedding-0.6B-GGUF:Q8_0"  # Ollama model for embeddings
 api_base = "http://localhost:11434/v1"  # Ollama API base URL
 # Optional: Override if auto-detection fails
-context_length = 8192
-embedding_dim = 768
-max_batch_size = 64
-tokenizer = "hf:nomic-ai/nomic-embed-text-v1.5" # huggingface tokenizer for Ollama model
+context_length = 32768
+embedding_dim = 1024
+max_batch_size = 16
+tokenizer = "hf:Qwen/Qwen3-Embedding-0.6B" # huggingface tokenizer for Ollama model
 
 # Rate limiting for the provider
 requests_per_minute = 50
@@ -168,3 +168,19 @@ max_concurrent_requests = 5
 # requests_per_minute = 3000
 # tokens_per_minute = 1000000
 # max_concurrent_requests = 50
+
+# OpenAI-compatible provider example: Codestral embeddings
+[embeddings.mistral]
+model = "codestral-embed"
+api_base = "https://api.mistral.ai/v1"
+# api_key = "${MISTRAL_API_KEY}"
+# Model characteristics
+context_length = 8192
+embedding_dim = 1536
+max_batch_size = 64
+# Tokenizer for batching estimates (HuggingFace)
+tokenizer = "hf:mistralai/Codestral-22B-v0.1"
+# Rate limiting (adjust to account limits)
+requests_per_minute = 360
+tokens_per_minute = 2_000_000
+max_concurrent_requests = 50

@@ -13,9 +13,9 @@ https = 8529  # HTTPS port
 disabled = true
 
 # use keypair files, this does not support automatic cert rotation atm
-[server.tls.keypair]
-tls_cert = "cert.pem"  # Path to the TLS certificate
-tls_key = "key.pem"  # Path to the TLS private key
+# [server.tls.keypair]
+# tls_cert = "cert.pem"  # Path to the TLS certificate
+# tls_key = "key.pem"  # Path to the TLS private key
 
 # Or use letsencrypt over http-01 challenge
 # [server.letsencrypt]
@@ -28,12 +28,19 @@ tls_key = "key.pem"  # Path to the TLS private key
 
 [indexer]
 # Optional: Number of overlapping tokens between chunks (helps preserve context)
-chunk_overlap = 0.1
+chunk_overlap = 0.2
 
 [indexer.limits]
-file_size = "5M"  # 5M - files larger than this are skipped
+file_size = "1500K"  # 5M - files larger than this are skipped
 # Optional: Override the automatic chunk size calculation
-max_chunk_size = 512  # Maximum tokens per chunk (ends up around 50 LOC usually)
+max_chunk_size = 758  # Maximum tokens per chunk (ends up around 50 LOC usually)
+# Provider guidance example (for certain remote providers): ~3000 chars with 1000-char overlap (~33%)
+# You can approximate 3000 characters as ~750 tokens (≈ 4 chars/token)
+# If using that provider, consider:
+# [indexer]
+# chunk_overlap = 0.33
+# [indexer.limits]
+# max_chunk_size = 750
 
 [indexer.workers]
 small_file = 8   # Number of files to process concurrently
@@ -134,5 +141,24 @@ max_concurrent_requests = 5
 
 # Rate limiting for the provider
 # requests_per_minute = 3000
-# tokens_per_minute = 1000000
-# max_concurrent_requests = 50
+# tokens_per_minute = 1_000_000
+# max_concurrent_requests = 10
+
+# OpenAI-compatible provider example: Codestral embeddings
+[embeddings.mistral]
+model = "codestral-embed"
+api_base = "https://api.mistral.ai/v1"
+# api_key = "${MISTRAL_API_KEY}"
+# Model characteristics
+context_length = 8192
+embedding_dim = 1536
+max_batch_size = 64
+# Tokenizer for batching estimates (HuggingFace)
+tokenizer = "hf:mistralai/Codestral-22B-v0.1"
+# Rate limiting (adjust to account limits)
+requests_per_minute = 360
+tokens_per_minute = 2_000_000
+max_concurrent_requests = 10
+# Optional provider-specific output controls
+# output_dtype = "float"   # or "int8", "uint8", "binary", "ubinary"
+# output_dimension = 1024
