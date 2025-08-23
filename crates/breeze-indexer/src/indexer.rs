@@ -20,8 +20,8 @@ use crate::{
   task_manager::TaskManager,
 };
 use futures::TryStreamExt as _;
-use lancedb::query::QueryBase as _;
 use lancedb::query::ExecutableQuery as _;
+use lancedb::query::QueryBase as _;
 
 /// Error type for public API
 #[derive(Debug, thiserror::Error)]
@@ -149,7 +149,9 @@ impl Indexer {
     })
   }
 
-  async fn connect_database(db_path: &std::path::Path) -> Result<lancedb::Connection, IndexerError> {
+  async fn connect_database(
+    db_path: &std::path::Path,
+  ) -> Result<lancedb::Connection, IndexerError> {
     let path_str = db_path
       .to_str()
       .ok_or_else(|| IndexerError::Config("Invalid database path".to_string()))?;
@@ -168,50 +170,11 @@ impl Indexer {
   }
 
   async fn verify_embedding_schema(
-    doc_table: &lancedb::Table,
+    _doc_table: &lancedb::Table,
     chunk_table: &lancedb::Table,
     embedding_dim: usize,
     db_path: &std::path::Path,
   ) -> Result<(), IndexerError> {
-    // Verify documents table embedding vector width
-    let mut q = doc_table
-      .query()
-      .select(lancedb::query::Select::columns(&["content_embedding"]))
-      .limit(1)
-      .execute()
-      .await
-      .map_err(|e| IndexerError::Database(e.to_string()))?;
-
-    if let Some(batch) = q
-      .try_next()
-      .await
-      .map_err(|e| IndexerError::Database(e.to_string()))?
-    {
-      let schema = batch.schema();
-      let field = schema
-        .field_with_name("content_embedding")
-        .map_err(|e| IndexerError::Arrow(e))?;
-      match field.data_type() {
-        arrow::datatypes::DataType::FixedSizeList(_, size) => {
-          if *size as usize != embedding_dim {
-            return Err(IndexerError::Config(format!(
-              "Database schema mismatch for code_embeddings.content_embedding: expected vector dim {}, found {}. Hint: your provider is returning {}-d vectors but the table was created for a different size. Delete the database at '{}' or migrate the table, then restart.",
-              embedding_dim,
-              size,
-              embedding_dim,
-              db_path.display()
-            )));
-          }
-        }
-        other => {
-          return Err(IndexerError::Config(format!(
-            "Unexpected data type for code_embeddings.content_embedding: {:?} (expected FixedSizeList(Float32, {}))",
-            other, embedding_dim
-          )));
-        }
-      }
-    }
-
     // Verify chunks table embedding vector width
     let mut cq = chunk_table
       .query()
@@ -229,7 +192,7 @@ impl Indexer {
       let schema = batch.schema();
       let field = schema
         .field_with_name("embedding")
-        .map_err(|e| IndexerError::Arrow(e))?;
+        .map_err(IndexerError::Arrow)?;
       match field.data_type() {
         arrow::datatypes::DataType::FixedSizeList(_, size) => {
           if *size as usize != embedding_dim {
@@ -566,8 +529,10 @@ mod tests {
   #[tokio::test]
   async fn test_start_failure_handling() {
     // Setup indexer with invalid config to force new failure
-    let mut invalid_config = Config::default();
-    invalid_config.database_path = PathBuf::from("/invalid/path");
+    let invalid_config = Config {
+      database_path: PathBuf::from("/invalid/path"),
+      ..Default::default()
+    };
     let shutdown_token = CancellationToken::new();
     let indexer_result = Indexer::new(invalid_config, shutdown_token).await;
     assert!(indexer_result.is_err());

@@ -207,7 +207,6 @@ impl InnerChunker {
     }
   }
 
-
   pub fn chunk_text(
     &self,
     content: String,
@@ -272,8 +271,6 @@ impl InnerChunker {
         }
     }
   }
-
-
 }
 
 #[cfg(test)]

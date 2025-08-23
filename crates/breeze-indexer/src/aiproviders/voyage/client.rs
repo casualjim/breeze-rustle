@@ -153,30 +153,29 @@ impl Client {
         let error_str = e.to_string();
 
         // Try to extract HTTP status code from error message
-        if let Some(status_match) = error_str.split("status ").nth(1) {
-          if let Some(status_str) = status_match.split(':').next() {
-            if let Ok(status) = status_str.parse::<u16>() {
-              // Try to parse the error body
-              if let Some(api_error) = error_str.split(": ").last() {
-                if let Ok(api_err) = serde_json::from_str::<ApiErrorResponse>(api_error) {
-                  let code = ErrorCode::from_status(status);
-                  return Error::Api {
-                    status,
-                    code,
-                    message: api_err.error.message,
-                  };
-                }
-              }
-
-              // Return generic API error for known status codes
-              let code = ErrorCode::from_status(status);
-              return Error::Api {
-                status,
-                code,
-                message: error_str,
-              };
-            }
+        if let Some(status_match) = error_str.split("status ").nth(1)
+          && let Some(status_str) = status_match.split(':').next()
+          && let Ok(status) = status_str.parse::<u16>()
+        {
+          // Try to parse the error body
+          if let Some(api_error) = error_str.split(": ").last()
+            && let Ok(api_err) = serde_json::from_str::<ApiErrorResponse>(api_error)
+          {
+            let code = ErrorCode::from_status(status);
+            return Error::Api {
+              status,
+              code,
+              message: api_err.error.message,
+            };
           }
+
+          // Return generic API error for known status codes
+          let code = ErrorCode::from_status(status);
+          return Error::Api {
+            status,
+            code,
+            message: error_str,
+          };
         }
 
         // Convert to anyhow error
@@ -197,30 +196,29 @@ impl Client {
         let error_str = e.to_string();
 
         // Try to extract HTTP status code from error message
-        if let Some(status_match) = error_str.split("status ").nth(1) {
-          if let Some(status_str) = status_match.split(':').next() {
-            if let Ok(status) = status_str.parse::<u16>() {
-              // Try to parse the error body
-              if let Some(api_error) = error_str.split(": ").last() {
-                if let Ok(api_err) = serde_json::from_str::<ApiErrorResponse>(api_error) {
-                  let code = ErrorCode::from_status(status);
-                  return Error::Api {
-                    status,
-                    code,
-                    message: api_err.error.message,
-                  };
-                }
-              }
-
-              // Return generic API error for known status codes
-              let code = ErrorCode::from_status(status);
-              return Error::Api {
-                status,
-                code,
-                message: error_str,
-              };
-            }
+        if let Some(status_match) = error_str.split("status ").nth(1)
+          && let Some(status_str) = status_match.split(':').next()
+          && let Ok(status) = status_str.parse::<u16>()
+        {
+          // Try to parse the error body
+          if let Some(api_error) = error_str.split(": ").last()
+            && let Ok(api_err) = serde_json::from_str::<ApiErrorResponse>(api_error)
+          {
+            let code = ErrorCode::from_status(status);
+            return Error::Api {
+              status,
+              code,
+              message: api_err.error.message,
+            };
           }
+
+          // Return generic API error for known status codes
+          let code = ErrorCode::from_status(status);
+          return Error::Api {
+            status,
+            code,
+            message: error_str,
+          };
         }
 
         // Convert to anyhow error

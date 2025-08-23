@@ -1,4 +1,8 @@
 use breeze_chunkers::{Chunk, SemanticChunk};
+use tokio::sync::mpsc;
+use uuid::Uuid;
+
+use crate::models::CodeChunk;
 
 /// Type alias for a boxed stream
 pub(crate) type BoxStream<T> = std::pin::Pin<Box<dyn futures_util::Stream<Item = T> + Send>>;
@@ -36,6 +40,16 @@ impl PipelineChunk {
     }
   }
 }
+
+/// Replace all chunks for a single file (project_id + file_path) with the provided set
+#[derive(Debug, Clone)]
+pub struct ReplaceFileChunks {
+  pub project_id: Uuid,
+  pub file_path: String,
+  pub chunks: Vec<CodeChunk>,
+}
+
+pub type ReplaceFileChunksSender = mpsc::Sender<ReplaceFileChunks>;
 
 /// A project chunk that's been filtered for the pipeline
 #[derive(Debug, Clone)]

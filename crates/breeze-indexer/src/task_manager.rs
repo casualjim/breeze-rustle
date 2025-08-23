@@ -274,10 +274,10 @@ impl TaskManager {
     );
     let mut stream = table.query().only_if(&filter).limit(1).execute().await?;
 
-    if let Some(batch) = stream.try_next().await? {
-      if let Ok(failed_batch) = FailedEmbeddingBatch::from_record_batch(&batch, 0) {
-        return Ok(Some(failed_batch));
-      }
+    if let Some(batch) = stream.try_next().await?
+      && let Ok(failed_batch) = FailedEmbeddingBatch::from_record_batch(&batch, 0)
+    {
+      return Ok(Some(failed_batch));
     }
 
     Ok(None)

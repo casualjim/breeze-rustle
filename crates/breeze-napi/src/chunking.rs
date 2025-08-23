@@ -1,13 +1,13 @@
 use breeze_chunkers::{
-  walk_project as rust_walk_project, Chunk as RustChunk, ChunkMetadata, Chunker, ChunkerConfig,
-  ProjectChunk as RustProjectChunk, Tokenizer as RustTokenizer, WalkOptions,
+  Chunk as RustChunk, ChunkMetadata, Chunker, ChunkerConfig, ProjectChunk as RustProjectChunk,
+  Tokenizer as RustTokenizer, WalkOptions, walk_project as rust_walk_project,
 };
 
 use futures::StreamExt;
 use napi::bindgen_prelude::*;
 use napi_derive::napi;
 use std::sync::Arc;
-use tokio::sync::{mpsc, Mutex};
+use tokio::sync::{Mutex, mpsc};
 
 #[napi]
 pub enum TokenizerType {

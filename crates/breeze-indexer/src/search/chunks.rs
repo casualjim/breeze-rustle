@@ -17,15 +17,15 @@ fn apply_semantic_filters(
   options: &SearchOptions,
 ) -> lancedb::query::VectorQuery {
   // Filter by node types
-  if let Some(node_types) = &options.node_types {
-    if !node_types.is_empty() {
-      let conditions: Vec<String> = node_types
-        .iter()
-        .map(|nt| format!("node_type = '{}'", nt))
-        .collect();
-      let filter = conditions.join(" OR ");
-      query = query.only_if(format!("({})", filter));
-    }
+  if let Some(node_types) = &options.node_types
+    && !node_types.is_empty()
+  {
+    let conditions: Vec<String> = node_types
+      .iter()
+      .map(|nt| format!("node_type = '{}'", nt))
+      .collect();
+    let filter = conditions.join(" OR ");
+    query = query.only_if(format!("({})", filter));
   }
 
   // Filter by node name pattern
@@ -47,32 +47,31 @@ fn apply_semantic_filters(
   }
 
   // Filter by definitions using array_contains with OR
-  if let Some(definitions) = &options.has_definitions {
-    if !definitions.is_empty() {
-      let conditions: Vec<String> = definitions
-        .iter()
-        .map(|d| format!("array_contains(definitions, '{}')", d))
-        .collect();
-      let filter = conditions.join(" OR ");
-      query = query.only_if(format!("({})", filter));
-    }
+  if let Some(definitions) = &options.has_definitions
+    && !definitions.is_empty()
+  {
+    let conditions: Vec<String> = definitions
+      .iter()
+      .map(|d| format!("array_contains(definitions, '{}')", d))
+      .collect();
+    let filter = conditions.join(" OR ");
+    query = query.only_if(format!("({})", filter));
   }
 
   // Filter by references using array_contains with OR
-  if let Some(references) = &options.has_references {
-    if !references.is_empty() {
-      let conditions: Vec<String> = references
-        .iter()
-        .map(|r| format!("array_contains(references, '{}')", r))
-        .collect();
-      let filter = conditions.join(" OR ");
-      query = query.only_if(format!("({})", filter));
-    }
+  if let Some(references) = &options.has_references
+    && !references.is_empty()
+  {
+    let conditions: Vec<String> = references
+      .iter()
+      .map(|r| format!("array_contains(references, '{}')", r))
+      .collect();
+    let filter = conditions.join(" OR ");
+    query = query.only_if(format!("({})", filter));
   }
 
   query
 }
-
 
 /// Search chunks directly and group by file
 pub(crate) async fn search_chunks(
@@ -89,20 +88,20 @@ pub(crate) async fn search_chunks(
     build_hybrid_query(&chunks_table, query, query_vector, project_id, "embedding").await?;
 
   // Add language filter if provided
-  if let Some(languages) = &options.languages {
-    if !languages.is_empty() {
-      // Create case-insensitive language conditions to handle hyperpolyglot's casing
-      // (e.g., "Rust" vs "rust", "C++" vs "cpp")
-      let lang_conditions: Vec<String> = languages
-        .iter()
-        .map(|lang| {
-          // Use ILIKE for case-insensitive matching
-          format!("lower(language) = lower('{}')", lang)
-        })
-        .collect();
-      let lang_filter = lang_conditions.join(" OR ");
-      chunk_query = chunk_query.only_if(lang_filter);
-    }
+  if let Some(languages) = &options.languages
+    && !languages.is_empty()
+  {
+    // Create case-insensitive language conditions to handle hyperpolyglot's casing
+    // (e.g., "Rust" vs "rust", "C++" vs "cpp")
+    let lang_conditions: Vec<String> = languages
+      .iter()
+      .map(|lang| {
+        // Use ILIKE for case-insensitive matching
+        format!("lower(language) = lower('{}')", lang)
+      })
+      .collect();
+    let lang_filter = lang_conditions.join(" OR ");
+    chunk_query = chunk_query.only_if(lang_filter);
   }
 
   // Apply semantic filters
@@ -183,4 +182,3 @@ where
 
   Ok(all_chunks)
 }
-

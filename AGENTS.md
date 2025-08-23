@@ -47,6 +47,10 @@ The project also includes:
 - Do not propose or create “lighter variants” of the composite action `.github/actions/setup-env`.
   The current composite action is intentionally comprehensive and considered as light as it can be.
   All jobs should continue to use it as-is.
+- Do NOT use `--all-features`
+- ALWAYS add `--features local-embeddings`
+
+Ensure you always refactor clean, remove unused variables, update docs etc.
 
 ## Development Commands
 
@@ -59,9 +63,12 @@ mise build
 ### Testing
 
 ```bash
-# Run Rust tests
+# Run Rust tests (required)
+cargo nextest run --features local-embeddings --no-fail-fast
+# Run all tests
 mise test
 ```
+
 
 ## Architecture
 

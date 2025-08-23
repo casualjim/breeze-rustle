@@ -24,7 +24,6 @@ accelerate = [
 metal = ["candle-core/metal", "candle-nn/metal", "ort/coreml"]
 testing = []
 
-
 [target.'cfg(not(target_os = "macos"))'.dependencies]
 ort = { version = "=2.0.0-rc.10", features = ["load-dynamic", "half"], optional = true }
 [target.'cfg(target_os = "macos")'.dependencies]
@@ -64,7 +63,7 @@ intel-mkl-src = { version = "0.8.1", optional = true }
 lancedb.workspace = true
 ndarray = "0.16.1"
 notify = "8.0"
-notify-debouncer-full = { version = "0.6", features = ["flume"]}
+notify-debouncer-full = { version = "0.6", features = ["flume"] }
 num_cpus.workspace = true
 
 pin-project-lite.workspace = true

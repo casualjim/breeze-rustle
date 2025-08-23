@@ -3,6 +3,7 @@
 
 proj_dir=$(git rev-parse --show-toplevel)
 
+set -euo pipefail
 
 cargo zigbuild --release --workspace --exclude breeze-py --exclude breeze-napi
 cd "$proj_dir/crates/breeze-py" && maturin develop --release

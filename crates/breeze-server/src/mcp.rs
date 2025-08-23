@@ -17,10 +17,10 @@ use rmcp::{ErrorData, RoleServer, ServerHandler, model::*, service::RequestConte
 use schemars::JsonSchema;
 use schemars::generate::SchemaSettings;
 use schemars::transform::AddNullable;
-use tracing::info;
-use uuid::Uuid;
 use serde::Deserialize;
 use tokio::sync::RwLock;
+use tracing::info;
+use uuid::Uuid;
 
 use crate::types::*;
 
@@ -195,20 +195,33 @@ impl BreezeService {
     {
       Ok(results) => {
         if results.is_empty() {
-          return Ok(CallToolResult::success(vec![Content::text("No results found.".to_string())]));
+          return Ok(CallToolResult::success(vec![Content::text(
+            "No results found.".to_string(),
+          )]));
         }
         let mut report = String::new();
         // Normalize relevance by top score to make it intuitive (percentage-like)
-        let max_score = results.iter().map(|r| r.relevance_score).fold(0.0f32, f32::max);
+        let max_score = results
+          .iter()
+          .map(|r| r.relevance_score)
+          .fold(0.0f32, f32::max);
         for r in results {
           use std::fmt::Write as _;
-          let rel_norm = if max_score > 0.0 { (r.relevance_score / max_score) as f64 } else { 0.0 };
+          let rel_norm = if max_score > 0.0 {
+            (r.relevance_score / max_score) as f64
+          } else {
+            0.0
+          };
           let rel_pct = rel_norm * 100.0;
           let _ = writeln!(report, "## {}\n", r.file_path);
           let _ = writeln!(report, "Relevance: {:.1}%\n", rel_pct);
 
           for ch in r.chunks {
-            let lang = if ch.language.trim().is_empty() { "" } else { ch.language.as_str() };
+            let lang = if ch.language.trim().is_empty() {
+              ""
+            } else {
+              ch.language.as_str()
+            };
             // Fenced code block
             let _ = writeln!(report, "```{}\n{}\n```\n", lang, ch.content);
           }
@@ -234,7 +247,9 @@ impl BreezeService {
     };
 
     let Some(abs) = abs else {
-      return Ok(CallToolResult::error(vec![Content::text("Empty resolved path")]));
+      return Ok(CallToolResult::error(vec![Content::text(
+        "Empty resolved path",
+      )]));
     };
 
     // Validate directory exists
@@ -252,10 +267,12 @@ impl BreezeService {
       Ok(Some(project)) => {
         *self.session_project_id.write().await = Some(project.id);
         *self.session_root.write().await = Some(project.directory.clone());
-        Ok(CallToolResult::success(vec![Content::json(serde_json::json!({
-          "project_id": project.id,
-          "project_root": project.directory
-        }))?]))
+        Ok(CallToolResult::success(vec![Content::json(
+          serde_json::json!({
+            "project_id": project.id,
+            "project_root": project.directory
+          }),
+        )?]))
       }
       Ok(None) => Ok(CallToolResult::error(vec![Content::text(
         "No indexed project covers that path",
@@ -269,17 +286,19 @@ impl BreezeService {
 
   #[tool(description = "Get current session project root")]
   async fn get_project_path(&self) -> Result<CallToolResult, ErrorData> {
-    Ok(CallToolResult::success(vec![Content::json(serde_json::json!({
-      "project_id": self.get_session_project().await,
-      "project_root": self.session_root.read().await.clone()
-    }))?]))
+    Ok(CallToolResult::success(vec![Content::json(
+      serde_json::json!({
+        "project_id": self.get_session_project().await,
+        "project_root": self.session_root.read().await.clone()
+      }),
+    )?]))
   }
 }
 
 impl BreezeService {
   // Internal helpers for session state and path resolution
   async fn get_session_project(&self) -> Option<Uuid> {
-    self.session_project_id.read().await.clone()
+    *self.session_project_id.read().await
   }
 
   async fn resolve_path_abs(&self, maybe_path: Option<&str>) -> Result<Option<String>, String> {
@@ -287,7 +306,9 @@ impl BreezeService {
     if let Some(p) = maybe_path {
       let path = std::path::Path::new(p);
       if path.is_absolute() {
-        return canonicalize_nearest_ancestor(path).map(Some).map_err(|e| e.to_string());
+        return canonicalize_nearest_ancestor(path)
+          .map(Some)
+          .map_err(|e| e.to_string());
       }
       // Relative path requires session_root
       let base = self
@@ -297,7 +318,9 @@ impl BreezeService {
         .clone()
         .ok_or_else(|| "No session root set; call project_path.set first".to_string())?;
       let joined = std::path::Path::new(&base).join(path);
-      return canonicalize_nearest_ancestor(&joined).map(Some).map_err(|e| e.to_string());
+      return canonicalize_nearest_ancestor(&joined)
+        .map(Some)
+        .map_err(|e| e.to_string());
     }
 
     // No path provided: return session_root (already canonical)

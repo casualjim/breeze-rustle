@@ -1,8 +1,8 @@
 // ESM wrapper for the NAPI module with async generator support
-import { createRequire } from 'module';
+import { createRequire } from "module";
 
 const require = createRequire(import.meta.url);
-const native = require('./index.native.js');
+const native = require("./index.native.js");
 
 // Helper to convert our iterator to an async generator
 async function* makeAsyncGenerator(iterator) {

@@ -142,7 +142,6 @@ impl ProjectWatcher {
     let watcher_cancel = CancellationToken::new();
 
     tokio::spawn({
-      let project_id = project_id.clone();
       let system = System::new_all();
       let pid = std::process::id();
       let cancel = watcher_cancel.clone();

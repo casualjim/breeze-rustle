@@ -7,12 +7,15 @@ use uuid::Uuid;
 use crate::IndexerError;
 use crate::bulk_indexer::IndexingStats;
 use crate::models::{ChunkMetadataUpdate, CodeChunk, CodeDocument};
-use crate::pipeline::{EmbeddedChunk, EmbeddedChunkWithFile, FileAccumulator, PipelineChunk};
+use crate::pipeline::{
+  EmbeddedChunk, EmbeddedChunkWithFile, FileAccumulator, PipelineChunk, ReplaceFileChunks,
+  ReplaceFileChunksSender,
+};
 
 /// Context for document building operations
 pub(crate) struct DocumentBuildContext<'a> {
   pub doc_tx: &'a mpsc::Sender<CodeDocument>,
-  pub chunk_tx: &'a mpsc::Sender<CodeChunk>,
+  pub chunks_replace_tx: &'a ReplaceFileChunksSender,
   pub stats: &'a IndexingStats,
   pub cancel_token: &'a CancellationToken,
   pub batch_size: usize,
@@ -21,17 +24,15 @@ pub(crate) struct DocumentBuildContext<'a> {
 /// Stream-specific document builder that maintains ordering for a single stream
 struct StreamDocumentBuilder {
   project_id: Uuid,
-  embedding_dim: usize,
   file_accumulators: BTreeMap<String, FileAccumulator>,
   failed_files: BTreeSet<String>,
   total_files_built: u64,
 }
 
 impl StreamDocumentBuilder {
-  fn new(project_id: Uuid, embedding_dim: usize) -> Self {
+  fn new(project_id: Uuid) -> Self {
     Self {
       project_id,
-      embedding_dim,
       file_accumulators: BTreeMap::new(),
       failed_files: BTreeSet::new(),
       total_files_built: 0,
@@ -171,14 +172,8 @@ impl StreamDocumentBuilder {
       );
 
       // Build the document
-      let result = build_document_from_accumulator(
-        self.project_id,
-        accumulator,
-        self.embedding_dim,
-        document_batch,
-        ctx,
-      )
-      .await;
+      let result =
+        build_document_from_accumulator(self.project_id, accumulator, document_batch, ctx).await;
 
       if let Err(e) = result {
         error!("Failed to build document for {}: {}", file_path, e);
@@ -217,12 +212,11 @@ impl StreamDocumentBuilder {
   }
 }
 
-/// Build a document from accumulated file chunks using weighted average
+/// Build a document from accumulated file chunks (no aggregated document embeddings)
 /// Returns both the document and the individual chunks for storage
 pub(crate) async fn build_document_from_accumulator(
   project_id: Uuid,
   accumulator: FileAccumulator,
-  embedding_dim: usize,
   document_batch: &mut Vec<CodeDocument>,
   ctx: &DocumentBuildContext<'_>,
 ) -> Result<(), IndexerError> {
@@ -232,54 +226,6 @@ pub(crate) async fn build_document_from_accumulator(
 
   let file_path = accumulator.file_path;
   let embedded_chunks = accumulator.embedded_chunks;
-
-  // Calculate weights based on token counts
-  let mut weights = Vec::new();
-  let mut total_weight = 0.0;
-
-  for embedded_chunk in &embedded_chunks {
-    match &embedded_chunk.chunk {
-      PipelineChunk::Semantic(sc) | PipelineChunk::Text(sc) => {
-        // Use actual token count if available, otherwise estimate
-        let token_count = sc
-          .tokens
-          .as_ref()
-          .map(|tokens| tokens.len() as f32)
-          .unwrap_or_else(|| (sc.text.len() as f32 / 4.0).max(1.0));
-        weights.push(token_count);
-        total_weight += token_count;
-      }
-      PipelineChunk::EndOfFile { .. } => continue, // Skip EOF markers
-    }
-  }
-
-  // Normalize weights
-  for weight in &mut weights {
-    *weight /= total_weight;
-  }
-
-  // Compute weighted average embedding
-  let mut aggregated_embedding = vec![0.0; embedding_dim];
-
-  for (i, embedded_chunk) in embedded_chunks
-    .iter()
-    .filter(|ec| !matches!(ec.chunk, PipelineChunk::EndOfFile { .. }))
-    .enumerate()
-  {
-    let weight = weights[i];
-    for (j, &value) in embedded_chunk.embedding.iter().enumerate() {
-      if j < embedding_dim {
-        aggregated_embedding[j] += value * weight;
-      }
-    }
-  }
-
-  debug!(
-      file_path = %file_path,
-      num_chunks = embedded_chunks.len(),
-      total_tokens_approx = total_weight as u64,
-      "Aggregated embeddings for file"
-  );
 
   // Check if we have an EOF chunk with content
   let (content, content_hash) = if let Some(eof_chunk) = embedded_chunks
@@ -370,14 +316,19 @@ pub(crate) async fn build_document_from_accumulator(
   doc.primary_language = languages.first().map(|(lang, _)| lang.clone());
   doc.chunk_count = code_chunks.len() as u32;
 
-  doc.update_embedding(aggregated_embedding);
+  // Update content hash
   doc.update_content_hash(content_hash);
 
-  // Send chunks
-  for chunk in code_chunks {
-    if ctx.chunk_tx.send(chunk).await.is_err() {
-      return Err(IndexerError::Task("Chunk receiver dropped".into()));
-    }
+  // Send a single ReplaceFileChunks message (single path, no per-chunk streaming)
+  let replace = ReplaceFileChunks {
+    project_id,
+    file_path: file_path.clone(),
+    chunks: code_chunks,
+  };
+  if ctx.chunks_replace_tx.send(replace).await.is_err() {
+    return Err(IndexerError::Task(
+      "ReplaceFileChunks receiver dropped".into(),
+    ));
   }
 
   // Batch documents before sending
@@ -413,8 +364,7 @@ pub(crate) struct DocumentBuilderParams {
   pub project_id: Uuid,
   pub embedded_rx: mpsc::Receiver<EmbeddedChunkWithFile>,
   pub doc_tx: mpsc::Sender<CodeDocument>,
-  pub chunk_tx: mpsc::Sender<crate::models::CodeChunk>,
-  pub embedding_dim: usize,
+  pub chunks_replace_tx: ReplaceFileChunksSender,
   pub stats: IndexingStats,
   pub cancel_token: CancellationToken,
   pub batch_size: usize,
@@ -428,18 +378,17 @@ pub(crate) async fn document_builder_task(
     project_id,
     mut embedded_rx,
     doc_tx,
-    chunk_tx,
-    embedding_dim,
+    chunks_replace_tx,
     stats,
     cancel_token,
     batch_size,
   } = params;
-  let mut builder = StreamDocumentBuilder::new(project_id, embedding_dim);
+  let mut builder = StreamDocumentBuilder::new(project_id);
   let mut document_batch: Vec<CodeDocument> = Vec::with_capacity(100);
 
   let ctx = DocumentBuildContext {
     doc_tx: &doc_tx,
-    chunk_tx: &chunk_tx,
+    chunks_replace_tx: &chunks_replace_tx,
     stats: &stats,
     cancel_token: &cancel_token,
     batch_size,
@@ -590,20 +539,20 @@ mod tests {
 
     let project_id = uuid::Uuid::now_v7();
     let (doc_tx, _doc_rx) = mpsc::channel(1);
-    let (chunk_tx, mut chunk_rx) = mpsc::channel(10);
+    let (chunks_replace_tx, mut chunks_replace_rx) = mpsc::channel(10);
     let stats = IndexingStats::new();
     let cancel_token = CancellationToken::new();
     let mut document_batch = Vec::new();
 
     let ctx = DocumentBuildContext {
       doc_tx: &doc_tx,
-      chunk_tx: &chunk_tx,
+      chunks_replace_tx: &chunks_replace_tx,
       stats: &stats,
       cancel_token: &cancel_token,
       batch_size: 100,
     };
 
-    build_document_from_accumulator(project_id, accumulator, 3, &mut document_batch, &ctx)
+    build_document_from_accumulator(project_id, accumulator, &mut document_batch, &ctx)
       .await
       .unwrap();
 
@@ -611,32 +560,23 @@ mod tests {
     assert_eq!(document_batch.len(), 1);
     let doc = document_batch.pop().unwrap();
 
-    // Collect chunks
-    drop(chunk_tx);
-    let mut chunks = Vec::new();
-    while let Some(chunk) = chunk_rx.recv().await {
-      chunks.push(chunk);
+    // Collect replace messages
+    drop(chunks_replace_tx);
+    let mut replaces = Vec::new();
+    while let Some(rep) = chunks_replace_rx.recv().await {
+      replaces.push(rep);
     }
 
     // Verify document properties
     assert_eq!(doc.file_path, file_path);
     assert_eq!(doc.content, content);
-    assert_eq!(doc.content_embedding.len(), 3);
     assert_eq!(doc.chunk_count, 3);
     assert_eq!(doc.languages, vec!["text"]);
     assert_eq!(doc.primary_language, Some("text".to_string()));
 
-    // Verify chunks
-    assert_eq!(chunks.len(), 3);
-
-    // The weighted average should favor the longer chunk
-    assert!(doc.content_embedding[0] < 0.2); // Should be small
-    assert!(doc.content_embedding[1] > 0.5); // Should be largest
-    assert!(doc.content_embedding[2] > 0.2 && doc.content_embedding[2] < 0.4); // Should be medium
-
-    // Sum should be approximately 1.0
-    let sum: f32 = doc.content_embedding.iter().sum();
-    assert!((sum - 1.0).abs() < 0.01);
+    // Verify replaces
+    assert_eq!(replaces.len(), 1);
+    assert_eq!(replaces[0].chunks.len(), 3);
   }
 
   #[tokio::test]
@@ -644,14 +584,14 @@ mod tests {
     let project_id = uuid::Uuid::now_v7();
     let accumulator = FileAccumulator::new("empty.txt".to_string());
     let (doc_tx, _doc_rx) = mpsc::channel(1);
-    let (chunk_tx, _chunk_rx) = mpsc::channel(10);
+    let (chunks_replace_tx, _chunks_replace_rx) = mpsc::channel(10);
     let stats = IndexingStats::new();
     let cancel_token = CancellationToken::new();
     let mut document_batch = Vec::new();
 
     let ctx = DocumentBuildContext {
       doc_tx: &doc_tx,
-      chunk_tx: &chunk_tx,
+      chunks_replace_tx: &chunks_replace_tx,
       stats: &stats,
       cancel_token: &cancel_token,
       batch_size: 100,
@@ -659,7 +599,7 @@ mod tests {
 
     // Should return error for empty accumulator
     let _result =
-      build_document_from_accumulator(project_id, accumulator, 3, &mut document_batch, &ctx).await;
+      build_document_from_accumulator(project_id, accumulator, &mut document_batch, &ctx).await;
 
     // Empty accumulator should not produce any documents
     assert_eq!(document_batch.len(), 0);

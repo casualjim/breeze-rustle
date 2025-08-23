@@ -1,5 +1,5 @@
 // Wrapper for the native module that adds async generator support
-const native = require('./index.native.js');
+const native = require("./index.native.js");
 
 // Helper to convert our iterator to an async generator
 async function* makeAsyncGenerator(iterator) {

@@ -13,6 +13,7 @@ zig = "latest"
 "aqua:rhysd/actionlint" = "latest"
 "aqua:protocolbuffers/protobuf/protoc" = "latest"
 node = "20"
+"ubi:j178/prek" = "0.1.2"
 
 [env]
 _.file = ".env"

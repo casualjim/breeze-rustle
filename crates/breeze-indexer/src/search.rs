@@ -1,5 +1,4 @@
 mod chunks;
-mod documents;
 
 #[cfg(all(test, feature = "local-embeddings"))]
 mod chunk_tests;
@@ -18,7 +17,6 @@ use uuid::Uuid;
 
 use crate::embeddings::EmbeddingProvider;
 use chunks::search_chunks;
-use documents::search_documents;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub enum SearchGranularity {
@@ -147,30 +145,16 @@ pub async fn hybrid_search(
 
   let query_vector = query_embedding[0].as_slice();
 
-  match options.granularity {
-    SearchGranularity::Document => {
-      search_documents(
-        documents_table,
-        chunks_table,
-        query,
-        query_vector,
-        &options,
-        project_id.map(|id| id.to_string()).as_deref(),
-      )
-      .await
-    }
-    SearchGranularity::Chunk => {
-      search_chunks(
-        documents_table,
-        chunks_table,
-        query,
-        query_vector,
-        &options,
-        project_id.map(|id| id.to_string()).as_deref(),
-      )
-      .await
-    }
-  }
+  // Route all searches through chunk search (chunk-only search)
+  search_chunks(
+    documents_table,
+    chunks_table,
+    query,
+    query_vector,
+    &options,
+    project_id.map(|id| id.to_string()).as_deref(),
+  )
+  .await
 }
 
 #[cfg(all(test, feature = "local-embeddings"))]
@@ -258,7 +242,6 @@ mod tests {
       create_test_document_with_lang(
         "src/main.rs",
         "fn main() {\n    println!(\"Hello, world!\");\n}",
-        embedding_dim,
         vec!["rust".to_string()],
         Some("rust".to_string()),
         2,
@@ -266,7 +249,6 @@ mod tests {
       create_test_document_with_lang(
         "src/lib.rs",
         "pub fn search(query: &str) -> Vec<String> {\n    // Search implementation\n    vec![]\n}",
-        embedding_dim,
         vec!["rust".to_string()],
         Some("rust".to_string()),
         1,
@@ -274,7 +256,6 @@ mod tests {
       create_test_document_with_lang(
         "tests/test_search.rs",
         "#[test]\nfn test_search() {\n    let results = search(\"test\");\n    assert!(results.is_empty());\n}",
-        embedding_dim,
         vec!["rust".to_string()],
         Some("rust".to_string()),
         1,
@@ -282,7 +263,6 @@ mod tests {
       create_test_document_with_lang(
         "README.md",
         "# Search Library\n\nA simple search implementation in Rust.",
-        embedding_dim,
         vec!["markdown".to_string()],
         Some("markdown".to_string()),
         1,
@@ -305,7 +285,13 @@ mod tests {
         .start_line(1)
         .end_line(doc.content.lines().count())
         .build();
-      chunk.update_embedding(doc.content_embedding.clone());
+      // Derive a deterministic embedding from content hash for tests
+      let mut emb = vec![0.0f32; embedding_dim];
+      let hash = blake3::hash(doc.content.as_bytes());
+      for (i, b) in hash.as_bytes().iter().enumerate().take(embedding_dim) {
+        emb[i] = *b as f32 / 255.0;
+      }
+      chunk.update_embedding(emb);
       chunk.update_metadata(
         ChunkMetadataUpdate::builder()
           .node_type("file".to_string())
@@ -332,21 +318,12 @@ mod tests {
   fn create_test_document_with_lang(
     file_path: &str,
     content: &str,
-    embedding_dim: usize,
     languages: Vec<String>,
     primary_language: Option<String>,
     chunk_count: u32,
   ) -> CodeDocument {
     let project_id = uuid::Uuid::now_v7();
     let mut doc = CodeDocument::new(project_id, file_path.to_string(), content.to_string());
-    let hash = CodeDocument::compute_hash(content);
-    let mut embedding = vec![0.0; embedding_dim];
-    for (i, &byte) in hash.iter().enumerate() {
-      if i < embedding_dim {
-        embedding[i] = (byte as f32) / 255.0;
-      }
-    }
-    doc.update_embedding(embedding);
     doc.languages = languages;
     doc.primary_language = primary_language;
     doc.chunk_count = chunk_count;
@@ -555,25 +532,9 @@ mod tests {
     )
   }
 
-  async fn create_and_embed_document(
-    content: &str,
-    file_path: &str,
-    embedding_provider: &Arc<dyn EmbeddingProvider>,
-  ) -> CodeDocument {
+  async fn create_and_embed_document(content: &str, file_path: &str) -> CodeDocument {
     let project_id = uuid::Uuid::now_v7(); // Use a valid project ID, not nil
-    let mut doc = CodeDocument::new(project_id, file_path.to_string(), content.to_string());
-
-    // Generate real embedding
-    let embeddings = embedding_provider
-      .embed(&[crate::embeddings::EmbeddingInput {
-        text: content,
-        token_count: None,
-      }])
-      .await
-      .unwrap();
-
-    doc.update_embedding(embeddings[0].clone());
-    doc
+    CodeDocument::new(project_id, file_path.to_string(), content.to_string())
   }
 
   #[tokio::test]
@@ -604,19 +565,16 @@ mod tests {
       create_and_embed_document(
         "fn calculate_fibonacci(n: usize) -> usize { /* fibonacci implementation */ }",
         "math.rs",
-        &embedding_provider,
       )
       .await,
       create_and_embed_document(
         "fn bubble_sort(arr: &mut [i32]) { /* sorting implementation */ }",
         "sort.rs",
-        &embedding_provider,
       )
       .await,
       create_and_embed_document(
         "struct DatabaseConnection { /* database handling */ }",
         "db.rs",
-        &embedding_provider,
       )
       .await,
     ];
@@ -641,7 +599,15 @@ mod tests {
           .start_line(1)
           .end_line(1)
           .build();
-        chunk.update_embedding(doc.content_embedding.clone());
+        // Embed the content for the chunk using the provider
+        let emb = embedding_provider
+          .embed(&[crate::embeddings::EmbeddingInput {
+            text: &doc.content,
+            token_count: None,
+          }])
+          .await
+          .unwrap();
+        chunk.update_embedding(emb[0].clone());
         chunk.update_metadata(
           ChunkMetadataUpdate::builder()
             .node_type("function".to_string())
@@ -703,7 +669,6 @@ mod tests {
           Ok(user)
         }",
         "user_service.rs",
-        &embedding_provider,
       )
       .await,
       create_and_embed_document(
@@ -713,7 +678,6 @@ mod tests {
           db.find_customer(&customer_id).await
         }",
         "customer_api.rs",
-        &embedding_provider,
       )
       .await,
       create_and_embed_document(
@@ -723,7 +687,6 @@ mod tests {
           base_rate + (weight * 0.5) + (distance * 0.1)
         }",
         "shipping.rs",
-        &embedding_provider,
       )
       .await,
     ];
@@ -748,7 +711,14 @@ mod tests {
           .start_line(1)
           .end_line(doc.content.lines().count())
           .build();
-        chunk.update_embedding(doc.content_embedding.clone());
+        let emb = embedding_provider
+          .embed(&[crate::embeddings::EmbeddingInput {
+            text: &doc.content,
+            token_count: None,
+          }])
+          .await
+          .unwrap();
+        chunk.update_embedding(emb[0].clone());
         chunk.update_metadata(
           ChunkMetadataUpdate::builder()
             .node_type("function".to_string())
@@ -833,7 +803,6 @@ mod tests {
           }
         }",
         "error_handler.rs",
-        &embedding_provider,
       )
       .await,
       create_and_embed_document(
@@ -846,7 +815,6 @@ mod tests {
           }
         }",
         "payment.rs",
-        &embedding_provider,
       )
       .await,
       create_and_embed_document(
@@ -861,7 +829,6 @@ mod tests {
           Ok(())
         }",
         "validator.rs",
-        &embedding_provider,
       )
       .await,
     ];
@@ -886,7 +853,14 @@ mod tests {
           .start_line(1)
           .end_line(doc.content.lines().count())
           .build();
-        chunk.update_embedding(doc.content_embedding.clone());
+        let emb = embedding_provider
+          .embed(&[crate::embeddings::EmbeddingInput {
+            text: &doc.content,
+            token_count: None,
+          }])
+          .await
+          .unwrap();
+        chunk.update_embedding(emb[0].clone());
         chunk.update_metadata(
           ChunkMetadataUpdate::builder()
             .node_type("function".to_string())

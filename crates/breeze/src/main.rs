@@ -120,11 +120,11 @@ async fn async_main() {
       has_definitions,
       has_references,
       path,
-    } => {
-      match breeze::App::new(config, shutdown_token.clone()).await {
-        Ok(app) => {
-          if let Err(exit_code) = breeze::handlers::handle_search_command(
-            app,
+    } => match breeze::App::new(config, shutdown_token.clone()).await {
+      Ok(app) => {
+        if let Err(exit_code) = breeze::handlers::handle_search_command(
+          app,
+          breeze::handlers::SearchCommandArgs {
             query,
             limit,
             chunks_per_file,
@@ -137,18 +137,18 @@ async fn async_main() {
             has_definitions,
             has_references,
             path,
-          )
-          .await
-          {
-            std::process::exit(exit_code);
-          }
-        }
-        Err(e) => {
-          error!("Failed to initialize app: {}", e);
-          std::process::exit(1);
+          },
+        )
+        .await
+        {
+          std::process::exit(exit_code);
         }
       }
-    }
+      Err(e) => {
+        error!("Failed to initialize app: {}", e);
+        std::process::exit(1);
+      }
+    },
 
     Commands::Init { force } => {
       if let Err(exit_code) = breeze::handlers::handle_init_command(force).await {
