@@ -103,11 +103,11 @@ pub fn walk_project(
       }
     };
 
-    if let Some(cancel) = &cancel_token {
-      if cancel.is_cancelled() {
-        debug!("walk_project cancelled before processing files");
-        return;
-      }
+    if let Some(cancel) = &cancel_token
+      && cancel.is_cancelled()
+    {
+      debug!("walk_project cancelled before processing files");
+      return;
     }
 
     if file_entries.is_empty() {
@@ -130,11 +130,11 @@ pub fn walk_project(
         let mut deleted_count = 0;
 
         for (existing_path, _) in existing_hashes {
-          if let Some(cancel) = &cancel_clone {
-            if cancel.is_cancelled() {
-              debug!("walk_project deletion emission cancelled");
-              break;
-            }
+          if let Some(cancel) = &cancel_clone
+            && cancel.is_cancelled()
+          {
+            debug!("walk_project deletion emission cancelled");
+            break;
           }
           if !collected_paths.contains(&existing_path) {
             // This file was in the index but no longer exists
@@ -208,11 +208,11 @@ fn should_process_entry(entry: &DirEntry) -> bool {
   let path = entry.path();
 
   // Skip empty files
-  if let Ok(metadata) = entry.metadata() {
-    if metadata.len() == 0 {
-      debug!("Skipping empty file: {}", path.display());
-      return false;
-    }
+  if let Ok(metadata) = entry.metadata()
+    && metadata.len() == 0
+  {
+    debug!("Skipping empty file: {}", path.display());
+    return false;
   }
 
   // Skip binary files
@@ -242,12 +242,11 @@ pub fn walker_includes_path(
   let path = path.as_ref();
 
   // If the path is outside the project, exclude it
-  if let Ok(abs) = std::fs::canonicalize(path) {
-    if let Ok(root) = std::fs::canonicalize(project_root) {
-      if !abs.starts_with(&root) {
-        return false;
-      }
-    }
+  if let Ok(abs) = std::fs::canonicalize(path)
+    && let Ok(root) = std::fs::canonicalize(project_root)
+    && !abs.starts_with(&root)
+  {
+    return false;
   }
 
   // Build an override that only includes the specific path, so the walker
@@ -278,16 +277,14 @@ pub fn walker_includes_path(
     .add_custom_ignore_filename(".breezeignore");
 
   // Build the iterator and check whether our file appears
-  for entry in builder.build() {
-    if let Ok(ent) = entry {
-      let p = ent.path();
-      if p == path {
-        // Only include files; directories are always traversable in walker
-        if let Some(ft) = ent.file_type() {
-          return ft.is_file();
-        }
-        return false;
+  for ent in builder.build().flatten() {
+    let p = ent.path();
+    if p == path {
+      // Only include files; directories are always traversable in walker
+      if let Some(ft) = ent.file_type() {
+        return ft.is_file();
       }
+      return false;
     }
   }
   false
@@ -328,11 +325,11 @@ where
     let mut files = Box::pin(files);
 
     while let Some(path) = files.next().await {
-      if let Some(cancel) = &cancel_token {
-        if cancel.is_cancelled() {
-          debug!("walk_files cancelled before file collection complete");
-          break;
-        }
+      if let Some(cancel) = &cancel_token
+        && cancel.is_cancelled()
+      {
+        debug!("walk_files cancelled before file collection complete");
+        break;
       }
       // First check if file exists
       match tokio::fs::metadata(&path).await {
@@ -427,14 +424,13 @@ async fn collect_files_with_sizes(
       .add_custom_ignore_filename(".breezeignore");
 
     for entry in builder.build().flatten() {
-      if let Some(file_type) = entry.file_type() {
-        if file_type.is_file() {
-          if let Ok(metadata) = entry.metadata() {
-            let size = metadata.len();
-            if size > 0 {
-              entries.push((entry.path().to_owned(), size));
-            }
-          }
+      if let Some(file_type) = entry.file_type()
+        && file_type.is_file()
+        && let Ok(metadata) = entry.metadata()
+      {
+        let size = metadata.len();
+        if size > 0 {
+          entries.push((entry.path().to_owned(), size));
         }
       }
     }
@@ -488,11 +484,11 @@ async fn process_with_dual_pools(
       let mut total_size_processed = 0u64;
 
       loop {
-        if let Some(cancel) = &cancel_token {
-          if cancel.is_cancelled() {
-            debug!("Large file worker {} cancelled", i);
-            break;
-          }
+        if let Some(cancel) = &cancel_token
+          && cancel.is_cancelled()
+        {
+          debug!("Large file worker {} cancelled", i);
+          break;
         }
         // Take from the front (largest files)
         let work_item = {
@@ -569,11 +565,11 @@ async fn process_with_dual_pools(
       let mut total_size_processed = 0u64;
 
       loop {
-        if let Some(cancel) = &cancel_token {
-          if cancel.is_cancelled() {
-            debug!("Small file worker {} cancelled", i);
-            break;
-          }
+        if let Some(cancel) = &cancel_token
+          && cancel.is_cancelled()
+        {
+          debug!("Small file worker {} cancelled", i);
+          break;
         }
         // Take from the back (smallest files)
         let work_item = {
@@ -701,12 +697,12 @@ fn process_file<P: AsRef<Path>>(
       content_hash.copy_from_slice(hash.as_bytes());
 
       // Check if file has changed
-      if let Some(existing) = existing_hash {
-          if existing == content_hash {
-              // File unchanged, skip it entirely
-              debug!("Skipping unchanged file: {}", path.display());
-              return;
-          }
+      if let Some(existing) = existing_hash
+          && existing == content_hash
+      {
+          // File unchanged, skip it entirely
+          debug!("Skipping unchanged file: {}", path.display());
+          return;
       }
 
       // Check if hyperpolyglot detects a supported language

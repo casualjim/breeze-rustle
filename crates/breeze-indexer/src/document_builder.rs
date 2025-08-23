@@ -7,7 +7,10 @@ use uuid::Uuid;
 use crate::IndexerError;
 use crate::bulk_indexer::IndexingStats;
 use crate::models::{ChunkMetadataUpdate, CodeChunk, CodeDocument};
-use crate::pipeline::{EmbeddedChunk, EmbeddedChunkWithFile, FileAccumulator, PipelineChunk, ReplaceFileChunks, ReplaceFileChunksSender};
+use crate::pipeline::{
+  EmbeddedChunk, EmbeddedChunkWithFile, FileAccumulator, PipelineChunk, ReplaceFileChunks,
+  ReplaceFileChunksSender,
+};
 
 /// Context for document building operations
 pub(crate) struct DocumentBuildContext<'a> {
@@ -333,7 +336,9 @@ pub(crate) async fn build_document_from_accumulator(
     chunks: code_chunks,
   };
   if ctx.chunks_replace_tx.send(replace).await.is_err() {
-    return Err(IndexerError::Task("ReplaceFileChunks receiver dropped".into()));
+    return Err(IndexerError::Task(
+      "ReplaceFileChunks receiver dropped".into(),
+    ));
   }
 
   // Batch documents before sending

@@ -57,10 +57,9 @@ jobs:
       - name: Run Python tests
         run: |
           set -euo pipefail
-          cd crates/breeze-py
-          uv sync --active
-          uv run --active maturin develop
-          uv run --active pytest -v
+          uv sync -g dev
+          uv run maturin develop --manifest-path crates/breeze-py/Cargo.toml
+          uv run pytest -v
 
   test-node:
     runs-on: ubuntu-latest

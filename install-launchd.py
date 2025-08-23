@@ -20,11 +20,18 @@ class BreezeInstaller:
     """Installer for Breeze MCP server as a macOS LaunchAgent."""
 
     def __init__(self):
-        self.working_dir = Path.home() / "Library" / "Application Support" / "com.github.casualjim.breeze"
+        self.working_dir = (
+            Path.home()
+            / "Library"
+            / "Application Support"
+            / "com.github.casualjim.breeze"
+        )
         self.launch_agents_dir = Path.home() / "Library" / "LaunchAgents"
         self.plist_template = Path("com.github.casualjim.breeze.server.plist.template")
         self.plist_file = self.working_dir / "com.github.casualjim.breeze.server.plist"
-        self.dest_plist = self.launch_agents_dir / "com.github.casualjim.breeze.server.plist"
+        self.dest_plist = (
+            self.launch_agents_dir / "com.github.casualjim.breeze.server.plist"
+        )
 
         # Config file path
         self.config_file = Path.home() / ".config" / "breeze" / "config.toml"

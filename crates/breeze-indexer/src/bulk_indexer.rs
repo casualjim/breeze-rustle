@@ -389,7 +389,8 @@ impl BulkIndexer {
 
     let (embedded_tx, embedded_rx) = mpsc::channel::<EmbeddedChunkWithFile>(100);
     let (doc_tx, doc_rx) = mpsc::channel::<CodeDocument>(50);
-    let (chunks_replace_tx, chunks_replace_rx) = mpsc::channel::<crate::pipeline::ReplaceFileChunks>(100);
+    let (chunks_replace_tx, chunks_replace_rx) =
+      mpsc::channel::<crate::pipeline::ReplaceFileChunks>(100);
     let (delete_tx, delete_rx) = mpsc::channel::<(Uuid, PathBuf)>(25);
 
     // Progress tracking and cancellation
@@ -515,7 +516,7 @@ impl BulkIndexer {
       .map_err(|e| IndexerError::Task(format!("Sink task panicked: {}", e)))?
       .map_err(|e| IndexerError::Task(format!("Sink task failed: {}", e)))?;
 
-    let _replace_ok = replace_sink_result
+    replace_sink_result
       .map_err(|e| IndexerError::Task(format!("ReplaceFileChunks sink task panicked: {}", e)))?
       .map_err(|e| IndexerError::Task(format!("ReplaceFileChunks sink task failed: {}", e)))?;
 
@@ -716,11 +717,7 @@ impl BulkIndexer {
     embedding_dim: usize,
   ) -> tokio::task::JoinHandle<Result<(), IndexerError>> {
     let chunk_table = self.chunk_table.clone();
-    tokio::spawn(replace_sink_task(
-      replace_rx,
-      chunk_table,
-      embedding_dim,
-    ))
+    tokio::spawn(replace_sink_task(replace_rx, chunk_table, embedding_dim))
   }
 
   fn spawn_delete_handler(
@@ -749,8 +746,8 @@ impl BulkIndexer {
     table
       .update()
       .only_if(format!("id = '{}'", project_id).as_str())
-      .column("last_indexed_at", &format!("{}", now_micros))
-      .column("updated_at", &format!("{}", now_micros))
+      .column("last_indexed_at", format!("{}", now_micros))
+      .column("updated_at", format!("{}", now_micros))
       .execute()
       .await?;
 
@@ -1284,19 +1281,19 @@ async fn process_embedding_batch(
 
       // Consume the batch to avoid cloning
       for (idx, pc) in batch.into_iter().enumerate() {
-        if chunk_idx_iter.next() == Some(idx) {
-          if let Some(embedding_vec) = embedding_iter.next() {
-            let item = EmbeddedChunkWithFile::Embedded {
-              batch_id,
-              file_path: pc.file_path,
-              chunk: Box::new(pc.chunk),
-              embedding: embedding_vec,
-            };
-            if embedded_tx.send(item).await.is_err() {
-              // Receiver dropped - this is expected during shutdown
-              debug!("Embedded chunk receiver dropped - stopping batch processing");
-              return;
-            }
+        if chunk_idx_iter.next() == Some(idx)
+          && let Some(embedding_vec) = embedding_iter.next()
+        {
+          let item = EmbeddedChunkWithFile::Embedded {
+            batch_id,
+            file_path: pc.file_path,
+            chunk: Box::new(pc.chunk),
+            embedding: embedding_vec,
+          };
+          if embedded_tx.send(item).await.is_err() {
+            // Receiver dropped - this is expected during shutdown
+            debug!("Embedded chunk receiver dropped - stopping batch processing");
+            return;
           }
         }
       }
@@ -1378,7 +1375,11 @@ async fn replace_sink_task(
       .with_schema(Arc::new(crate::models::CodeChunk::schema(embedding_dim)));
 
     // Destructure to avoid borrowing issues and to keep IDs for pruning
-    let crate::pipeline::ReplaceFileChunks { project_id, file_path, chunks } = msg;
+    let crate::pipeline::ReplaceFileChunks {
+      project_id,
+      file_path,
+      chunks,
+    } = msg;
     let chunk_count = chunks.len();
     let ids: Vec<String> = chunks.iter().map(|c| format!("'{}'", c.id)).collect();
 
@@ -1403,10 +1404,8 @@ async fn replace_sink_task(
     while let Some(batch_res) = record_batches.next().await {
       let batch = batch_res.map_err(|e| IndexerError::Database(e.to_string()))?;
       let schema = batch.schema();
-      let batch_iter = arrow::record_batch::RecordBatchIterator::new(
-        vec![Ok(batch)].into_iter(),
-        schema,
-      );
+      let batch_iter =
+        arrow::record_batch::RecordBatchIterator::new(vec![Ok(batch)].into_iter(), schema);
       let mut merge = table_guard.merge_insert(&["id"]);
       merge.when_matched_update_all(None);
       merge.when_not_matched_insert_all();
@@ -1427,7 +1426,10 @@ async fn replace_sink_task(
     let escaped_path = file_path.replace("'", "''");
 
     let count_expr = if id_list.is_empty() {
-      format!("project_id = '{}' AND file_path = '{}'", project_id, escaped_path)
+      format!(
+        "project_id = '{}' AND file_path = '{}'",
+        project_id, escaped_path
+      )
     } else {
       format!(
         "project_id = '{}' AND file_path = '{}' AND id NOT IN ({})",
@@ -3168,10 +3170,8 @@ def goodbye():
     // Second replace with 2 chunks (drop one)
     let n1 = mk_chunk("one");
     let n2 = mk_chunk("two");
-    let second_ids: std::collections::BTreeSet<String> = [n1.id, n2.id]
-      .into_iter()
-      .map(|u| u.to_string())
-      .collect();
+    let second_ids: std::collections::BTreeSet<String> =
+      [n1.id, n2.id].into_iter().map(|u| u.to_string()).collect();
 
     tx.send(crate::pipeline::ReplaceFileChunks {
       project_id,
@@ -3186,18 +3186,21 @@ def goodbye():
 
     // Query final set for (project_id, file_path)
     let table_r = table.read().await;
-    let mut q = table_r
-      .query()
-      .only_if(format!("project_id = '{}' AND file_path = '{}' AND id != '{}'",
-                       project_id,
-                       file_path.replace("'", "''"),
-                       Uuid::nil()));
+    let q = table_r.query().only_if(format!(
+      "project_id = '{}' AND file_path = '{}' AND id != '{}'",
+      project_id,
+      file_path.replace("'", "''"),
+      Uuid::nil()
+    ));
 
     let mut rows = q.execute().await.unwrap();
     let mut final_ids = std::collections::BTreeSet::new();
     while let Some(batch) = rows.try_next().await.unwrap() {
       if let Some(id_col) = batch.column_by_name("id") {
-        let id_col = id_col.as_any().downcast_ref::<arrow::array::StringArray>().unwrap();
+        let id_col = id_col
+          .as_any()
+          .downcast_ref::<arrow::array::StringArray>()
+          .unwrap();
         for i in 0..batch.num_rows() {
           final_ids.insert(id_col.value(i).to_string());
         }
@@ -3205,7 +3208,10 @@ def goodbye():
     }
 
     // Final ids must match second_ids exactly
-    assert_eq!(final_ids, second_ids, "Final chunk ID set must match second replace set");
+    assert_eq!(
+      final_ids, second_ids,
+      "Final chunk ID set must match second replace set"
+    );
 
     // And must not be empty (no blackout window left the set empty at the end)
     assert!(!final_ids.is_empty());
@@ -3236,7 +3242,9 @@ def goodbye():
     let chunk_table = crate::models::CodeChunk::ensure_table(&connection, "chunks", embedding_dim)
       .await
       .unwrap();
-    let project_table = Project::ensure_table(&connection, "projects").await.unwrap();
+    let project_table = Project::ensure_table(&connection, "projects")
+      .await
+      .unwrap();
 
     let indexer = BulkIndexer::new(
       Arc::new(config),
@@ -3264,10 +3272,12 @@ def goodbye():
     // Verify chunk rows exist for the file
     let chunk_table = indexer.chunk_table.read().await;
     let before_count = chunk_table
-      .count_rows(Some(format!("project_id = '{}' AND file_path = '{}' AND id != '{}'",
-                               project_id,
-                               file_path.replace("'", "''"),
-                               Uuid::nil())))
+      .count_rows(Some(format!(
+        "project_id = '{}' AND file_path = '{}' AND id != '{}'",
+        project_id,
+        file_path.replace("'", "''"),
+        Uuid::nil()
+      )))
       .await
       .unwrap();
     assert!(before_count > 0, "Expected chunks to exist before deletion");
@@ -3278,19 +3288,29 @@ def goodbye():
     let cancel = CancellationToken::new();
     let docs = indexer.table.clone();
     let chunks_table = indexer.chunk_table.clone();
-    let handle = tokio::spawn(delete_handler_task(project_id, rx, docs, chunks_table, cancel));
+    let handle = tokio::spawn(delete_handler_task(
+      project_id,
+      rx,
+      docs,
+      chunks_table,
+      cancel,
+    ));
 
-    tx.send((project_id, PathBuf::from(file_path))).await.unwrap();
+    tx.send((project_id, PathBuf::from(file_path)))
+      .await
+      .unwrap();
     drop(tx);
     handle.await.unwrap();
 
     // Verify chunks removed
     let chunk_table = indexer.chunk_table.read().await;
     let after_count = chunk_table
-      .count_rows(Some(format!("project_id = '{}' AND file_path = '{}' AND id != '{}'",
-                               project_id,
-                               file_path.replace("'", "''"),
-                               Uuid::nil())))
+      .count_rows(Some(format!(
+        "project_id = '{}' AND file_path = '{}' AND id != '{}'",
+        project_id,
+        file_path.replace("'", "''"),
+        Uuid::nil()
+      )))
       .await
       .unwrap();
     assert_eq!(after_count, 0, "Expected no chunks after deletion");
@@ -3298,10 +3318,12 @@ def goodbye():
     // Verify document removed
     let doc_table = indexer.table.read().await;
     let doc_count = doc_table
-      .count_rows(Some(format!("project_id = '{}' AND file_path = '{}' AND id != '{}'",
-                               project_id,
-                               file_path.replace("'", "''"),
-                               Uuid::nil())))
+      .count_rows(Some(format!(
+        "project_id = '{}' AND file_path = '{}' AND id != '{}'",
+        project_id,
+        file_path.replace("'", "''"),
+        Uuid::nil()
+      )))
       .await
       .unwrap();
     assert_eq!(doc_count, 0, "Expected no documents after deletion");

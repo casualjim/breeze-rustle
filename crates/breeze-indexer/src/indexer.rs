@@ -20,8 +20,8 @@ use crate::{
   task_manager::TaskManager,
 };
 use futures::TryStreamExt as _;
-use lancedb::query::QueryBase as _;
 use lancedb::query::ExecutableQuery as _;
+use lancedb::query::QueryBase as _;
 
 /// Error type for public API
 #[derive(Debug, thiserror::Error)]
@@ -149,7 +149,9 @@ impl Indexer {
     })
   }
 
-  async fn connect_database(db_path: &std::path::Path) -> Result<lancedb::Connection, IndexerError> {
+  async fn connect_database(
+    db_path: &std::path::Path,
+  ) -> Result<lancedb::Connection, IndexerError> {
     let path_str = db_path
       .to_str()
       .ok_or_else(|| IndexerError::Config("Invalid database path".to_string()))?;
@@ -190,7 +192,7 @@ impl Indexer {
       let schema = batch.schema();
       let field = schema
         .field_with_name("content_embedding")
-        .map_err(|e| IndexerError::Arrow(e))?;
+        .map_err(IndexerError::Arrow)?;
       match field.data_type() {
         arrow::datatypes::DataType::FixedSizeList(_, size) => {
           if *size as usize != embedding_dim {
@@ -229,7 +231,7 @@ impl Indexer {
       let schema = batch.schema();
       let field = schema
         .field_with_name("embedding")
-        .map_err(|e| IndexerError::Arrow(e))?;
+        .map_err(IndexerError::Arrow)?;
       match field.data_type() {
         arrow::datatypes::DataType::FixedSizeList(_, size) => {
           if *size as usize != embedding_dim {
@@ -566,8 +568,10 @@ mod tests {
   #[tokio::test]
   async fn test_start_failure_handling() {
     // Setup indexer with invalid config to force new failure
-    let mut invalid_config = Config::default();
-    invalid_config.database_path = PathBuf::from("/invalid/path");
+    let invalid_config = Config {
+      database_path: PathBuf::from("/invalid/path"),
+      ..Default::default()
+    };
     let shutdown_token = CancellationToken::new();
     let indexer_result = Indexer::new(invalid_config, shutdown_token).await;
     assert!(indexer_result.is_err());

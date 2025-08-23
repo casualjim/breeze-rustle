@@ -248,6 +248,7 @@ impl CodeDocument {
   }
 
   /// Convert a RecordBatch row to CodeDocument
+  #[cfg(test)]
   pub fn from_record_batch(
     batch: &arrow::record_batch::RecordBatch,
     row: usize,
@@ -425,10 +426,10 @@ impl CodeDocument {
       content_embedding,
       file_size,
       last_modified: chrono::DateTime::from_timestamp_micros(last_modified)
-        .unwrap_or_default()
+        .unwrap_or_else(|| chrono::DateTime::from_timestamp(0, 0).unwrap())
         .naive_utc(),
       indexed_at: chrono::DateTime::from_timestamp_micros(indexed_at)
-        .unwrap_or_default()
+        .unwrap_or_else(|| chrono::DateTime::from_timestamp(0, 0).unwrap())
         .naive_utc(),
       languages,
       primary_language,
@@ -449,6 +450,8 @@ impl CodeDocument {
     self.content_hash = hash;
   }
 
+  /// Update the embedding vector and refresh indexed_at timestamp
+  #[cfg(test)]
   pub fn update_embedding(&mut self, embedding: Vec<f32>) {
     self.content_embedding = embedding;
     self.indexed_at = chrono::Utc::now().naive_utc();

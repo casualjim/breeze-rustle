@@ -292,26 +292,31 @@ impl Config {
   /// Get all default config paths in order of precedence
   pub fn default_config_paths() -> Vec<PathBuf> {
     let mut paths = Vec::new();
-    
+
     // 1. Current directory
     paths.push(PathBuf::from(".breeze.toml"));
-    
+
     // 2. Application Support directory (macOS)
     #[cfg(target_os = "macos")]
     if let Some(app_support) = dirs::config_dir() {
       let breeze_dir = app_support.join("com.github.casualjim.breeze.server");
       paths.push(breeze_dir.join("config.toml"));
     }
-    
+
     // 3. User config directory (~/.config/breeze/config.toml)
     if let Some(config_dir) = dirs::home_dir() {
-      paths.push(config_dir.join(".config").join("breeze").join("config.toml"));
+      paths.push(
+        config_dir
+          .join(".config")
+          .join("breeze")
+          .join("config.toml"),
+      );
     }
-    
+
     // 4. System-wide config directories
     paths.push(PathBuf::from("/etc/breeze/config.toml"));
     paths.push(PathBuf::from("/usr/share/breeze/config.toml"));
-    
+
     paths
   }
 
@@ -363,13 +368,13 @@ impl Config {
     config.db_dir = PathBuf::from(expanded.as_ref());
 
     // 6. Apply env var expansion to API keys
-    if let Some(voyage) = &mut config.embeddings.voyage {
-      if let Some(api_key) = &voyage.api_key {
-        let expanded = xpanda
-          .expand(api_key)
-          .map_err(|e| anyhow::anyhow!("Failed to expand env vars in voyage api_key: {:?}", e))?;
-        voyage.api_key = Some(expanded);
-      }
+    if let Some(voyage) = &mut config.embeddings.voyage
+      && let Some(api_key) = &voyage.api_key
+    {
+      let expanded = xpanda
+        .expand(api_key)
+        .map_err(|e| anyhow::anyhow!("Failed to expand env vars in voyage api_key: {:?}", e))?;
+      voyage.api_key = Some(expanded);
     }
 
     // Apply to other provider API keys
@@ -589,7 +594,7 @@ max_concurrent_requests = 5
           std::env::var(&env_var).ok()
         });
 
-openai_providers.insert(
+        openai_providers.insert(
           name.clone(),
           breeze_indexer::OpenAILikeConfig {
             api_base: api_base.clone(),
@@ -859,7 +864,7 @@ model = "voyage-code-3"
     // Test that config files are found in the default paths
     let dir = tempdir().unwrap();
     let config_path = dir.path().join(".breeze.toml");
-    
+
     // Create a config file in the temp directory
     let config_content = r#"
 db_dir = "./test.db"
@@ -868,17 +873,17 @@ db_dir = "./test.db"
 provider = "voyage"
 "#;
     std::fs::write(&config_path, config_content).unwrap();
-    
+
     // Change working directory to the temp dir
     let original_dir = std::env::current_dir().unwrap();
     std::env::set_current_dir(&dir).unwrap();
-    
+
     // Load config without specifying a path - should find .breeze.toml
     let result = Config::load(None);
-    
+
     // Restore original directory
     std::env::set_current_dir(original_dir).unwrap();
-    
+
     // Verify the config was loaded
     let (loaded, loaded_path) = result.unwrap();
     assert_eq!(loaded.db_dir, PathBuf::from("./test.db"));
@@ -890,12 +895,18 @@ provider = "voyage"
   fn test_default_config_paths_order() {
     // Test that paths are in the correct order
     let paths = Config::default_config_paths();
-    
+
     // First should be current directory
     assert_eq!(paths[0], PathBuf::from(".breeze.toml"));
-    
+
     // System paths should be at the end
-    assert_eq!(paths[paths.len() - 2], PathBuf::from("/etc/breeze/config.toml"));
-    assert_eq!(paths[paths.len() - 1], PathBuf::from("/usr/share/breeze/config.toml"));
+    assert_eq!(
+      paths[paths.len() - 2],
+      PathBuf::from("/etc/breeze/config.toml")
+    );
+    assert_eq!(
+      paths[paths.len() - 1],
+      PathBuf::from("/usr/share/breeze/config.toml")
+    );
   }
 }

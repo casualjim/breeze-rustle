@@ -319,9 +319,9 @@ impl Indexer {
 
     // Voyage config
     if let Some(v) = config.voyage {
-      use breeze_indexer::aiproviders::voyage::models::EmbeddingModel as RVoyageModel;
-      use breeze_indexer::aiproviders::voyage::Tier as RVoyageTier;
       use breeze_indexer::VoyageConfig as RVoyageConfig;
+      use breeze_indexer::aiproviders::voyage::Tier as RVoyageTier;
+      use breeze_indexer::aiproviders::voyage::models::EmbeddingModel as RVoyageModel;
 
       let tier = match v.tier.as_deref() {
         Some("tier-1") => RVoyageTier::Tier1,

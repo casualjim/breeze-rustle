@@ -1,34 +1,21 @@
-[build-system]
-requires = ["maturin>=1.8,<2.0"]
-build-backend = "maturin"
-
-[project]
-name = "breeze-rustle"
-requires-python = ">=3.11"
-classifiers = [
-    "Programming Language :: Rust",
-    "Programming Language :: Python :: Implementation :: CPython",
-    "Programming Language :: Python :: Implementation :: PyPy",
+[tool.uv.workspace]
+members = [
+  "crates/breeze-py"
 ]
-dynamic = ["version"]
-[tool.maturin]
-features = ["pyo3/extension-module"]
 
 [dependency-groups]
 dev = [
-    "httpx>=0.28.1",
-    "maturin>=1.8.6",
-    "pytest>=8.3.5",
-    "pytest-asyncio>=1.0.0",
-    "breeze-langdetect>=0.1.0",
-    "polars>=1.31.0",
-    "matplotlib>=3.7.0",
-    "seaborn>=0.12.0",
-    "modal>=1.0.5"
+  "httpx>=0.28.1",
+  "maturin>=1.8.6",
+  "pytest>=8.3.5",
+  "pytest-asyncio>=1.0.0",
+  "breeze-langdetect>=0.2.0",
+  "polars>=1.31.0",
+  "matplotlib>=3.7.0",
+  "seaborn>=0.12.0",
+  "modal>=1.0.5"
 ]
 
 [tool.pytest.ini_options]
 minversion = "6.0"
-testpaths = ["tests"]
-pythonpath = ["."]
 asyncio_mode = "auto"

@@ -317,10 +317,10 @@ fn extract_symbols_recursive(
     | "function_item"
     | "function"
     | "method_declaration" => {
-      if let Some(name_node) = find_child_by_kind(&node, "identifier") {
-        if let Ok(text) = name_node.utf8_text(content.as_bytes()) {
-          definitions.push(text.to_string());
-        }
+      if let Some(name_node) = find_child_by_kind(&node, "identifier")
+        && let Ok(text) = name_node.utf8_text(content.as_bytes())
+      {
+        definitions.push(text.to_string());
       }
     }
 
@@ -334,10 +334,9 @@ fn extract_symbols_recursive(
     | "trait_definition" => {
       if let Some(name_node) = find_child_by_kind(&node, "identifier")
         .or_else(|| find_child_by_kind(&node, "type_identifier"))
+        && let Ok(text) = name_node.utf8_text(content.as_bytes())
       {
-        if let Ok(text) = name_node.utf8_text(content.as_bytes()) {
-          definitions.push(text.to_string());
-        }
+        definitions.push(text.to_string());
       }
     }
 
@@ -345,19 +344,18 @@ fn extract_symbols_recursive(
     "enum_declaration" | "enum_specifier" | "enum_item" => {
       if let Some(name_node) = find_child_by_kind(&node, "identifier")
         .or_else(|| find_child_by_kind(&node, "type_identifier"))
+        && let Ok(text) = name_node.utf8_text(content.as_bytes())
       {
-        if let Ok(text) = name_node.utf8_text(content.as_bytes()) {
-          definitions.push(text.to_string());
-        }
+        definitions.push(text.to_string());
       }
     }
 
     // Constructor and property definitions
     "constructor_declaration" | "property_declaration" => {
-      if let Some(name_node) = find_child_by_kind(&node, "identifier") {
-        if let Ok(text) = name_node.utf8_text(content.as_bytes()) {
-          definitions.push(text.to_string());
-        }
+      if let Some(name_node) = find_child_by_kind(&node, "identifier")
+        && let Ok(text) = name_node.utf8_text(content.as_bytes())
+      {
+        definitions.push(text.to_string());
       }
     }
 
@@ -365,28 +363,27 @@ fn extract_symbols_recursive(
     "module" | "module_definition" | "mod_item" => {
       if let Some(name_node) =
         find_child_by_kind(&node, "identifier").or_else(|| find_child_by_kind(&node, "module_name"))
+        && let Ok(text) = name_node.utf8_text(content.as_bytes())
       {
-        if let Ok(text) = name_node.utf8_text(content.as_bytes()) {
-          definitions.push(text.to_string());
-        }
+        definitions.push(text.to_string());
       }
     }
 
     // Rust-specific definitions
     "const_item" | "static_item" => {
-      if let Some(name_node) = find_child_by_kind(&node, "identifier") {
-        if let Ok(text) = name_node.utf8_text(content.as_bytes()) {
-          definitions.push(text.to_string());
-        }
+      if let Some(name_node) = find_child_by_kind(&node, "identifier")
+        && let Ok(text) = name_node.utf8_text(content.as_bytes())
+      {
+        definitions.push(text.to_string());
       }
     }
 
     // Language-specific function definitions
     "def" | "defn" | "defp" | "defmodule" | "defprotocol" | "defimpl" => {
-      if let Some(name_node) = find_child_by_kind(&node, "identifier") {
-        if let Ok(text) = name_node.utf8_text(content.as_bytes()) {
-          definitions.push(text.to_string());
-        }
+      if let Some(name_node) = find_child_by_kind(&node, "identifier")
+        && let Ok(text) = name_node.utf8_text(content.as_bytes())
+      {
+        definitions.push(text.to_string());
       }
     }
 
@@ -394,27 +391,26 @@ fn extract_symbols_recursive(
     "object_definition" | "object_declaration" => {
       if let Some(name_node) = find_child_by_kind(&node, "identifier")
         .or_else(|| find_child_by_kind(&node, "type_identifier"))
+        && let Ok(text) = name_node.utf8_text(content.as_bytes())
       {
-        if let Ok(text) = name_node.utf8_text(content.as_bytes()) {
-          definitions.push(text.to_string());
-        }
+        definitions.push(text.to_string());
       }
     }
 
     "namespace_declaration" | "namespace_definition" => {
-      if let Some(name_node) = find_child_by_kind(&node, "identifier") {
-        if let Ok(text) = name_node.utf8_text(content.as_bytes()) {
-          definitions.push(text.to_string());
-        }
+      if let Some(name_node) = find_child_by_kind(&node, "identifier")
+        && let Ok(text) = name_node.utf8_text(content.as_bytes())
+      {
+        definitions.push(text.to_string());
       }
     }
 
     // References (function calls, variable usage)
     "call_expression" | "call" => {
-      if let Some(func_node) = node.child(0) {
-        if let Ok(text) = func_node.utf8_text(content.as_bytes()) {
-          references.push(text.to_string());
-        }
+      if let Some(func_node) = node.child(0)
+        && let Ok(text) = func_node.utf8_text(content.as_bytes())
+      {
+        references.push(text.to_string());
       }
     }
 

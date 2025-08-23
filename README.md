@@ -26,7 +26,7 @@ The easiest way to get the required tools is to use: [mise](https://mise.jdx.dev
 git clone https://github.com/casualjim/breeze-rustle
 cd breeze-rustle
 
-bun install 
+bun install
 # npm install
 
 # Install dependencies and build

@@ -1182,8 +1182,7 @@ mod tests {
     let err = project_manager
       .find_by_path(rel)
       .await
-      .err()
-      .expect("expected error");
+      .expect_err("expected error");
     match err {
       IndexerError::PathNotAbsolute(msg) => {
         assert!(msg.contains("relative/path"));

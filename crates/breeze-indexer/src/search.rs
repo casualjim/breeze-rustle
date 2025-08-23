@@ -1,5 +1,4 @@
 mod chunks;
-mod documents;
 
 #[cfg(all(test, feature = "local-embeddings"))]
 mod chunk_tests;
@@ -18,7 +17,6 @@ use uuid::Uuid;
 
 use crate::embeddings::EmbeddingProvider;
 use chunks::search_chunks;
-use documents::search_documents;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub enum SearchGranularity {
@@ -147,30 +145,16 @@ pub async fn hybrid_search(
 
   let query_vector = query_embedding[0].as_slice();
 
-  match options.granularity {
-    SearchGranularity::Document => {
-      search_documents(
-        documents_table,
-        chunks_table,
-        query,
-        query_vector,
-        &options,
-        project_id.map(|id| id.to_string()).as_deref(),
-      )
-      .await
-    }
-    SearchGranularity::Chunk => {
-      search_chunks(
-        documents_table,
-        chunks_table,
-        query,
-        query_vector,
-        &options,
-        project_id.map(|id| id.to_string()).as_deref(),
-      )
-      .await
-    }
-  }
+  // Route all searches through chunk search (chunk-only search)
+  search_chunks(
+    documents_table,
+    chunks_table,
+    query,
+    query_vector,
+    &options,
+    project_id.map(|id| id.to_string()).as_deref(),
+  )
+  .await
 }
 
 #[cfg(all(test, feature = "local-embeddings"))]

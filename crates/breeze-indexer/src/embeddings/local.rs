@@ -22,7 +22,9 @@ use candle_core::{Device, Tensor};
 use serde::Deserialize;
 use std::sync::Arc;
 
-use crate::embeddings::local::{bert::BertEmbed, ort_bert::OrtBertEmbedder, ort_qwen3::OrtQwen3Embedder, text::ONNXModel};
+use crate::embeddings::local::{
+  bert::BertEmbed, ort_bert::OrtBertEmbedder, ort_qwen3::OrtQwen3Embedder, text::ONNXModel,
+};
 
 use super::{
   EmbeddingProvider,
@@ -115,7 +117,8 @@ impl LocalEmbeddingProvider {
     })?;
 
     // Map model_name to different ONNX models
-    let embedder: Box<dyn BertEmbed + Send + Sync> = if model_name.to_lowercase().contains("qwen3") {
+    let embedder: Box<dyn BertEmbed + Send + Sync> = if model_name.to_lowercase().contains("qwen3")
+    {
       Box::new(OrtQwen3Embedder::new(None, None).map_err(|e| {
         super::EmbeddingError::ModelLoadFailed(format!("Failed to create Qwen3 embedder: {}", e))
       })?)
@@ -127,10 +130,11 @@ impl LocalEmbeddingProvider {
         "all-minilm-l12-v2" => ONNXModel::AllMiniLML12V2,
         _ => ONNXModel::BGESmallENV15, // Default
       };
-      Box::new(OrtBertEmbedder::new(Some(onnx_model), None, None, None, None)
-        .map_err(|e| {
+      Box::new(
+        OrtBertEmbedder::new(Some(onnx_model), None, None, None, None).map_err(|e| {
           super::EmbeddingError::ModelLoadFailed(format!("Failed to create BERT embedder: {}", e))
-        })?)
+        })?,
+      )
     };
 
     // Get embedding dimension by embedding a test string

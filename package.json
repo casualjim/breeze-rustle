@@ -3,7 +3,9 @@
     "@kumos/tree-sitter-parsers": "^0.1.4",
     "@kumos/tree-sitter-parsers-linux-x64": "^0.1.4"
   },
-  "trustedDependencies": ["@kumos/tree-sitter-parsers"],
+  "trustedDependencies": [
+    "@kumos/tree-sitter-parsers"
+  ],
   "description": "High-performance semantic code chunking with tree-sitter",
   "name": "breeze-rustle",
   "private": true,

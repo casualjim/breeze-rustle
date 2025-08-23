@@ -126,7 +126,7 @@ impl OpenAILikeEmbeddingProvider {
       }
     };
 
-Ok(Self {
+    Ok(Self {
       client,
       model: config.model.clone(),
       tokenizer,
@@ -146,7 +146,7 @@ Ok(Self {
 #[async_trait]
 impl EmbeddingProvider for OpenAILikeEmbeddingProvider {
   async fn embed(&self, inputs: &[EmbeddingInput<'_>]) -> super::EmbeddingResult<Vec<Vec<f32>>> {
-let request = EmbeddingRequest {
+    let request = EmbeddingRequest {
       input: inputs.iter().map(|input| input.text.to_string()).collect(),
       model: self.model.clone(),
       encoding_format: self.encoding_format.clone(),
