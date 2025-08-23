@@ -30,7 +30,7 @@ class BreezeInstaller:
         self.config_file = Path.home() / ".config" / "breeze" / "config.toml"
 
         # Log directory
-        self.log_dir = os.environ.get("LOG_DIR", "/usr/local/var/log")
+        self.log_dir = os.environ.get("LOG_DIR", Path.home() / "Library" / "Logs")
 
     def check_requirements(self) -> bool:
         """Check if all requirements are met."""
@@ -69,6 +69,7 @@ class BreezeInstaller:
             "CONFIG_FILE": str(self.config_file),
             "WORKING_DIR": str(self.working_dir),
             "LOG_DIR": self.log_dir,
+            "HOME": Path.home(),
         }
 
         # Render template

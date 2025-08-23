@@ -21,16 +21,16 @@
         <key>PATH</key>
         <string>{{HOME}}/.cargo/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin</string>
         <key>RUST_LOG</key>
-        <string>error</string>
+        <string>error,breeze=info</string>
         <key>HF_HUB_DISABLE_PROGRESS_BARS</key>
         <string>1</string>
     </dict>
 
     <key>StandardOutPath</key>
-    <string>{{LOG_DIR}}/breeze-mcp.log</string>
+    <string>{{LOG_DIR}}/breeze.log</string>
 
     <key>StandardErrorPath</key>
-    <string>{{LOG_DIR}}/breeze-mcp.error.log</string>
+    <string>{{LOG_DIR}}/breeze.stderr.log</string>
 
     <key>RunAtLoad</key>
     <true/>
