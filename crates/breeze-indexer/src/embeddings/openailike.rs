@@ -17,10 +17,17 @@ use crate::reqwestx::api_client::{ApiClient, ApiClientConfig};
 struct EmbeddingRequest {
   input: Vec<String>,
   model: String,
+  // OpenAI-specific optional field
   #[serde(skip_serializing_if = "Option::is_none")]
   encoding_format: Option<String>,
+  // OpenAI-specific optional field for TE3 family
   #[serde(skip_serializing_if = "Option::is_none")]
   dimensions: Option<usize>,
+  // Optional provider-specific fields
+  #[serde(skip_serializing_if = "Option::is_none")]
+  output_dtype: Option<String>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  output_dimension: Option<usize>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -59,6 +66,10 @@ pub struct OpenAILikeEmbeddingProvider {
   context_length: usize,
   max_batch_size: usize,
   max_tokens_per_request: usize,
+  // Optional request parameters controlled via config
+  encoding_format: Option<String>,
+  output_dtype: Option<String>,
+  output_dimension: Option<usize>,
 }
 
 impl OpenAILikeEmbeddingProvider {
@@ -115,7 +126,7 @@ impl OpenAILikeEmbeddingProvider {
       }
     };
 
-    Ok(Self {
+Ok(Self {
       client,
       model: config.model.clone(),
       tokenizer,
@@ -125,6 +136,9 @@ impl OpenAILikeEmbeddingProvider {
       max_tokens_per_request: config
         .max_tokens_per_request
         .unwrap_or(config.context_length),
+      encoding_format: config.encoding_format.clone(),
+      output_dtype: config.output_dtype.clone(),
+      output_dimension: config.output_dimension,
     })
   }
 }
@@ -132,11 +146,13 @@ impl OpenAILikeEmbeddingProvider {
 #[async_trait]
 impl EmbeddingProvider for OpenAILikeEmbeddingProvider {
   async fn embed(&self, inputs: &[EmbeddingInput<'_>]) -> super::EmbeddingResult<Vec<Vec<f32>>> {
-    let request = EmbeddingRequest {
+let request = EmbeddingRequest {
       input: inputs.iter().map(|input| input.text.to_string()).collect(),
       model: self.model.clone(),
-      encoding_format: Some("float".to_string()),
-      dimensions: None, //Some(self.embedding_dim),
+      encoding_format: self.encoding_format.clone(),
+      dimensions: None, // OpenAI TE3 optional override not configured here
+      output_dtype: self.output_dtype.clone(),
+      output_dimension: self.output_dimension,
     };
 
     // Calculate total tokens for rate limiting
@@ -229,6 +245,9 @@ mod tests {
       tokens_per_minute: 10000,
       max_concurrent_requests: 5,
       max_tokens_per_request: Some(4096), // Half of context_length
+      encoding_format: None,
+      output_dtype: None,
+      output_dimension: None,
     };
 
     let provider = OpenAILikeEmbeddingProvider::new(&config).await.unwrap();
@@ -254,6 +273,9 @@ mod tests {
       tokens_per_minute: 10000,
       max_concurrent_requests: 5,
       max_tokens_per_request: None, // Not specified
+      encoding_format: None,
+      output_dtype: None,
+      output_dimension: None,
     };
 
     let provider = OpenAILikeEmbeddingProvider::new(&config).await.unwrap();

@@ -195,6 +195,13 @@ pub struct ProviderConfig {
   pub max_concurrent_requests: Option<usize>,
   #[serde(skip_serializing_if = "Option::is_none")]
   pub max_tokens_per_request: Option<usize>,
+  // Optional request knobs for provider variations
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub encoding_format: Option<String>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub output_dtype: Option<String>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub output_dimension: Option<usize>,
 }
 
 // Default functions
@@ -582,7 +589,7 @@ max_concurrent_requests = 5
           std::env::var(&env_var).ok()
         });
 
-        openai_providers.insert(
+openai_providers.insert(
           name.clone(),
           breeze_indexer::OpenAILikeConfig {
             api_base: api_base.clone(),
@@ -611,6 +618,9 @@ max_concurrent_requests = 5
               )
             })?,
             max_tokens_per_request: config.max_tokens_per_request,
+            encoding_format: config.encoding_format.clone(),
+            output_dtype: config.output_dtype.clone(),
+            output_dimension: config.output_dimension,
           },
         );
       }

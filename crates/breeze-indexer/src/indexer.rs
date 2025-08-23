@@ -19,6 +19,9 @@ use crate::{
   project_manager::ProjectManager,
   task_manager::TaskManager,
 };
+use futures::TryStreamExt as _;
+use lancedb::query::QueryBase as _;
+use lancedb::query::ExecutableQuery as _;
 
 /// Error type for public API
 #[derive(Debug, thiserror::Error)]
@@ -90,42 +93,29 @@ impl Indexer {
     config: Config,
     shutdown_token: CancellationToken,
   ) -> Result<Self, IndexerError> {
-    // Initialize embedding provider
+    // 1) Initialize embedding provider and dimension
     let embedding_provider = create_embedding_provider(&config).await?;
-
     let embedding_dim = embedding_provider.embedding_dim();
 
-    // Initialize LanceDB connection
+    // 2) Connect to LanceDB
     let db_path = &config.database_path;
+    let connection = Self::connect_database(db_path).await?;
 
-    let connection = lancedb::connect(
-      db_path
-        .to_str()
-        .ok_or_else(|| IndexerError::Config("Invalid database path".to_string()))?,
-    )
-    .execute()
-    .await?;
+    // 3) Ensure core tables and verify schema matches embedding_dim
+    let (doc_table_raw, chunk_table_raw) =
+      Self::ensure_core_tables(&connection, embedding_dim).await?;
+    Self::verify_embedding_schema(&doc_table_raw, &chunk_table_raw, embedding_dim, db_path).await?;
 
-    // Ensure tables exist
-    let table = CodeDocument::ensure_table(&connection, "code_embeddings", embedding_dim).await?;
-    let chunk_table =
-      crate::models::CodeChunk::ensure_table(&connection, "code_chunks", embedding_dim).await?;
+    // 4) Ensure support tables
+    let (task_table_raw, project_table_raw, failed_batches_table_raw) =
+      Self::ensure_support_tables(&connection).await?;
 
-    let task_table = crate::models::IndexTask::ensure_table(&connection, "index_tasks").await?;
-
-    // Ensure projects table exists
-    let project_table = Project::ensure_table(&connection, "projects").await?;
-
-    // Ensure failed batches table exists
-    let failed_batches_table =
-      crate::models::FailedEmbeddingBatch::ensure_table(&connection, "failed_embedding_batches")
-        .await?;
-
-    let project_table = Arc::new(RwLock::new(project_table));
-    let task_table = Arc::new(RwLock::new(task_table));
-    let failed_batches_table = Arc::new(RwLock::new(failed_batches_table));
-    let table = Arc::new(RwLock::new(table));
-    let chunk_table = Arc::new(RwLock::new(chunk_table));
+    // 5) Wrap resources, build managers, and return Indexer
+    let project_table = Arc::new(RwLock::new(project_table_raw));
+    let task_table = Arc::new(RwLock::new(task_table_raw));
+    let failed_batches_table = Arc::new(RwLock::new(failed_batches_table_raw));
+    let table = Arc::new(RwLock::new(doc_table_raw));
+    let chunk_table = Arc::new(RwLock::new(chunk_table_raw));
     let config = Arc::new(config);
     let embedding_provider: Arc<dyn EmbeddingProvider> = Arc::from(embedding_provider);
 
@@ -159,6 +149,121 @@ impl Indexer {
     })
   }
 
+  async fn connect_database(db_path: &std::path::Path) -> Result<lancedb::Connection, IndexerError> {
+    let path_str = db_path
+      .to_str()
+      .ok_or_else(|| IndexerError::Config("Invalid database path".to_string()))?;
+    let conn = lancedb::connect(path_str).execute().await?;
+    Ok(conn)
+  }
+
+  async fn ensure_core_tables(
+    connection: &lancedb::Connection,
+    embedding_dim: usize,
+  ) -> Result<(lancedb::Table, lancedb::Table), IndexerError> {
+    let doc = CodeDocument::ensure_table(connection, "code_embeddings", embedding_dim).await?;
+    let chunks =
+      crate::models::CodeChunk::ensure_table(connection, "code_chunks", embedding_dim).await?;
+    Ok((doc, chunks))
+  }
+
+  async fn verify_embedding_schema(
+    doc_table: &lancedb::Table,
+    chunk_table: &lancedb::Table,
+    embedding_dim: usize,
+    db_path: &std::path::Path,
+  ) -> Result<(), IndexerError> {
+    // Verify documents table embedding vector width
+    let mut q = doc_table
+      .query()
+      .select(lancedb::query::Select::columns(&["content_embedding"]))
+      .limit(1)
+      .execute()
+      .await
+      .map_err(|e| IndexerError::Database(e.to_string()))?;
+
+    if let Some(batch) = q
+      .try_next()
+      .await
+      .map_err(|e| IndexerError::Database(e.to_string()))?
+    {
+      let schema = batch.schema();
+      let field = schema
+        .field_with_name("content_embedding")
+        .map_err(|e| IndexerError::Arrow(e))?;
+      match field.data_type() {
+        arrow::datatypes::DataType::FixedSizeList(_, size) => {
+          if *size as usize != embedding_dim {
+            return Err(IndexerError::Config(format!(
+              "Database schema mismatch for code_embeddings.content_embedding: expected vector dim {}, found {}. Hint: your provider is returning {}-d vectors but the table was created for a different size. Delete the database at '{}' or migrate the table, then restart.",
+              embedding_dim,
+              size,
+              embedding_dim,
+              db_path.display()
+            )));
+          }
+        }
+        other => {
+          return Err(IndexerError::Config(format!(
+            "Unexpected data type for code_embeddings.content_embedding: {:?} (expected FixedSizeList(Float32, {}))",
+            other, embedding_dim
+          )));
+        }
+      }
+    }
+
+    // Verify chunks table embedding vector width
+    let mut cq = chunk_table
+      .query()
+      .select(lancedb::query::Select::columns(&["embedding"]))
+      .limit(1)
+      .execute()
+      .await
+      .map_err(|e| IndexerError::Database(e.to_string()))?;
+
+    if let Some(batch) = cq
+      .try_next()
+      .await
+      .map_err(|e| IndexerError::Database(e.to_string()))?
+    {
+      let schema = batch.schema();
+      let field = schema
+        .field_with_name("embedding")
+        .map_err(|e| IndexerError::Arrow(e))?;
+      match field.data_type() {
+        arrow::datatypes::DataType::FixedSizeList(_, size) => {
+          if *size as usize != embedding_dim {
+            return Err(IndexerError::Config(format!(
+              "Database schema mismatch for code_chunks.embedding: expected vector dim {}, found {}. Hint: your provider is returning {}-d vectors but the table was created for a different size. Delete the database at '{}' or migrate the table, then restart.",
+              embedding_dim,
+              size,
+              embedding_dim,
+              db_path.display()
+            )));
+          }
+        }
+        other => {
+          return Err(IndexerError::Config(format!(
+            "Unexpected data type for code_chunks.embedding: {:?} (expected FixedSizeList(Float32, {}))",
+            other, embedding_dim
+          )));
+        }
+      }
+    }
+
+    Ok(())
+  }
+
+  async fn ensure_support_tables(
+    connection: &lancedb::Connection,
+  ) -> Result<(lancedb::Table, lancedb::Table, lancedb::Table), IndexerError> {
+    let task_table = crate::models::IndexTask::ensure_table(connection, "index_tasks").await?;
+    let project_table = Project::ensure_table(connection, "projects").await?;
+    let failed_batches_table =
+      crate::models::FailedEmbeddingBatch::ensure_table(connection, "failed_embedding_batches")
+        .await?;
+    Ok((task_table, project_table, failed_batches_table))
+  }
   /// Get the task manager
   pub fn task_manager(&self) -> Arc<TaskManager> {
     self.task_manager.clone()
