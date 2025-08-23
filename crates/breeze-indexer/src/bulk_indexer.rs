@@ -730,10 +730,12 @@ impl BulkIndexer {
     cancel_token: CancellationToken,
   ) -> tokio::task::JoinHandle<()> {
     let table = self.table.clone();
+    let chunk_table = self.chunk_table.clone();
     tokio::spawn(delete_handler_task(
       project_id,
       delete_rx,
       table,
+      chunk_table,
       cancel_token,
     ))
   }
@@ -1465,6 +1467,7 @@ async fn delete_handler_task(
   project_id: Uuid,
   mut delete_rx: mpsc::Receiver<(Uuid, PathBuf)>,
   table: Arc<RwLock<Table>>,
+  chunk_table: Arc<RwLock<Table>>,
   cancel_token: CancellationToken,
 ) {
   let _guard = TaskGuard::new("Delete handler");
@@ -1498,6 +1501,7 @@ async fn delete_handler_task(
 
             info!("Delete handler received delete request for: {}", file_path.display());
 
+            // Delete from documents table
             let table_guard = table.write().await;
             match table_guard.delete(&delete_expr).await {
               Ok(_) => {
@@ -1509,6 +1513,22 @@ async fn delete_handler_task(
               }
             }
             drop(table_guard); // Release the write lock
+
+            // Also delete associated chunks for this (project_id, file_path)
+            let chunk_guard = chunk_table.write().await;
+            match chunk_guard.delete(&delete_expr).await {
+              Ok(_) => {
+                debug!("Successfully deleted chunks for: {}", file_path.display());
+              }
+              Err(e) => {
+                error!(
+                  "Failed to delete chunks for {}: {}",
+                  file_path.display(),
+                  e
+                );
+              }
+            }
+            drop(chunk_guard);
           }
           None => break, // Channel closed
         }
@@ -3193,5 +3213,97 @@ def goodbye():
     // Ensure at least one id from the first set was pruned
     let pruned: Vec<_> = first_ids.difference(&second_ids).collect();
     assert!(!pruned.is_empty(), "Expected some stale ids to be pruned");
+  }
+
+  #[tokio::test]
+  async fn test_delete_handler_removes_document_and_chunks() {
+    let (_temp_dir, config) = Config::test();
+
+    // Create LanceDB
+    let temp_db = tempdir().unwrap();
+    let connection = lancedb::connect(temp_db.path().to_str().unwrap())
+      .execute()
+      .await
+      .unwrap();
+
+    // Create embedding provider and use its dimension consistently for tables and indexer
+    let (embedding_provider, embedding_dim) = create_test_embedding_provider().await;
+
+    // Ensure tables with matching embedding_dim
+    let doc_table = CodeDocument::ensure_table(&connection, "docs", embedding_dim)
+      .await
+      .unwrap();
+    let chunk_table = crate::models::CodeChunk::ensure_table(&connection, "chunks", embedding_dim)
+      .await
+      .unwrap();
+    let project_table = Project::ensure_table(&connection, "projects").await.unwrap();
+
+    let indexer = BulkIndexer::new(
+      Arc::new(config),
+      embedding_provider,
+      embedding_dim,
+      Arc::new(RwLock::new(doc_table)),
+      Arc::new(RwLock::new(chunk_table)),
+      Arc::new(RwLock::new(project_table)),
+    );
+
+    // Index a single file via index_stream
+    let file_path = "delete_me.rs";
+    let chunks = vec![
+      Ok(create_test_chunk(file_path, "fn x() {}", false, 0)),
+      Ok(create_test_chunk(file_path, "", true, 1)),
+    ];
+    let chunk_stream = stream::iter(chunks);
+
+    let project_id = Uuid::now_v7();
+    let (_count, _failures) = indexer
+      .index_stream(project_id, chunk_stream, 10, None)
+      .await
+      .unwrap();
+
+    // Verify chunk rows exist for the file
+    let chunk_table = indexer.chunk_table.read().await;
+    let before_count = chunk_table
+      .count_rows(Some(format!("project_id = '{}' AND file_path = '{}' AND id != '{}'",
+                               project_id,
+                               file_path.replace("'", "''"),
+                               Uuid::nil())))
+      .await
+      .unwrap();
+    assert!(before_count > 0, "Expected chunks to exist before deletion");
+    drop(chunk_table);
+
+    // Spawn delete handler directly and send delete message
+    let (tx, rx) = mpsc::channel(2);
+    let cancel = CancellationToken::new();
+    let docs = indexer.table.clone();
+    let chunks_table = indexer.chunk_table.clone();
+    let handle = tokio::spawn(delete_handler_task(project_id, rx, docs, chunks_table, cancel));
+
+    tx.send((project_id, PathBuf::from(file_path))).await.unwrap();
+    drop(tx);
+    handle.await.unwrap();
+
+    // Verify chunks removed
+    let chunk_table = indexer.chunk_table.read().await;
+    let after_count = chunk_table
+      .count_rows(Some(format!("project_id = '{}' AND file_path = '{}' AND id != '{}'",
+                               project_id,
+                               file_path.replace("'", "''"),
+                               Uuid::nil())))
+      .await
+      .unwrap();
+    assert_eq!(after_count, 0, "Expected no chunks after deletion");
+
+    // Verify document removed
+    let doc_table = indexer.table.read().await;
+    let doc_count = doc_table
+      .count_rows(Some(format!("project_id = '{}' AND file_path = '{}' AND id != '{}'",
+                               project_id,
+                               file_path.replace("'", "''"),
+                               Uuid::nil())))
+      .await
+      .unwrap();
+    assert_eq!(doc_count, 0, "Expected no documents after deletion");
   }
 }
