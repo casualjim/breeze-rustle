@@ -217,9 +217,9 @@ impl StreamDocumentBuilder {
   }
 }
 
-/// Build a document from accumulated file chunks using weighted average
+/// Build a document from accumulated file chunks (no aggregated document embeddings)
 /// Returns both the document and the individual chunks for storage
-  pub(crate) async fn build_document_from_accumulator(
+pub(crate) async fn build_document_from_accumulator(
   project_id: Uuid,
   accumulator: FileAccumulator,
   embedding_dim: usize,
@@ -232,54 +232,6 @@ impl StreamDocumentBuilder {
 
   let file_path = accumulator.file_path;
   let embedded_chunks = accumulator.embedded_chunks;
-
-  // Calculate weights based on token counts
-  let mut weights = Vec::new();
-  let mut total_weight = 0.0;
-
-  for embedded_chunk in &embedded_chunks {
-    match &embedded_chunk.chunk {
-      PipelineChunk::Semantic(sc) | PipelineChunk::Text(sc) => {
-        // Use actual token count if available, otherwise estimate
-        let token_count = sc
-          .tokens
-          .as_ref()
-          .map(|tokens| tokens.len() as f32)
-          .unwrap_or_else(|| (sc.text.len() as f32 / 4.0).max(1.0));
-        weights.push(token_count);
-        total_weight += token_count;
-      }
-      PipelineChunk::EndOfFile { .. } => continue, // Skip EOF markers
-    }
-  }
-
-  // Normalize weights
-  for weight in &mut weights {
-    *weight /= total_weight;
-  }
-
-  // Compute weighted average embedding
-  let mut aggregated_embedding = vec![0.0; embedding_dim];
-
-  for (i, embedded_chunk) in embedded_chunks
-    .iter()
-    .filter(|ec| !matches!(ec.chunk, PipelineChunk::EndOfFile { .. }))
-    .enumerate()
-  {
-    let weight = weights[i];
-    for (j, &value) in embedded_chunk.embedding.iter().enumerate() {
-      if j < embedding_dim {
-        aggregated_embedding[j] += value * weight;
-      }
-    }
-  }
-
-  debug!(
-      file_path = %file_path,
-      num_chunks = embedded_chunks.len(),
-      total_tokens_approx = total_weight as u64,
-      "Aggregated embeddings for file"
-  );
 
   // Check if we have an EOF chunk with content
   let (content, content_hash) = if let Some(eof_chunk) = embedded_chunks
@@ -370,7 +322,8 @@ impl StreamDocumentBuilder {
   doc.primary_language = languages.first().map(|(lang, _)| lang.clone());
   doc.chunk_count = code_chunks.len() as u32;
 
-  doc.update_embedding(aggregated_embedding);
+  // Set zero vector for document embedding to satisfy schema
+  doc.content_embedding = vec![0.0; embedding_dim];
   doc.update_content_hash(content_hash);
 
   // Send a single ReplaceFileChunks message (single path, no per-chunk streaming)
@@ -633,14 +586,8 @@ mod tests {
     assert_eq!(replaces.len(), 1);
     assert_eq!(replaces[0].chunks.len(), 3);
 
-    // The weighted average should favor the longer chunk
-    assert!(doc.content_embedding[0] < 0.2); // Should be small
-    assert!(doc.content_embedding[1] > 0.5); // Should be largest
-    assert!(doc.content_embedding[2] > 0.2 && doc.content_embedding[2] < 0.4); // Should be medium
-
-    // Sum should be approximately 1.0
-    let sum: f32 = doc.content_embedding.iter().sum();
-    assert!((sum - 1.0).abs() < 0.01);
+    // Document embeddings should be a zero vector now
+    assert!(doc.content_embedding.iter().all(|&v| v == 0.0));
   }
 
   #[tokio::test]
