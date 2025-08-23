@@ -59,8 +59,8 @@ mise build
 ### Testing
 
 ```bash
-# Run Rust tests
-mise test
+# Run Rust tests (required)
+cargo nextest run --features local-embeddings --no-fail-fast
 ```
 
 ## Architecture
