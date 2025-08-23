@@ -413,7 +413,6 @@ impl BulkIndexer {
       embedded_rx,
       doc_tx,
       chunks_replace_tx,
-      embedding_dim,
       stats: stats.clone(),
       cancel_token: cancel_token.clone(),
       batch_size: self.config.document_batch_size,
@@ -696,7 +695,7 @@ impl BulkIndexer {
   fn spawn_sink(
     &self,
     doc_rx: mpsc::Receiver<CodeDocument>,
-    stats: IndexingStats,
+    _stats: IndexingStats,
     embedding_dim: usize,
   ) -> tokio::task::JoinHandle<Result<usize, IndexerError>> {
     let table = self.table.clone();
@@ -708,7 +707,6 @@ impl BulkIndexer {
       embedding_dim,
       last_optimize_version,
       optimize_threshold,
-      stats,
     ))
   }
 
@@ -1323,7 +1321,6 @@ async fn sink_task(
   embedding_dim: usize,
   last_optimize_version: Arc<RwLock<u64>>,
   optimize_threshold: u64,
-  _stats: IndexingStats,
 ) -> Result<usize, IndexerError> {
   let _guard = TaskGuard::new("Sink");
   let converter = BufferedRecordBatchConverter::<CodeDocument>::default()
@@ -1767,15 +1764,15 @@ mod tests {
     let cancel_token = CancellationToken::new();
 
     // Spawn document builder task
+    let project_id = Uuid::now_v7();
     let stats_clone = stats.clone();
     let cancel_clone = cancel_token.clone();
     let builder_handle = tokio::spawn(async move {
       document_builder_task(DocumentBuilderParams {
-        project_id: Uuid::now_v7(),
+        project_id,
         embedded_rx,
         doc_tx,
         chunks_replace_tx,
-        embedding_dim,
         stats: stats_clone,
         cancel_token: cancel_clone,
         batch_size: 100, // Default batch size
@@ -2612,7 +2609,6 @@ def goodbye():
         embedded_rx,
         doc_tx,
         chunks_replace_tx,
-        embedding_dim,
         stats,
         cancel_token,
         batch_size: 100, // Default batch size
@@ -3036,8 +3032,7 @@ def goodbye():
     let chunk_table_name = format!("test_chunks_{}", std::process::id());
 
     // Create dummy document for table creation
-    let mut dummy_doc = CodeDocument::new(Uuid::nil(), "dummy.rs".to_string(), "dummy".to_string());
-    dummy_doc.update_embedding(vec![0.0; embedding_dim]);
+    let dummy_doc = CodeDocument::new(Uuid::nil(), "dummy.rs".to_string(), "dummy".to_string());
     let batches: Box<dyn arrow::array::RecordBatchReader + Send> = dummy_doc.into_arrow().unwrap();
     let table = connection
       .create_table(&table_name, batches)

@@ -177,31 +177,10 @@ mod tests {
   ) -> lancedb::Table {
     let conn = lancedb::connect(db_path).execute().await.unwrap();
 
-    // Check if table exists
-    let table_names = conn.table_names().execute().await.unwrap();
-    if table_names.contains(&table_name.to_string()) {
-      conn.open_table(table_name).execute().await.unwrap()
-    } else {
-      // Create a dummy document to initialize the table
-      let mut dummy_doc = CodeDocument::new(
-        Uuid::nil(),
-        "dummy.py".to_string(),
-        "dummy content".to_string(),
-      );
-      dummy_doc.content_embedding = vec![0.0f32; embedding_dim];
-
-      let reader = dummy_doc.into_arrow().unwrap();
-      let table = conn
-        .create_table(table_name, reader)
-        .execute()
-        .await
-        .unwrap();
-
-      // Delete the dummy row
-      table.delete("file_path = 'dummy.py'").await.unwrap();
-
-      table
-    }
+    // Ensure the table exists with the correct schema
+    CodeDocument::ensure_table(&conn, table_name, embedding_dim)
+      .await
+      .unwrap()
   }
 
   fn create_test_batch(docs: Vec<CodeDocument>) -> RecordBatch {
@@ -247,19 +226,17 @@ mod tests {
     );
 
     // Create test documents
-    let mut doc1 = CodeDocument::new(
+    let doc1 = CodeDocument::new(
       Uuid::now_v7(),
       "file1.py".to_string(),
       "print('hello')".to_string(),
     );
-    doc1.content_embedding = vec![1.0, 2.0, 3.0];
 
-    let mut doc2 = CodeDocument::new(
+    let doc2 = CodeDocument::new(
       Uuid::now_v7(),
       "file2.py".to_string(),
       "def main(): pass".to_string(),
     );
-    doc2.content_embedding = vec![4.0, 5.0, 6.0];
 
     let batch = create_test_batch(vec![doc1, doc2]);
     let batch_stream = stream::once(async { Ok(batch) });
@@ -274,17 +251,13 @@ mod tests {
       // Process each item
     }
 
-    // Verify data was saved
+    // Verify data was saved (exclude dummy row with nil UUID)
     let conn = lancedb::connect(db_path).execute().await.unwrap();
     let table = conn.open_table("test_documents").execute().await.unwrap();
-    let mut query_stream = table.query().execute().await.unwrap();
-
-    let mut results = Vec::new();
-    while let Some(batch) = query_stream.next().await {
-      results.push(batch.unwrap());
-    }
-
-    let total_rows: usize = results.iter().map(|b| b.num_rows()).sum();
+    let total_rows = table
+      .count_rows(Some(format!("id != '{}'", Uuid::nil())))
+      .await
+      .unwrap();
     assert_eq!(total_rows, 2);
   }
 
@@ -307,12 +280,11 @@ mod tests {
 
     // Insert multiple documents to advance the version
     for i in 0..5 {
-      let mut doc = CodeDocument::new(
+      let doc = CodeDocument::new(
         Uuid::now_v7(),
         format!("file{}.py", i),
         format!("content {}", i),
       );
-      doc.content_embedding = vec![i as f32, (i + 1) as f32, (i + 2) as f32];
 
       let batch = create_test_batch(vec![doc]);
       let batch_stream = stream::once(async { Ok(batch) });
@@ -354,7 +326,6 @@ mod tests {
       "file.py".to_string(),
       "original content".to_string(),
     );
-    doc.content_embedding = vec![1.0, 2.0, 3.0];
     let original_id = doc.id;
 
     let batch1 = create_test_batch(vec![doc.clone()]);
@@ -369,7 +340,6 @@ mod tests {
 
     // Update the same document
     doc.content = "updated content".to_string();
-    doc.content_embedding = vec![4.0, 5.0, 6.0];
 
     let batch2 = create_test_batch(vec![doc]);
     let batch_stream2 = stream::once(async { Ok(batch2) });

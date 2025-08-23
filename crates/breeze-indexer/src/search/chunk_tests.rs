@@ -40,7 +40,6 @@ async fn setup_chunk_search_test_data() -> TestSetup {
     "src/auth.rs".to_string(),
     "auth module content".to_string(),
   );
-  doc1.update_embedding(vec![0.1; embedding_dim]);
   doc1.languages = vec!["rust".to_string()];
   doc1.primary_language = Some("rust".to_string());
   doc1.chunk_count = 3;
@@ -127,7 +126,6 @@ async fn setup_chunk_search_test_data() -> TestSetup {
     "src/database.rs".to_string(),
     "database module content".to_string(),
   );
-  doc2.update_embedding(vec![0.4; embedding_dim]);
   doc2.languages = vec!["rust".to_string()];
   doc2.primary_language = Some("rust".to_string());
   doc2.chunk_count = 2;
@@ -200,7 +198,6 @@ async fn setup_chunk_search_test_data() -> TestSetup {
     "tests/test_auth.py".to_string(),
     "python test content".to_string(),
   );
-  doc3.update_embedding(vec![0.6; embedding_dim]);
   doc3.languages = vec!["python".to_string()];
   doc3.primary_language = Some("python".to_string());
   doc3.chunk_count = 1;

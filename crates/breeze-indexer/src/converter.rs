@@ -243,7 +243,6 @@ mod tests {
       file_path: file_path.to_string(),
       content: format!("Content of {}", file_path),
       content_hash: [0u8; 32],
-      content_embedding: vec![1.0, 2.0, 3.0],
       file_size: 100,
       last_modified: chrono::Utc::now().naive_utc(),
       indexed_at: chrono::Utc::now().naive_utc(),
@@ -301,17 +300,9 @@ mod tests {
     assert!(stream_schema.field_with_name("file_path").is_ok());
     assert!(stream_schema.field_with_name("content").is_ok());
     assert!(stream_schema.field_with_name("content_hash").is_ok());
-    assert!(stream_schema.field_with_name("content_embedding").is_ok());
     assert!(stream_schema.field_with_name("file_size").is_ok());
     assert!(stream_schema.field_with_name("last_modified").is_ok());
     assert!(stream_schema.field_with_name("indexed_at").is_ok());
-
-    // Check embedding field is correctly configured
-    let embedding_field = stream_schema.field_with_name("content_embedding").unwrap();
-    match embedding_field.data_type() {
-      arrow::datatypes::DataType::FixedSizeList(_, size) => assert_eq!(*size, 384),
-      _ => panic!("Expected FixedSizeList for embeddings"),
-    }
   }
 
   #[tokio::test]

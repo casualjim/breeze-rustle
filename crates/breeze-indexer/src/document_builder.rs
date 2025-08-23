@@ -24,17 +24,15 @@ pub(crate) struct DocumentBuildContext<'a> {
 /// Stream-specific document builder that maintains ordering for a single stream
 struct StreamDocumentBuilder {
   project_id: Uuid,
-  embedding_dim: usize,
   file_accumulators: BTreeMap<String, FileAccumulator>,
   failed_files: BTreeSet<String>,
   total_files_built: u64,
 }
 
 impl StreamDocumentBuilder {
-  fn new(project_id: Uuid, embedding_dim: usize) -> Self {
+  fn new(project_id: Uuid) -> Self {
     Self {
       project_id,
-      embedding_dim,
       file_accumulators: BTreeMap::new(),
       failed_files: BTreeSet::new(),
       total_files_built: 0,
@@ -174,14 +172,8 @@ impl StreamDocumentBuilder {
       );
 
       // Build the document
-      let result = build_document_from_accumulator(
-        self.project_id,
-        accumulator,
-        self.embedding_dim,
-        document_batch,
-        ctx,
-      )
-      .await;
+      let result =
+        build_document_from_accumulator(self.project_id, accumulator, document_batch, ctx).await;
 
       if let Err(e) = result {
         error!("Failed to build document for {}: {}", file_path, e);
@@ -225,7 +217,6 @@ impl StreamDocumentBuilder {
 pub(crate) async fn build_document_from_accumulator(
   project_id: Uuid,
   accumulator: FileAccumulator,
-  embedding_dim: usize,
   document_batch: &mut Vec<CodeDocument>,
   ctx: &DocumentBuildContext<'_>,
 ) -> Result<(), IndexerError> {
@@ -325,8 +316,7 @@ pub(crate) async fn build_document_from_accumulator(
   doc.primary_language = languages.first().map(|(lang, _)| lang.clone());
   doc.chunk_count = code_chunks.len() as u32;
 
-  // Set zero vector for document embedding to satisfy schema
-  doc.content_embedding = vec![0.0; embedding_dim];
+  // Update content hash
   doc.update_content_hash(content_hash);
 
   // Send a single ReplaceFileChunks message (single path, no per-chunk streaming)
@@ -375,7 +365,6 @@ pub(crate) struct DocumentBuilderParams {
   pub embedded_rx: mpsc::Receiver<EmbeddedChunkWithFile>,
   pub doc_tx: mpsc::Sender<CodeDocument>,
   pub chunks_replace_tx: ReplaceFileChunksSender,
-  pub embedding_dim: usize,
   pub stats: IndexingStats,
   pub cancel_token: CancellationToken,
   pub batch_size: usize,
@@ -390,12 +379,11 @@ pub(crate) async fn document_builder_task(
     mut embedded_rx,
     doc_tx,
     chunks_replace_tx,
-    embedding_dim,
     stats,
     cancel_token,
     batch_size,
   } = params;
-  let mut builder = StreamDocumentBuilder::new(project_id, embedding_dim);
+  let mut builder = StreamDocumentBuilder::new(project_id);
   let mut document_batch: Vec<CodeDocument> = Vec::with_capacity(100);
 
   let ctx = DocumentBuildContext {
@@ -564,7 +552,7 @@ mod tests {
       batch_size: 100,
     };
 
-    build_document_from_accumulator(project_id, accumulator, 3, &mut document_batch, &ctx)
+    build_document_from_accumulator(project_id, accumulator, &mut document_batch, &ctx)
       .await
       .unwrap();
 
@@ -582,7 +570,6 @@ mod tests {
     // Verify document properties
     assert_eq!(doc.file_path, file_path);
     assert_eq!(doc.content, content);
-    assert_eq!(doc.content_embedding.len(), 3);
     assert_eq!(doc.chunk_count, 3);
     assert_eq!(doc.languages, vec!["text"]);
     assert_eq!(doc.primary_language, Some("text".to_string()));
@@ -590,9 +577,6 @@ mod tests {
     // Verify replaces
     assert_eq!(replaces.len(), 1);
     assert_eq!(replaces[0].chunks.len(), 3);
-
-    // Document embeddings should be a zero vector now
-    assert!(doc.content_embedding.iter().all(|&v| v == 0.0));
   }
 
   #[tokio::test]
@@ -615,7 +599,7 @@ mod tests {
 
     // Should return error for empty accumulator
     let _result =
-      build_document_from_accumulator(project_id, accumulator, 3, &mut document_batch, &ctx).await;
+      build_document_from_accumulator(project_id, accumulator, &mut document_batch, &ctx).await;
 
     // Empty accumulator should not produce any documents
     assert_eq!(document_batch.len(), 0);

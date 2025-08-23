@@ -1,6 +1,5 @@
 use blake3::Hasher;
 use lancedb::index::Index;
-use lancedb::index::vector::IvfFlatIndexBuilder;
 #[cfg(test)]
 use std::path::{Path, PathBuf};
 use tracing::debug;
@@ -13,7 +12,6 @@ pub struct CodeDocument {
   pub file_path: String,
   pub content: String,
   pub content_hash: [u8; 32],
-  pub content_embedding: Vec<f32>,
   pub file_size: u64,
   pub last_modified: chrono::NaiveDateTime,
   pub indexed_at: chrono::NaiveDateTime,
@@ -36,7 +34,6 @@ impl CodeDocument {
       file_path,
       content,
       content_hash,
-      content_embedding: Vec::new(),
       file_size,
       last_modified,
       indexed_at,
@@ -46,8 +43,9 @@ impl CodeDocument {
     }
   }
 
-  /// Create the Arrow schema for CodeDocument with the given embedding dimensions
-  pub fn schema(embedding_dim: usize) -> arrow::datatypes::Schema {
+  /// Create the Arrow schema for CodeDocument. The embedding_dim parameter is ignored since
+  /// document-level embeddings have been removed.
+  pub fn schema(_embedding_dim: usize) -> arrow::datatypes::Schema {
     use arrow::datatypes::{DataType, Field, Schema, TimeUnit};
 
     let fields = vec![
@@ -56,14 +54,6 @@ impl CodeDocument {
       Field::new("file_path", DataType::Utf8, false),
       Field::new("content", DataType::Utf8, false),
       Field::new("content_hash", DataType::FixedSizeBinary(32), false),
-      Field::new(
-        "content_embedding",
-        DataType::FixedSizeList(
-          std::sync::Arc::new(Field::new("item", DataType::Float32, true)),
-          embedding_dim as i32,
-        ),
-        false,
-      ),
       Field::new("file_size", DataType::UInt64, false),
       Field::new(
         "last_modified",
@@ -100,7 +90,6 @@ impl CodeDocument {
     embedding_dim: usize,
   ) -> lancedb::Result<lancedb::Table> {
     use arrow::array::*;
-    use arrow::datatypes::{DataType, Field};
     use arrow::record_batch::{RecordBatch, RecordBatchIterator};
 
     let schema = std::sync::Arc::new(Self::schema(embedding_dim));
@@ -116,17 +105,6 @@ impl CodeDocument {
     let mut content_hash_builder = FixedSizeBinaryBuilder::with_capacity(1, 32);
     content_hash_builder.append_value([0u8; 32]).unwrap();
     let content_hash_array = content_hash_builder.finish();
-
-    // Create dummy embedding
-    let embedding_array = Float32Array::from(vec![0.0; embedding_dim]);
-    let embedding_field = std::sync::Arc::new(Field::new("item", DataType::Float32, true));
-    let embedding_list = FixedSizeListArray::try_new(
-      embedding_field,
-      embedding_dim as i32,
-      std::sync::Arc::new(embedding_array),
-      None,
-    )
-    .map_err(|e| lancedb::Error::Arrow { source: e })?;
 
     let file_size_array = UInt64Array::from(vec![0u64]);
     let last_modified_array = arrow::array::TimestampMicrosecondArray::from(vec![0i64]);
@@ -147,7 +125,6 @@ impl CodeDocument {
         std::sync::Arc::new(file_path_array),
         std::sync::Arc::new(content_array),
         std::sync::Arc::new(content_hash_array),
-        std::sync::Arc::new(embedding_list),
         std::sync::Arc::new(file_size_array),
         std::sync::Arc::new(last_modified_array),
         std::sync::Arc::new(indexed_at_array),
@@ -202,14 +179,6 @@ impl CodeDocument {
 
   /// Ensure indices exist on content, file_path, and content_hash fields
   async fn ensure_indices(table: &lancedb::Table) -> lancedb::Result<()> {
-    table
-      .create_index(
-        &["content_embedding"],
-        Index::IvfFlat(IvfFlatIndexBuilder::default()),
-      )
-      .execute()
-      .await?;
-
     // Create FTS index on content field for full-text search
     table
       .create_index(&["content"], Index::FTS(Default::default()))
@@ -317,26 +286,6 @@ impl CodeDocument {
     let mut content_hash = [0u8; 32];
     content_hash.copy_from_slice(content_hash_arr.value(row));
 
-    // Extract embedding
-    let embedding_list = batch
-      .column_by_name("content_embedding")
-      .and_then(|col| col.as_any().downcast_ref::<FixedSizeListArray>())
-      .ok_or_else(|| lancedb::Error::Runtime {
-        message: "Missing or invalid content_embedding column".to_string(),
-      })?;
-
-    let embedding_value = embedding_list.value(row);
-    let embedding_values = embedding_value
-      .as_any()
-      .downcast_ref::<Float32Array>()
-      .ok_or_else(|| lancedb::Error::Runtime {
-        message: "Invalid embedding array type".to_string(),
-      })?;
-
-    let content_embedding: Vec<f32> = (0..embedding_values.len())
-      .map(|i| embedding_values.value(i))
-      .collect();
-
     let file_size = batch
       .column_by_name("file_size")
       .and_then(|col| col.as_any().downcast_ref::<UInt64Array>())
@@ -423,7 +372,6 @@ impl CodeDocument {
       file_path,
       content,
       content_hash,
-      content_embedding,
       file_size,
       last_modified: chrono::DateTime::from_timestamp_micros(last_modified)
         .unwrap_or_else(|| chrono::DateTime::from_timestamp(0, 0).unwrap())
@@ -448,13 +396,6 @@ impl CodeDocument {
 
   pub fn update_content_hash(&mut self, hash: [u8; 32]) {
     self.content_hash = hash;
-  }
-
-  /// Update the embedding vector and refresh indexed_at timestamp
-  #[cfg(test)]
-  pub fn update_embedding(&mut self, embedding: Vec<f32>) {
-    self.content_embedding = embedding;
-    self.indexed_at = chrono::Utc::now().naive_utc();
   }
 
   /// Read file content and compute hash in a single pass
@@ -489,7 +430,6 @@ impl CodeDocument {
       file_path: path_str,
       content,
       content_hash: hash,
-      content_embedding: Vec::new(),
       file_size,
       last_modified,
       indexed_at,
@@ -536,8 +476,7 @@ impl lancedb::arrow::IntoArrow for CodeDocument {
     use arrow::record_batch::RecordBatch;
     use std::sync::Arc;
 
-    let embedding_dim = self.content_embedding.len();
-    let schema = Arc::new(CodeDocument::schema(embedding_dim));
+    let schema = Arc::new(CodeDocument::schema(0));
 
     // Build arrays for single document
     let id_array = StringArray::from(vec![self.id.to_string()]);
@@ -549,21 +488,6 @@ impl lancedb::arrow::IntoArrow for CodeDocument {
     let mut content_hash_array = content_hash_builder;
     content_hash_array.append_value(self.content_hash).unwrap();
     let content_hash_array = content_hash_array.finish();
-
-    // Create embedding array
-    let embedding_array = Float32Array::from(self.content_embedding);
-    let embedding_field = Arc::new(arrow::datatypes::Field::new(
-      "item",
-      arrow::datatypes::DataType::Float32,
-      true,
-    ));
-    let embedding_list = FixedSizeListArray::try_new(
-      embedding_field,
-      embedding_dim as i32,
-      Arc::new(embedding_array),
-      None,
-    )
-    .map_err(|e| lancedb::Error::Arrow { source: e })?;
 
     let file_size_array = UInt64Array::from(vec![self.file_size]);
 
@@ -596,7 +520,6 @@ impl lancedb::arrow::IntoArrow for CodeDocument {
         Arc::new(file_path_array),
         Arc::new(content_array),
         Arc::new(content_hash_array),
-        Arc::new(embedding_list),
         Arc::new(file_size_array),
         Arc::new(last_modified_array),
         Arc::new(indexed_at_array),
@@ -652,7 +575,6 @@ mod tests {
     assert_eq!(doc.content, content);
     assert_eq!(doc.file_size, content.len() as u64);
     assert_eq!(doc.content_hash, CodeDocument::compute_hash(content));
-    assert!(doc.content_embedding.is_empty());
     assert_ne!(doc.id, Uuid::nil());
   }
 
@@ -717,23 +639,6 @@ mod tests {
   }
 
   #[test]
-  fn test_update_embedding() {
-    let project_id = Uuid::now_v7();
-    let mut doc = CodeDocument::new(project_id, "test.py".to_string(), "content".to_string());
-
-    let initial_indexed_at = doc.indexed_at;
-
-    // Small delay to ensure time difference
-    std::thread::sleep(std::time::Duration::from_millis(10));
-
-    let embedding = vec![1.0, 2.0, 3.0];
-    doc.update_embedding(embedding.clone());
-
-    assert_eq!(doc.content_embedding, embedding);
-    assert!(doc.indexed_at > initial_indexed_at);
-  }
-
-  #[test]
   fn test_new_document() {
     let project_id = Uuid::now_v7();
     let file_path = "test.py".to_string();
@@ -746,7 +651,6 @@ mod tests {
     assert_eq!(doc.content, content);
     assert_eq!(doc.file_size, content.len() as u64);
     assert_eq!(doc.content_hash, CodeDocument::compute_hash(&content));
-    assert!(doc.content_embedding.is_empty());
     assert_ne!(doc.id, Uuid::nil());
   }
 }

@@ -170,50 +170,11 @@ impl Indexer {
   }
 
   async fn verify_embedding_schema(
-    doc_table: &lancedb::Table,
+    _doc_table: &lancedb::Table,
     chunk_table: &lancedb::Table,
     embedding_dim: usize,
     db_path: &std::path::Path,
   ) -> Result<(), IndexerError> {
-    // Verify documents table embedding vector width
-    let mut q = doc_table
-      .query()
-      .select(lancedb::query::Select::columns(&["content_embedding"]))
-      .limit(1)
-      .execute()
-      .await
-      .map_err(|e| IndexerError::Database(e.to_string()))?;
-
-    if let Some(batch) = q
-      .try_next()
-      .await
-      .map_err(|e| IndexerError::Database(e.to_string()))?
-    {
-      let schema = batch.schema();
-      let field = schema
-        .field_with_name("content_embedding")
-        .map_err(IndexerError::Arrow)?;
-      match field.data_type() {
-        arrow::datatypes::DataType::FixedSizeList(_, size) => {
-          if *size as usize != embedding_dim {
-            return Err(IndexerError::Config(format!(
-              "Database schema mismatch for code_embeddings.content_embedding: expected vector dim {}, found {}. Hint: your provider is returning {}-d vectors but the table was created for a different size. Delete the database at '{}' or migrate the table, then restart.",
-              embedding_dim,
-              size,
-              embedding_dim,
-              db_path.display()
-            )));
-          }
-        }
-        other => {
-          return Err(IndexerError::Config(format!(
-            "Unexpected data type for code_embeddings.content_embedding: {:?} (expected FixedSizeList(Float32, {}))",
-            other, embedding_dim
-          )));
-        }
-      }
-    }
-
     // Verify chunks table embedding vector width
     let mut cq = chunk_table
       .query()

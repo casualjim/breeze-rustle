@@ -3,6 +3,8 @@
 
 proj_dir=$(git rev-parse --show-toplevel)
 
+set -euo pipefail
+
 cargo nextest run --no-fail-fast --features local-embeddings
 cd "$proj_dir/crates/breeze-py" && uv run --active pytest -v
 cd "$proj_dir/crates/breeze-napi" && npm install && npm run test:all

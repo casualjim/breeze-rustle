@@ -3,6 +3,8 @@
 
 proj_dir=$(git rev-parse --show-toplevel)
 
+set -euo pipefail
+
 cd "$proj_dir" || exit 1
 
 prek run --all-files
